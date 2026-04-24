@@ -3,14 +3,20 @@ import type { Env } from "./index";
 import type {
   RoomState,
   Participant,
+  RetroItem,
   ServerToClientMessage,
   ClientToServerMessage,
+} from "../src/domain";
+import {
+  sanitizeItemText,
+  isValidItemText,
 } from "../src/domain";
 
 interface StoredState {
   roomId: string;
   phase: RoomState["phase"];
   participants: Participant[];
+  items: RetroItem[];
   facilitatorId: string | null;
   voteBudget: number;
   version: number;
@@ -29,6 +35,13 @@ export class RetroRoom extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    // Restore session map from hibernated WebSockets
+    for (const ws of ctx.getWebSockets()) {
+      const attachment = ws.deserializeAttachment() as { participantId: string } | null;
+      if (attachment?.participantId) {
+        this.sessions.set(attachment.participantId, ws);
+      }
+    }
   }
 
   private async loadState(): Promise<StoredState> {
@@ -58,6 +71,7 @@ export class RetroRoom extends DurableObject<Env> {
       roomId,
       phase: "write",
       participants: [],
+      items: [],
       facilitatorId: null,
       voteBudget: 5,
       version: 0,
@@ -72,7 +86,7 @@ export class RetroRoom extends DurableObject<Env> {
       roomId: s.roomId,
       phase: s.phase,
       participants: s.participants,
-      items: [],
+      items: s.items,
       groups: [],
       votes: [],
       timer: { startedAt: null, durationSeconds: null, expired: false },
@@ -122,6 +136,8 @@ export class RetroRoom extends DurableObject<Env> {
     };
     this.broadcast(broadcast, participantId);
 
+    this.broadcastState(s, participantId);
+
     return { success: true, state: await this.getRoomState(), connectionToken: token };
   }
 
@@ -135,7 +151,36 @@ export class RetroRoom extends DurableObject<Env> {
     }
     s.voteBudget = budget;
     await this.saveState();
+    this.broadcastState(s);
     return { success: true };
+  }
+
+  async addItem(participantId: string, rawText: string): Promise<{ success: boolean; error?: string; item?: RetroItem }> {
+    const s = await this.loadState();
+
+    if (s.phase !== "write") {
+      return { success: false, error: "Cannot add items outside write phase" };
+    }
+
+    const sanitized = sanitizeItemText(rawText);
+    if (!isValidItemText(rawText)) {
+      return { success: false, error: "Item text cannot be empty" };
+    }
+
+    const item: RetroItem = {
+      id: crypto.randomUUID(),
+      text: sanitized,
+      authorId: participantId,
+      groupId: null,
+      order: s.items.length,
+    };
+    s.items.push(item);
+    await this.saveState();
+
+    const broadcast: ServerToClientMessage = { type: "item-added", item };
+    this.broadcast(broadcast);
+
+    return { success: true, item };
   }
 
   private broadcast(message: ServerToClientMessage, excludeId?: string) {
@@ -145,6 +190,21 @@ export class RetroRoom extends DurableObject<Env> {
         ws.send(payload);
       }
     }
+  }
+
+  private broadcastState(s: StoredState, excludeId?: string) {
+    const state: RoomState = {
+      roomId: s.roomId,
+      phase: s.phase,
+      participants: s.participants,
+      items: s.items,
+      groups: [],
+      votes: [],
+      timer: { startedAt: null, durationSeconds: null, expired: false },
+      voteBudget: s.voteBudget,
+      version: s.version,
+    };
+    this.broadcast({ type: "snapshot", state }, excludeId);
   }
 
   override async fetch(request: Request): Promise<Response> {
@@ -186,21 +246,8 @@ export class RetroRoom extends DurableObject<Env> {
 
       const participantId = pid;
       this.sessions.set(participantId, server);
-
+      server.serializeAttachment({ participantId });
       this.ctx.acceptWebSocket(server);
-
-      server.addEventListener("message", async (event) => {
-        try {
-          const msg = JSON.parse(event.data as string) as ClientToServerMessage;
-          await this.handleMessage(participantId, msg);
-        } catch {
-          server.send(JSON.stringify({ type: "error", message: "Invalid message" }));
-        }
-      });
-
-      server.addEventListener("close", () => {
-        this.sessions.delete(participantId);
-      });
 
       const snapshot = await this.getRoomState();
       server.send(JSON.stringify({ type: "snapshot", state: snapshot }));
@@ -211,10 +258,41 @@ export class RetroRoom extends DurableObject<Env> {
     return new Response("Not found", { status: 404 });
   }
 
+  override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    const attachment = ws.deserializeAttachment() as { participantId: string } | null;
+    const participantId = attachment?.participantId;
+    if (!participantId) return;
+
+    try {
+      const msg = JSON.parse(typeof message === "string" ? message : new TextDecoder().decode(message)) as ClientToServerMessage;
+      await this.handleMessage(participantId, msg);
+    } catch {
+      ws.send(JSON.stringify({ type: "error", message: "Invalid message" }));
+    }
+  }
+
+  override webSocketClose(ws: WebSocket): void {
+    const attachment = ws.deserializeAttachment() as { participantId: string } | null;
+    const participantId = attachment?.participantId;
+    if (!participantId) return;
+
+    this.sessions.delete(participantId);
+    const leftMsg: ServerToClientMessage = { type: "participant-left", participantId };
+    this.broadcast(leftMsg);
+  }
+
   private async handleMessage(participantId: string, msg: ClientToServerMessage): Promise<void> {
     switch (msg.type) {
       case "join": {
         await this.join(participantId, msg.displayName);
+        break;
+      }
+      case "add-item": {
+        const result = await this.addItem(participantId, msg.text);
+        if (!result.success) {
+          const ws = this.sessions.get(participantId);
+          ws?.send(JSON.stringify({ type: "error", message: result.error }));
+        }
         break;
       }
       case "set-vote-budget": {
@@ -235,5 +313,11 @@ export class RetroRoom extends DurableObject<Env> {
       .exec("SELECT 'Hello from RetroRoom!' as greeting")
       .one();
     return result.greeting as string;
+  }
+
+  async setPhaseForTest(phase: RoomState["phase"]): Promise<void> {
+    const s = await this.loadState();
+    s.phase = phase;
+    await this.saveState();
   }
 }

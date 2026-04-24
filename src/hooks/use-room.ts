@@ -29,10 +29,12 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
         if (msg.type === "snapshot") {
           setState(msg.state);
         } else if (msg.type === "participant-joined") {
-          setState((prev) => prev ? {
-            ...prev,
-            participants: [...prev.participants, msg.participant],
-          } : prev);
+          setState((prev) => {
+            if (!prev) return prev;
+            const exists = prev.participants.some((p) => p.id === msg.participant.id);
+            if (exists) return prev;
+            return { ...prev, participants: [...prev.participants, msg.participant] };
+          });
         } else if (msg.type === "participant-left") {
           setState((prev) => prev ? {
             ...prev,
@@ -40,6 +42,13 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
           } : prev);
         } else if (msg.type === "phase-changed") {
           setState((prev) => prev ? { ...prev, phase: msg.phase } : prev);
+        } else if (msg.type === "item-added") {
+          setState((prev) => {
+            if (!prev) return prev;
+            const exists = prev.items.some((i) => i.id === msg.item.id);
+            if (exists) return prev;
+            return { ...prev, items: [...prev.items, msg.item] };
+          });
         }
       } catch {
         // ignore parse errors

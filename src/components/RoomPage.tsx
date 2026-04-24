@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import { joinRoom, getRoomState, setVoteBudget } from "../api";
 import { useRoom } from "../hooks";
 import type { RoomState } from "../domain";
+import { sanitizeItemText, isValidItemText } from "../domain";
 
 type PageState = "loading" | "join" | "room" | "not-found";
 
@@ -35,9 +36,12 @@ export function RoomPage() {
   const [voteBudgetInput, setVoteBudgetInput] = useState("5");
   const [budgetMsg, setBudgetMsg] = useState<string | null>(null);
 
-  const { state: wsState, connected } = useRoom(roomId ?? "", participantId, connectionToken);
+  const { state: wsState, connected, send } = useRoom(roomId ?? "", participantId, connectionToken);
 
   const roomState = mergeRoomState(localRoomState, wsState);
+
+  const [itemInput, setItemInput] = useState("");
+  const [itemError, setItemError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!roomId) return;
@@ -107,6 +111,17 @@ export function RoomPage() {
     } else {
       setBudgetMsg(result.error ?? "Failed to update budget.");
     }
+  }
+
+  function handleAddItem(e: React.FormEvent) {
+    e.preventDefault();
+    setItemError(null);
+    if (!isValidItemText(itemInput)) {
+      setItemError("Item text cannot be empty.");
+      return;
+    }
+    send({ type: "add-item", text: sanitizeItemText(itemInput) });
+    setItemInput("");
   }
 
   if (pageState === "loading") {
@@ -184,12 +199,28 @@ export function RoomPage() {
 
       <div style={{ marginBottom: "1rem" }}>
         <h2>Board</h2>
+        {roomState?.phase === "write" && (
+          <form onSubmit={handleAddItem} style={{ marginBottom: "1rem", display: "flex", gap: "0.5rem" }}>
+            <input
+              type="text"
+              value={itemInput}
+              onChange={(e) => setItemInput(e.target.value)}
+              maxLength={500}
+              placeholder="Add a retro item..."
+              style={{ flex: 1, padding: "0.4rem" }}
+            />
+            <button type="submit">Add</button>
+          </form>
+        )}
+        {itemError && <p style={{ color: "red", marginBottom: "0.5rem" }}>{itemError}</p>}
         {(roomState?.items?.length ?? 0) === 0 ? (
           <p style={{ color: "#888" }}>No items yet. The board is ready for the write phase.</p>
         ) : (
-          <ul>
+          <ul style={{ listStyle: "none", padding: 0 }}>
             {roomState?.items?.map((item) => (
-              <li key={item.id}>{item.text}</li>
+              <li key={item.id} style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid #eee" }}>
+                {item.text}
+              </li>
             ))}
           </ul>
         )}
