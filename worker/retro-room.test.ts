@@ -828,6 +828,61 @@ describe("RetroRoom Durable Object", () => {
       const grouped = state.items.filter((i) => i.groupId === groupId);
       expect(grouped).toHaveLength(1);
     });
+
+    it("reordering items within one group preserves items in other groups and ungrouped", async () => {
+      const id = env.RETRO_ROOM.idFromName("test-partial-reorder-preserve");
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.initRoom("test-partial-reorder-preserve");
+      await stub.join("fac1", "Facilitator");
+      await stub.addItem("fac1", "G1-A");
+      await stub.addItem("fac1", "G1-B");
+      await stub.addItem("fac1", "G2-A");
+      await stub.addItem("fac1", "G2-B");
+      await stub.addItem("fac1", "Ungrouped-1");
+      await stub.setPhase("fac1", "organise");
+
+      // Create two groups
+      const g1Result = await stub.createGroup("fac1", "Group 1");
+      const g2Result = await stub.createGroup("fac1", "Group 2");
+      const g1Id = g1Result.group!.id;
+      const g2Id = g2Result.group!.id;
+
+      const orgState = await stub.getRoomState();
+
+      // Move items into groups
+      const g1a = orgState.items.find((i) => i.text === "G1-A")!;
+      const g1b = orgState.items.find((i) => i.text === "G1-B")!;
+      const g2a = orgState.items.find((i) => i.text === "G2-A")!;
+      const g2b = orgState.items.find((i) => i.text === "G2-B")!;
+
+      await stub.moveItemToGroup("fac1", g1a.id, g1Id, 0);
+      await stub.moveItemToGroup("fac1", g1b.id, g1Id, 1);
+      await stub.moveItemToGroup("fac1", g2a.id, g2Id, 0);
+      await stub.moveItemToGroup("fac1", g2b.id, g2Id, 1);
+      // Ungrouped-1 stays ungrouped
+
+      // Now reorder only g1 items (partial reorder - send only g1 IDs)
+      const result = await stub.reorderItems("fac1", [g1b.id, g1a.id]);
+      expect(result.success).toBe(true);
+
+      const state = await stub.getRoomState();
+
+      // All 5 items must be preserved
+      expect(state.items).toHaveLength(5);
+
+      // G1 items are reordered
+      const g1Items = state.items.filter((i) => i.groupId === g1Id).sort((a, b) => a.order - b.order);
+      expect(g1Items.map((i) => i.text)).toEqual(["G1-B", "G1-A"]);
+
+      // G2 items remain untouched
+      const g2Items = state.items.filter((i) => i.groupId === g2Id).sort((a, b) => a.order - b.order);
+      expect(g2Items.map((i) => i.text)).toEqual(["G2-A", "G2-B"]);
+
+      // Ungrouped item remains
+      const ungrouped = state.items.filter((i) => i.groupId === null);
+      expect(ungrouped).toHaveLength(1);
+      expect(ungrouped[0]!.text).toBe("Ungrouped-1");
+    });
   });
 
   describe("vote phase", () => {

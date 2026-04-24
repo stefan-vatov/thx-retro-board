@@ -335,7 +335,56 @@ describe("applyReorderItems", () => {
 
   it("preserves items not in the ordered list", () => {
     const result = applyReorderItems(items, ["c", "a"]);
-    expect(result.map((i) => i.id)).toEqual(["c", "a"]);
+    expect(result.map((i) => i.id)).toEqual(["c", "a", "b"]);
+    expect(result).toHaveLength(3);
+  });
+
+  it("reordering items within one group preserves items in other groups", () => {
+    const multiGroupItems: RetroItem[] = [
+      { id: "a1", text: "A1", authorId: "p1", groupId: "g1", order: 0 },
+      { id: "a2", text: "A2", authorId: "p1", groupId: "g1", order: 1 },
+      { id: "b1", text: "B1", authorId: "p1", groupId: "g2", order: 0 },
+      { id: "b2", text: "B2", authorId: "p1", groupId: "g2", order: 1 },
+      { id: "u1", text: "U1", authorId: "p1", groupId: null, order: 0 },
+    ];
+    // Reorder only g1 items (a2, a1)
+    const result = applyReorderItems(multiGroupItems, ["a2", "a1"]);
+    const g1Ids = result.filter((i) => i.groupId === "g1").map((i) => i.id);
+    const g2Ids = result.filter((i) => i.groupId === "g2").map((i) => i.id);
+    const ungroupedIds = result.filter((i) => i.groupId === null).map((i) => i.id);
+    expect(g1Ids).toEqual(["a2", "a1"]);
+    expect(g2Ids).toEqual(["b1", "b2"]);
+    expect(ungroupedIds).toEqual(["u1"]);
+    expect(result).toHaveLength(5);
+  });
+
+  it("reordering ungrouped items preserves grouped items", () => {
+    const mixedItems: RetroItem[] = [
+      { id: "u1", text: "U1", authorId: "p1", groupId: null, order: 0 },
+      { id: "u2", text: "U2", authorId: "p1", groupId: null, order: 1 },
+      { id: "g1a", text: "G1A", authorId: "p1", groupId: "g1", order: 0 },
+    ];
+    // Reorder only ungrouped items
+    const result = applyReorderItems(mixedItems, ["u2", "u1"]);
+    expect(result).toHaveLength(3);
+    expect(result.filter((i) => i.groupId === null).map((i) => i.id)).toEqual(["u2", "u1"]);
+    expect(result.filter((i) => i.groupId === "g1").map((i) => i.id)).toEqual(["g1a"]);
+  });
+
+  it("reorders items correctly with contiguous order indices", () => {
+    const multiGroupItems: RetroItem[] = [
+      { id: "a1", text: "A1", authorId: "p1", groupId: "g1", order: 0 },
+      { id: "a2", text: "A2", authorId: "p1", groupId: "g1", order: 1 },
+      { id: "b1", text: "B1", authorId: "p1", groupId: "g2", order: 2 },
+    ];
+    const result = applyReorderItems(multiGroupItems, ["a2", "a1"]);
+    expect(result.map((i) => i.order)).toEqual([0, 1, 2]);
+  });
+
+  it("handles empty orderedIds preserving all items", () => {
+    const result = applyReorderItems(items, []);
+    expect(result).toHaveLength(3);
+    expect(result.map((i) => i.id)).toEqual(["a", "b", "c"]);
   });
 });
 

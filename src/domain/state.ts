@@ -104,8 +104,18 @@ export function getGroupedItems(items: RetroItem[], groupId: string): RetroItem[
 }
 
 export function applyReorderItems(items: RetroItem[], orderedIds: string[]): RetroItem[] {
+  const idSet = new Set(orderedIds);
   const reordered = reorderList(items, orderedIds, (item) => item.id);
-  return reordered.map((item, idx) => ({ ...item, order: idx }));
+  const untouched = items.filter((item) => !idSet.has(item.id));
+
+  // Place reordered items first, then untouched items preserve their relative order
+  const result: RetroItem[] = [
+    ...reordered.map((item, idx) => ({ ...item, order: idx })),
+    ...untouched,
+  ];
+
+  // Reassign contiguous order indices
+  return result.map((item, idx) => ({ ...item, order: idx }));
 }
 
 export function applyReorderGroups(groups: Group[], orderedIds: string[]): Group[] {

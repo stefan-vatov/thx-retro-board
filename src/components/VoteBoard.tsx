@@ -1,3 +1,4 @@
+import { useState, useCallback } from "react";
 import type { RoomState } from "../domain";
 import { getUngroupedItems, getGroupedItems, getVotesForItem, getRemainingBudget, getVotesByParticipant } from "../domain";
 
@@ -8,16 +9,38 @@ interface VoteBoardProps {
 }
 
 export function VoteBoard({ roomState, participantId, send }: VoteBoardProps) {
-  const remaining = getRemainingBudget(roomState.votes, participantId, roomState.voteBudget);
+  const [pendingCastCount, setPendingCastCount] = useState(0);
+  const [pendingRemoves, setPendingRemoves] = useState<Set<string>>(new Set());
+
+  const serverRemaining = getRemainingBudget(roomState.votes, participantId, roomState.voteBudget);
+  const effectiveRemaining = serverRemaining - pendingCastCount;
   const used = getVotesByParticipant(roomState.votes, participantId);
   const sortedGroups = [...roomState.groups].sort((a, b) => a.order - b.order);
 
-  function handleVote(itemId: string) {
-    send({ type: "cast-vote", itemId, count: 1 });
-  }
+  const handleVote = useCallback(
+    (itemId: string) => {
+      if (effectiveRemaining <= 0) return;
+      setPendingCastCount((c) => c + 1);
+      send({ type: "cast-vote", itemId, count: 1 });
+    },
+    [effectiveRemaining, send],
+  );
 
-  function handleRemoveVote(itemId: string) {
-    send({ type: "remove-vote", itemId });
+  const handleRemoveVote = useCallback(
+    (itemId: string) => {
+      if (pendingRemoves.has(itemId)) return;
+      setPendingRemoves((prev) => new Set(prev).add(itemId));
+      send({ type: "remove-vote", itemId });
+    },
+    [pendingRemoves, send],
+  );
+
+  // Reset pending optimistic state when server version changes (snapshot arrives)
+  if (pendingCastCount > 0) {
+    setPendingCastCount(0);
+  }
+  if (pendingRemoves.size > 0) {
+    setPendingRemoves(new Set());
   }
 
   function getParticipantVotesForItem(itemId: string): number {
@@ -44,7 +67,7 @@ export function VoteBoard({ roomState, participantId, send }: VoteBoardProps) {
           )}
           <button
             onClick={() => handleRemoveVote(item.id)}
-            disabled={myVotes === 0}
+            disabled={myVotes === 0 || pendingRemoves.has(item.id)}
             title="Remove one of your votes"
             style={{ padding: "0 0.4rem", fontSize: "0.85rem" }}
           >
@@ -52,7 +75,7 @@ export function VoteBoard({ roomState, participantId, send }: VoteBoardProps) {
           </button>
           <button
             onClick={() => handleVote(item.id)}
-            disabled={remaining <= 0}
+            disabled={effectiveRemaining <= 0}
             title="Add a vote"
             style={{ padding: "0 0.4rem", fontSize: "0.85rem" }}
           >
@@ -67,8 +90,8 @@ export function VoteBoard({ roomState, participantId, send }: VoteBoardProps) {
     <div>
       <div style={{ marginBottom: "1rem", padding: "0.5rem 0.75rem", border: "1px solid #ddd", borderRadius: 4, background: "#f5f5f5" }}>
         <strong>Your votes:</strong> {used} used / {roomState.voteBudget} total
-        <span style={{ marginLeft: "1rem", color: remaining === 0 ? "#c00" : "#555" }}>
-          ({remaining} remaining)
+        <span style={{ marginLeft: "1rem", color: effectiveRemaining === 0 ? "#c00" : "#555" }}>
+          ({effectiveRemaining} remaining)
         </span>
       </div>
 

@@ -7,6 +7,8 @@ export type ServerToClientMessage =
   | { type: "items-reordered"; items: import("./types").RetroItem[] }
   | { type: "groups-changed"; groups: import("./types").Group[] }
   | { type: "vote-changed"; itemId: string; participantId: string; delta: number; totalForItem: number }
+  // delta > 0 for cast-vote (always +count), delta < 0 for remove-vote (always -1).
+  // The vote-changed message is informational; authoritative state arrives via snapshot broadcast.
   | { type: "timer-updated"; timer: import("./types").TimerState }
   | { type: "error"; message: string };
 
