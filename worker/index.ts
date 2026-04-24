@@ -67,6 +67,11 @@ export default {
         return forwardToDO(stub, "/vote-budget", request, body);
       }
 
+      if (suffix === "phase" && method === "POST") {
+        const body = await request.json() as { participantId: string; phase: string };
+        return forwardToDO(stub, "/phase", request, body);
+      }
+
       if (suffix === "ws" && request.headers.get("Upgrade") === "websocket") {
         const newUrl = new URL(request.url);
         newUrl.pathname = "/ws";

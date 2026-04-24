@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./index";
 import type {
   RoomState,
+  Phase,
   Participant,
   RetroItem,
   ServerToClientMessage,
@@ -10,6 +11,8 @@ import type {
 import {
   sanitizeItemText,
   isValidItemText,
+  canTransition,
+  PHASE_ORDER,
 } from "../src/domain";
 
 interface StoredState {
@@ -113,6 +116,14 @@ export class RetroRoom extends DurableObject<Env> {
       const token = generateToken();
       s.connectionTokens[participantId] = token;
       await this.saveState();
+
+      // Broadcast participant presence to other clients on reconnect
+      const broadcast: ServerToClientMessage = {
+        type: "participant-joined",
+        participant: existing,
+      };
+      this.broadcast(broadcast, participantId);
+
       return { success: true, state: await this.getRoomState(), connectionToken: token };
     }
 
@@ -183,6 +194,33 @@ export class RetroRoom extends DurableObject<Env> {
     return { success: true, item };
   }
 
+  async setPhase(participantId: string, phase: Phase): Promise<{ success: boolean; error?: string }> {
+    const s = await this.loadState();
+
+    if (s.facilitatorId !== participantId) {
+      return { success: false, error: "Only the facilitator can change phase" };
+    }
+
+    if (!PHASE_ORDER.includes(phase)) {
+      return { success: false, error: "Invalid phase" };
+    }
+
+    if (!canTransition(s.phase, phase)) {
+      return { success: false, error: `Cannot transition from ${s.phase} to ${phase}` };
+    }
+
+    s.phase = phase;
+    await this.saveState();
+
+    // Broadcast phase change to all connected clients
+    const broadcast: ServerToClientMessage = { type: "phase-changed", phase };
+    this.broadcast(broadcast);
+
+    this.broadcastState(s);
+
+    return { success: true };
+  }
+
   private broadcast(message: ServerToClientMessage, excludeId?: string) {
     const payload = JSON.stringify(message);
     for (const [id, ws] of this.sessions) {
@@ -227,6 +265,12 @@ export class RetroRoom extends DurableObject<Env> {
       return Response.json(result);
     }
 
+    if (url.pathname === "/phase" && request.method === "POST") {
+      const body = await request.json() as { participantId: string; phase: string };
+      const result = await this.setPhase(body.participantId, body.phase as Phase);
+      return Response.json(result);
+    }
+
     if (url.pathname === "/ws" && request.headers.get("Upgrade") === "websocket") {
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
@@ -248,6 +292,16 @@ export class RetroRoom extends DurableObject<Env> {
       this.sessions.set(participantId, server);
       server.serializeAttachment({ participantId });
       this.ctx.acceptWebSocket(server);
+
+      // Broadcast reconnecting participant presence to other clients
+      const participant = s.participants.find((p) => p.id === participantId);
+      if (participant) {
+        const presenceMsg: ServerToClientMessage = {
+          type: "participant-joined",
+          participant,
+        };
+        this.broadcast(presenceMsg, participantId);
+      }
 
       const snapshot = await this.getRoomState();
       server.send(JSON.stringify({ type: "snapshot", state: snapshot }));
@@ -297,6 +351,14 @@ export class RetroRoom extends DurableObject<Env> {
       }
       case "set-vote-budget": {
         const result = await this.setVoteBudget(participantId, msg.budget);
+        if (!result.success) {
+          const ws = this.sessions.get(participantId);
+          ws?.send(JSON.stringify({ type: "error", message: result.error }));
+        }
+        break;
+      }
+      case "set-phase": {
+        const result = await this.setPhase(participantId, msg.phase);
         if (!result.success) {
           const ws = this.sessions.get(participantId);
           ws?.send(JSON.stringify({ type: "error", message: result.error }));

@@ -1,4 +1,4 @@
-import type { RoomState } from "./domain";
+import type { RoomState, Phase } from "./domain";
 
 export async function createRoom(): Promise<{ roomId: string }> {
   const res = await fetch("/api/rooms", { method: "POST" });
@@ -34,6 +34,19 @@ export async function setVoteBudget(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ participantId, budget }),
+  });
+  return res.json() as Promise<{ success: boolean; error?: string }>;
+}
+
+export async function setPhase(
+  roomId: string,
+  participantId: string,
+  phase: Phase,
+): Promise<{ success: boolean; error?: string }> {
+  const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/phase`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ participantId, phase }),
   });
   return res.json() as Promise<{ success: boolean; error?: string }>;
 }

@@ -331,4 +331,131 @@ describe("RetroRoom Durable Object", () => {
       expect(state.items).toHaveLength(0);
     });
   });
+
+  describe("setPhase", () => {
+    async function setupRoomWithFacilitator(roomId: string) {
+      const id = env.RETRO_ROOM.idFromName(roomId);
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.initRoom(roomId);
+      await stub.join("fac1", "Facilitator");
+      return stub;
+    }
+
+    it("facilitator can advance from write to organise", async () => {
+      const stub = await setupRoomWithFacilitator("test-phase-write-organise");
+      const result = await stub.setPhase("fac1", "organise");
+      expect(result.success).toBe(true);
+
+      const state = await stub.getRoomState();
+      expect(state.phase).toBe("organise");
+    });
+
+    it("facilitator can advance from organise to vote", async () => {
+      const stub = await setupRoomWithFacilitator("test-phase-organise-vote");
+      await stub.setPhase("fac1", "organise");
+      const result = await stub.setPhase("fac1", "vote");
+      expect(result.success).toBe(true);
+
+      const state = await stub.getRoomState();
+      expect(state.phase).toBe("vote");
+    });
+
+    it("facilitator can advance from vote to review", async () => {
+      const stub = await setupRoomWithFacilitator("test-phase-vote-review");
+      await stub.setPhase("fac1", "organise");
+      await stub.setPhase("fac1", "vote");
+      const result = await stub.setPhase("fac1", "review");
+      expect(result.success).toBe(true);
+
+      const state = await stub.getRoomState();
+      expect(state.phase).toBe("review");
+    });
+
+    it("non-facilitator cannot change phase", async () => {
+      const stub = await setupRoomWithFacilitator("test-phase-nonfac");
+      await stub.join("p2", "Bob");
+      const result = await stub.setPhase("p2", "organise");
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("facilitator");
+
+      const state = await stub.getRoomState();
+      expect(state.phase).toBe("write");
+    });
+
+    it("cannot skip phases", async () => {
+      const stub = await setupRoomWithFacilitator("test-phase-skip");
+      const result = await stub.setPhase("fac1", "vote");
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Cannot transition");
+
+      const state = await stub.getRoomState();
+      expect(state.phase).toBe("write");
+    });
+
+    it("cannot go backwards in phase", async () => {
+      const stub = await setupRoomWithFacilitator("test-phase-back");
+      await stub.setPhase("fac1", "organise");
+      const result = await stub.setPhase("fac1", "write");
+      expect(result.success).toBe(false);
+
+      const state = await stub.getRoomState();
+      expect(state.phase).toBe("organise");
+    });
+
+    it("unknown participant cannot change phase", async () => {
+      const stub = await setupRoomWithFacilitator("test-phase-unknown");
+      const result = await stub.setPhase("unknown-pid", "organise");
+      expect(result.success).toBe(false);
+
+      const state = await stub.getRoomState();
+      expect(state.phase).toBe("write");
+    });
+
+    it("after phase change, stale add-item is rejected", async () => {
+      const stub = await setupRoomWithFacilitator("test-phase-stale-add");
+      await stub.addItem("fac1", "Valid write item");
+      await stub.setPhase("fac1", "organise");
+      const result = await stub.addItem("fac1", "Stale item");
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("write phase");
+
+      const state = await stub.getRoomState();
+      expect(state.items).toHaveLength(1);
+      expect(state.items[0]!.text).toBe("Valid write item");
+    });
+  });
+
+  describe("reconnect broadcast", () => {
+    it("re-joining existing participant does not duplicate membership", async () => {
+      const roomId = "test-reconnect-no-dupe";
+      const id = env.RETRO_ROOM.idFromName(roomId);
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.initRoom(roomId);
+
+      await stub.join("p1", "Alice");
+      await stub.join("p2", "Bob");
+
+      // Re-join Alice
+      const result = await stub.join("p1", "Alice");
+      expect(result.success).toBe(true);
+
+      const state = await stub.getRoomState();
+      const aliceCount = state.participants.filter((p) => p.id === "p1").length;
+      expect(aliceCount).toBe(1);
+      expect(state.participants).toHaveLength(2);
+    });
+
+    it("re-join returns a new token and room state", async () => {
+      const roomId = "test-reconnect-token";
+      const id = env.RETRO_ROOM.idFromName(roomId);
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.initRoom(roomId);
+
+      const first = await stub.join("p1", "Alice");
+      const second = await stub.join("p1", "Alice");
+      expect(second.success).toBe(true);
+      expect(second.connectionToken).not.toBe(first.connectionToken);
+      expect(second.state).toBeDefined();
+    });
+  });
 });

@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo } from "react";
 import { useParams } from "react-router-dom";
-import { joinRoom, getRoomState, setVoteBudget } from "../api";
+import { joinRoom, getRoomState, setVoteBudget, setPhase } from "../api";
 import { useRoom } from "../hooks";
-import type { RoomState } from "../domain";
-import { sanitizeItemText, isValidItemText } from "../domain";
+import type { RoomState, Phase } from "../domain";
+import { sanitizeItemText, isValidItemText, PHASE_ORDER } from "../domain";
 
 type PageState = "loading" | "join" | "room" | "not-found";
 
@@ -35,6 +35,7 @@ export function RoomPage() {
   });
   const [voteBudgetInput, setVoteBudgetInput] = useState("5");
   const [budgetMsg, setBudgetMsg] = useState<string | null>(null);
+  const [phaseMsg, setPhaseMsg] = useState<string | null>(null);
 
   const { state: wsState, connected, send } = useRoom(roomId ?? "", participantId, connectionToken);
 
@@ -110,6 +111,20 @@ export function RoomPage() {
       }
     } else {
       setBudgetMsg(result.error ?? "Failed to update budget.");
+    }
+  }
+
+  async function handleAdvancePhase() {
+    if (!roomId || !roomState) return;
+    setPhaseMsg(null);
+    const currentIdx = PHASE_ORDER.indexOf(roomState.phase);
+    const nextPhase = PHASE_ORDER[currentIdx + 1] as Phase | undefined;
+    if (!nextPhase) return;
+    const result = await setPhase(roomId, participantId, nextPhase);
+    if (result.success) {
+      setPhaseMsg(`Advanced to ${nextPhase}.`);
+    } else {
+      setPhaseMsg(result.error ?? "Failed to change phase.");
     }
   }
 
@@ -193,6 +208,15 @@ export function RoomPage() {
             />
             <button onClick={handleSetBudget}>Set</button>
             {budgetMsg && <span style={{ fontSize: "0.85rem" }}>{budgetMsg}</span>}
+          </div>
+          <div style={{ marginTop: "0.5rem", display: "flex", gap: "0.5rem", alignItems: "center" }}>
+            <button
+              onClick={handleAdvancePhase}
+              disabled={roomState?.phase === "review"}
+            >
+              Advance to Next Phase
+            </button>
+            {phaseMsg && <span style={{ fontSize: "0.85rem" }}>{phaseMsg}</span>}
           </div>
         </div>
       )}
