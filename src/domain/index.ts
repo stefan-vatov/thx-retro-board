@@ -24,5 +24,7 @@ export {
   applyReorderItems,
   applyReorderGroups,
   applyMoveItemToGroup,
+  applyCastVote,
+  applyRemoveVote,
 } from "./state";
 export { generateRoomId, ROOM_ID_LENGTH } from "./room-id";

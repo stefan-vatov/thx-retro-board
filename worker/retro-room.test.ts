@@ -829,4 +829,295 @@ describe("RetroRoom Durable Object", () => {
       expect(grouped).toHaveLength(1);
     });
   });
+
+  describe("vote phase", () => {
+    async function setupVoteRoom(roomId: string, budget: number = 5) {
+      const id = env.RETRO_ROOM.idFromName(roomId);
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.initRoom(roomId);
+      await stub.join("fac1", "Facilitator");
+      await stub.join("p2", "Bob");
+      await stub.addItem("fac1", "Item A");
+      await stub.addItem("fac1", "Item B");
+      await stub.setVoteBudget("fac1", budget);
+      await stub.setPhase("fac1", "organise");
+      await stub.setPhase("fac1", "vote");
+      return stub;
+    }
+
+    it("participant can cast a vote during vote phase", async () => {
+      const stub = await setupVoteRoom("test-cast-vote");
+      const state0 = await stub.getRoomState();
+      const itemId = state0.items[0]!.id;
+
+      const result = await stub.castVote("fac1", itemId, 1);
+      expect(result.success).toBe(true);
+
+      const state = await stub.getRoomState();
+      expect(state.votes).toHaveLength(1);
+      expect(state.votes[0]!.participantId).toBe("fac1");
+      expect(state.votes[0]!.itemId).toBe(itemId);
+      expect(state.votes[0]!.count).toBe(1);
+    });
+
+    it("participant can stack votes on the same item", async () => {
+      const stub = await setupVoteRoom("test-stack-votes", 5);
+      const state0 = await stub.getRoomState();
+      const itemId = state0.items[0]!.id;
+
+      await stub.castVote("fac1", itemId, 1);
+      const result = await stub.castVote("fac1", itemId, 2);
+      expect(result.success).toBe(true);
+
+      const state = await stub.getRoomState();
+      const allocation = state.votes.find((v) => v.participantId === "fac1" && v.itemId === itemId);
+      expect(allocation?.count).toBe(3);
+    });
+
+    it("over-budget vote is rejected", async () => {
+      const stub = await setupVoteRoom("test-over-budget", 3);
+      const state0 = await stub.getRoomState();
+      const itemId = state0.items[0]!.id;
+
+      const r1 = await stub.castVote("fac1", itemId, 3);
+      expect(r1.success).toBe(true);
+
+      const r2 = await stub.castVote("fac1", itemId, 1);
+      expect(r2.success).toBe(false);
+      expect(r2.error).toContain("Over budget");
+
+      const state = await stub.getRoomState();
+      const allocation = state.votes.find((v) => v.participantId === "fac1" && v.itemId === itemId);
+      expect(allocation?.count).toBe(3);
+    });
+
+    it("rapid extra votes are rejected after budget exhaustion", async () => {
+      const stub = await setupVoteRoom("test-rapid-extra", 2);
+      const state0 = await stub.getRoomState();
+      const itemA = state0.items[0]!.id;
+      const itemB = state0.items[1]!.id;
+
+      const r1 = await stub.castVote("fac1", itemA, 2);
+      expect(r1.success).toBe(true);
+
+      const r2 = await stub.castVote("fac1", itemB, 1);
+      expect(r2.success).toBe(false);
+
+      const state = await stub.getRoomState();
+      expect(state.votes).toHaveLength(1);
+    });
+
+    it("participant can remove own vote", async () => {
+      const stub = await setupVoteRoom("test-remove-vote");
+      const state0 = await stub.getRoomState();
+      const itemId = state0.items[0]!.id;
+
+      await stub.castVote("fac1", itemId, 2);
+      const result = await stub.removeVote("fac1", itemId);
+      expect(result.success).toBe(true);
+
+      const state = await stub.getRoomState();
+      const allocation = state.votes.find((v) => v.participantId === "fac1" && v.itemId === itemId);
+      expect(allocation?.count).toBe(1);
+    });
+
+    it("participant can remove all votes from an item", async () => {
+      const stub = await setupVoteRoom("test-remove-all-votes");
+      const state0 = await stub.getRoomState();
+      const itemId = state0.items[0]!.id;
+
+      await stub.castVote("fac1", itemId, 1);
+      const result = await stub.removeVote("fac1", itemId);
+      expect(result.success).toBe(true);
+
+      const state = await stub.getRoomState();
+      const allocation = state.votes.find((v) => v.participantId === "fac1" && v.itemId === itemId);
+      expect(allocation).toBeUndefined();
+    });
+
+    it("cannot remove vote that does not exist", async () => {
+      const stub = await setupVoteRoom("test-remove-nonexist");
+      const state0 = await stub.getRoomState();
+      const itemId = state0.items[0]!.id;
+
+      const result = await stub.removeVote("fac1", itemId);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("No votes to remove");
+    });
+
+    it("votes are rejected outside vote phase", async () => {
+      const id = env.RETRO_ROOM.idFromName("test-vote-out-phase");
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.initRoom("test-vote-out-phase");
+      await stub.join("fac1", "Facilitator");
+      await stub.addItem("fac1", "Item A");
+
+      const state = await stub.getRoomState();
+      const itemId = state.items[0]!.id;
+
+      const r1 = await stub.castVote("fac1", itemId, 1);
+      expect(r1.success).toBe(false);
+      expect(r1.error).toContain("vote phase");
+
+      const r2 = await stub.removeVote("fac1", itemId);
+      expect(r2.success).toBe(false);
+      expect(r2.error).toContain("vote phase");
+    });
+
+    it("votes are rejected during review phase", async () => {
+      const stub = await setupVoteRoom("test-vote-review");
+      await stub.setPhase("fac1", "review");
+
+      const state = await stub.getRoomState();
+      const itemId = state.items[0]!.id;
+
+      const r1 = await stub.castVote("fac1", itemId, 1);
+      expect(r1.success).toBe(false);
+    });
+
+    it("each participant has independent budget", async () => {
+      const stub = await setupVoteRoom("test-independent-budget", 3);
+      const state0 = await stub.getRoomState();
+      const itemA = state0.items[0]!.id;
+
+      // fac1 uses all 3 votes
+      await stub.castVote("fac1", itemA, 3);
+
+      // p2 should still have 3 votes
+      const r = await stub.castVote("p2", itemA, 3);
+      expect(r.success).toBe(true);
+
+      const state = await stub.getRoomState();
+      expect(state.votes).toHaveLength(2);
+    });
+
+    it("vote totals aggregate across participants", async () => {
+      const stub = await setupVoteRoom("test-aggregate-totals", 5);
+      const state0 = await stub.getRoomState();
+      const itemA = state0.items[0]!.id;
+
+      await stub.castVote("fac1", itemA, 2);
+      await stub.castVote("p2", itemA, 3);
+
+      const state = await stub.getRoomState();
+      const totalVotes = state.votes
+        .filter((v) => v.itemId === itemA)
+        .reduce((sum, v) => sum + v.count, 0);
+      expect(totalVotes).toBe(5);
+    });
+
+    it("organised state is preserved during vote (groups and order remain)", async () => {
+      const id = env.RETRO_ROOM.idFromName("test-vote-preserves-org");
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.initRoom("test-vote-preserves-org");
+      await stub.join("fac1", "Facilitator");
+      await stub.addItem("fac1", "Item A");
+      await stub.addItem("fac1", "Item B");
+      await stub.setPhase("fac1", "organise");
+      await stub.createGroup("fac1", "Process");
+      const orgState = await stub.getRoomState();
+      const groupId = orgState.groups[0]!.id;
+      await stub.moveItemToGroup("fac1", orgState.items[0]!.id, groupId, 0);
+      await stub.setPhase("fac1", "vote");
+
+      const voteState = await stub.getRoomState();
+      expect(voteState.groups).toHaveLength(1);
+      expect(voteState.groups[0]!.name).toBe("Process");
+      const inGroup = voteState.items.filter((i) => i.groupId === groupId);
+      expect(inGroup).toHaveLength(1);
+
+      // Organisation should be blocked during vote
+      const r = await stub.createGroup("fac1", "Blocked");
+      expect(r.success).toBe(false);
+    });
+
+    it("late joiner during vote receives canonical state with votes and budget", async () => {
+      const stub = await setupVoteRoom("test-late-join-vote", 3);
+      const state0 = await stub.getRoomState();
+      const itemA = state0.items[0]!.id;
+
+      await stub.castVote("fac1", itemA, 2);
+
+      // p3 joins late
+      await stub.join("p3", "Carol");
+      const state = await stub.getRoomState();
+
+      // Votes from fac1 should still be there
+      expect(state.votes).toHaveLength(1);
+      expect(state.votes[0]!.count).toBe(2);
+      // p3 should have 0 used votes
+      const p3votes = state.votes.filter((v) => v.participantId === "p3");
+      expect(p3votes).toHaveLength(0);
+      // Budget should be 3
+      expect(state.voteBudget).toBe(3);
+    });
+
+    it("vote allocations survive state reload", async () => {
+      const stub = await setupVoteRoom("test-vote-persist", 5);
+      const state0 = await stub.getRoomState();
+      const itemA = state0.items[0]!.id;
+
+      await stub.castVote("fac1", itemA, 2);
+      await stub.castVote("p2", itemA, 1);
+
+      const state = await stub.getRoomState();
+      expect(state.votes).toHaveLength(2);
+      expect(state.votes.find((v) => v.participantId === "fac1")?.count).toBe(2);
+      expect(state.votes.find((v) => v.participantId === "p2")?.count).toBe(1);
+    });
+
+    it("organisation operations blocked during vote phase", async () => {
+      const stub = await setupVoteRoom("test-org-blocked-during-vote");
+      const state0 = await stub.getRoomState();
+
+      const r1 = await stub.createGroup("fac1", "New Group");
+      const r2 = await stub.reorderItems("fac1", state0.items.map((i) => i.id).reverse());
+      const r3 = await stub.reorderGroups("fac1", []);
+      const r4 = await stub.moveItemToGroup("fac1", state0.items[0]!.id, null, 0);
+
+      expect(r1.success).toBe(false);
+      expect(r2.success).toBe(false);
+      expect(r3.success).toBe(false);
+      expect(r4.success).toBe(false);
+    });
+
+    it("cannot vote on nonexistent item", async () => {
+      const stub = await setupVoteRoom("test-vote-nonexist-item");
+      const result = await stub.castVote("fac1", "nonexistent-item", 1);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Item not found");
+    });
+
+    it("cast vote rejects zero or negative count", async () => {
+      const stub = await setupVoteRoom("test-vote-zero-count");
+      const state0 = await stub.getRoomState();
+      const itemId = state0.items[0]!.id;
+
+      const r1 = await stub.castVote("fac1", itemId, 0);
+      expect(r1.success).toBe(false);
+
+      const r2 = await stub.castVote("fac1", itemId, -1);
+      expect(r2.success).toBe(false);
+    });
+
+    it("facilitator-configured budget is used per participant", async () => {
+      const stub = await setupVoteRoom("test-facilitator-budget", 2);
+      const state0 = await stub.getRoomState();
+      const itemA = state0.items[0]!.id;
+
+      // Each participant gets 2 votes
+      const r1 = await stub.castVote("fac1", itemA, 2);
+      expect(r1.success).toBe(true);
+
+      const r2 = await stub.castVote("p2", itemA, 2);
+      expect(r2.success).toBe(true);
+
+      // Both are now over budget
+      const r3 = await stub.castVote("fac1", itemA, 1);
+      expect(r3.success).toBe(false);
+
+      const r4 = await stub.castVote("p2", itemA, 1);
+      expect(r4.success).toBe(false);
+    });
+  });
 });

@@ -53,6 +53,9 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
           setState((prev) => prev ? { ...prev, items: msg.items } : prev);
         } else if (msg.type === "groups-changed") {
           setState((prev) => prev ? { ...prev, groups: msg.groups } : prev);
+        } else if (msg.type === "vote-changed") {
+          // Vote updates come via snapshot broadcast; this handler is a no-op
+          // since the snapshot will carry the full authoritative votes array.
         }
       } catch {
         // ignore parse errors

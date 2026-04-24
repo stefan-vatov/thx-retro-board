@@ -134,3 +134,59 @@ export function applyMoveItemToGroup(
 
   return [...differentGroup, ...updatedSameGroup];
 }
+
+export function applyCastVote(
+  votes: VoteAllocation[],
+  participantId: string,
+  itemId: string,
+  count: number,
+  budget: number,
+): { votes: VoteAllocation[]; error?: string } {
+  if (count < 1 || !Number.isInteger(count)) {
+    return { votes, error: "Vote count must be a positive integer" };
+  }
+
+  const currentUsed = getVotesByParticipant(votes, participantId);
+  const remaining = budget - currentUsed;
+  if (count > remaining) {
+    return { votes, error: `Over budget: ${remaining} votes remaining` };
+  }
+
+  const existing = votes.find(
+    (v) => v.participantId === participantId && v.itemId === itemId,
+  );
+
+  if (existing) {
+    const updated = votes.map((v) =>
+      v.participantId === participantId && v.itemId === itemId
+        ? { ...v, count: v.count + count }
+        : v,
+    );
+    return { votes: updated };
+  }
+
+  return { votes: [...votes, { participantId, itemId, count }] };
+}
+
+export function applyRemoveVote(
+  votes: VoteAllocation[],
+  participantId: string,
+  itemId: string,
+): VoteAllocation[] {
+  const existing = votes.find(
+    (v) => v.participantId === participantId && v.itemId === itemId,
+  );
+  if (!existing) return votes;
+
+  if (existing.count <= 1) {
+    return votes.filter(
+      (v) => !(v.participantId === participantId && v.itemId === itemId),
+    );
+  }
+
+  return votes.map((v) =>
+    v.participantId === participantId && v.itemId === itemId
+      ? { ...v, count: v.count - 1 }
+      : v,
+  );
+}

@@ -22,6 +22,8 @@ import {
   applyReorderItems,
   applyReorderGroups,
   applyMoveItemToGroup,
+  applyCastVote,
+  applyRemoveVote,
 } from "./state";
 import type { RetroItem, Group, RoomState } from "./types";
 
@@ -387,5 +389,97 @@ describe("applyMoveItemToGroup", () => {
     const stayed = result.find((i) => i.id === "x2");
     expect(moved?.groupId).toBe("g1");
     expect(stayed?.groupId).toBeNull();
+  });
+});
+
+describe("applyCastVote", () => {
+  it("adds a new vote allocation", () => {
+    const result = applyCastVote([], "p1", "i1", 1, 5);
+    expect(result.error).toBeUndefined();
+    expect(result.votes).toEqual([{ participantId: "p1", itemId: "i1", count: 1 }]);
+  });
+
+  it("stacks votes on the same item", () => {
+    const result = applyCastVote(
+      [{ participantId: "p1", itemId: "i1", count: 2 }],
+      "p1", "i1", 2, 5,
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.votes).toEqual([{ participantId: "p1", itemId: "i1", count: 4 }]);
+  });
+
+  it("rejects over-budget vote", () => {
+    const result = applyCastVote(
+      [{ participantId: "p1", itemId: "i1", count: 3 }],
+      "p1", "i2", 3, 5,
+    );
+    expect(result.error).toContain("Over budget");
+    expect(result.votes).toHaveLength(1);
+  });
+
+  it("rejects zero or negative count", () => {
+    const r1 = applyCastVote([], "p1", "i1", 0, 5);
+    expect(r1.error).toBeTruthy();
+    const r2 = applyCastVote([], "p1", "i1", -1, 5);
+    expect(r2.error).toBeTruthy();
+  });
+
+  it("rejects non-integer count", () => {
+    const result = applyCastVote([], "p1", "i1", 1.5, 5);
+    expect(result.error).toBeTruthy();
+  });
+
+  it("distributes votes across items", () => {
+    let result = applyCastVote([], "p1", "i1", 2, 5);
+    expect(result.error).toBeUndefined();
+    result = applyCastVote(result.votes, "p1", "i2", 3, 5);
+    expect(result.error).toBeUndefined();
+    expect(result.votes).toEqual([
+      { participantId: "p1", itemId: "i1", count: 2 },
+      { participantId: "p1", itemId: "i2", count: 3 },
+    ]);
+  });
+
+  it("rejects when stacking would exceed budget", () => {
+    const result = applyCastVote(
+      [{ participantId: "p1", itemId: "i1", count: 4 }],
+      "p1", "i1", 2, 5,
+    );
+    expect(result.error).toContain("Over budget");
+  });
+
+  it("allows exact budget usage", () => {
+    const result = applyCastVote(
+      [{ participantId: "p1", itemId: "i1", count: 3 }],
+      "p1", "i2", 2, 5,
+    );
+    expect(result.error).toBeUndefined();
+    expect(getVotesByParticipant(result.votes, "p1")).toBe(5);
+  });
+});
+
+describe("applyRemoveVote", () => {
+  it("decrements count when count > 1", () => {
+    const votes = [{ participantId: "p1", itemId: "i1", count: 3 }];
+    const result = applyRemoveVote(votes, "p1", "i1");
+    expect(result).toEqual([{ participantId: "p1", itemId: "i1", count: 2 }]);
+  });
+
+  it("removes allocation when count is 1", () => {
+    const votes = [{ participantId: "p1", itemId: "i1", count: 1 }];
+    const result = applyRemoveVote(votes, "p1", "i1");
+    expect(result).toEqual([]);
+  });
+
+  it("does nothing if no allocation exists", () => {
+    const votes = [{ participantId: "p1", itemId: "i1", count: 2 }];
+    const result = applyRemoveVote(votes, "p2", "i1");
+    expect(result).toEqual(votes);
+  });
+
+  it("does nothing if item has no votes from participant", () => {
+    const votes = [{ participantId: "p1", itemId: "i1", count: 2 }];
+    const result = applyRemoveVote(votes, "p1", "i2");
+    expect(result).toEqual(votes);
   });
 });

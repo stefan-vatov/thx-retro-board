@@ -6,6 +6,7 @@ import type {
   Participant,
   RetroItem,
   Group,
+  VoteAllocation,
   ServerToClientMessage,
   ClientToServerMessage,
 } from "../src/domain";
@@ -19,6 +20,9 @@ import {
   applyReorderItems,
   applyReorderGroups,
   applyMoveItemToGroup,
+  applyCastVote,
+  applyRemoveVote,
+  getVotesForItem,
 } from "../src/domain";
 
 interface StoredState {
@@ -27,6 +31,7 @@ interface StoredState {
   participants: Participant[];
   items: RetroItem[];
   groups: Group[];
+  votes: VoteAllocation[];
   facilitatorId: string | null;
   voteBudget: number;
   version: number;
@@ -83,6 +88,7 @@ export class RetroRoom extends DurableObject<Env> {
       participants: [],
       items: [],
       groups: [],
+      votes: [],
       facilitatorId: null,
       voteBudget: 5,
       version: 0,
@@ -99,7 +105,7 @@ export class RetroRoom extends DurableObject<Env> {
       participants: s.participants,
       items: s.items,
       groups: s.groups,
-      votes: [],
+      votes: s.votes,
       timer: { startedAt: null, durationSeconds: null, expired: false },
       voteBudget: s.voteBudget,
       version: s.version,
@@ -314,6 +320,71 @@ export class RetroRoom extends DurableObject<Env> {
     return { success: true };
   }
 
+  async castVote(participantId: string, itemId: string, count: number): Promise<{ success: boolean; error?: string }> {
+    const s = await this.loadState();
+
+    if (s.phase !== "vote") {
+      return { success: false, error: "Cannot vote outside vote phase" };
+    }
+
+    const itemExists = s.items.some((i) => i.id === itemId);
+    if (!itemExists) {
+      return { success: false, error: "Item not found" };
+    }
+
+    const result = applyCastVote(s.votes, participantId, itemId, count, s.voteBudget);
+    if (result.error) {
+      return { success: false, error: result.error };
+    }
+
+    s.votes = result.votes;
+    await this.saveState();
+
+    const totalForItem = getVotesForItem(s.votes, itemId);
+    const broadcast: ServerToClientMessage = {
+      type: "vote-changed",
+      itemId,
+      participantId,
+      delta: count,
+      totalForItem,
+    };
+    this.broadcast(broadcast);
+    this.broadcastState(s);
+
+    return { success: true };
+  }
+
+  async removeVote(participantId: string, itemId: string): Promise<{ success: boolean; error?: string }> {
+    const s = await this.loadState();
+
+    if (s.phase !== "vote") {
+      return { success: false, error: "Cannot remove votes outside vote phase" };
+    }
+
+    const existing = s.votes.find(
+      (v) => v.participantId === participantId && v.itemId === itemId,
+    );
+    if (!existing) {
+      return { success: false, error: "No votes to remove" };
+    }
+
+    s.votes = applyRemoveVote(s.votes, participantId, itemId);
+    await this.saveState();
+
+    const totalForItem = getVotesForItem(s.votes, itemId);
+    const broadcast: ServerToClientMessage = {
+      type: "vote-changed",
+      itemId,
+      participantId,
+      delta: -1,
+      totalForItem,
+    };
+    this.broadcast(broadcast);
+    this.broadcastState(s);
+
+    return { success: true };
+  }
+
   private broadcast(message: ServerToClientMessage, excludeId?: string) {
     const payload = JSON.stringify(message);
     for (const [id, ws] of this.sessions) {
@@ -330,7 +401,7 @@ export class RetroRoom extends DurableObject<Env> {
       participants: s.participants,
       items: s.items,
       groups: s.groups,
-      votes: [],
+      votes: s.votes,
       timer: { startedAt: null, durationSeconds: null, expired: false },
       voteBudget: s.voteBudget,
       version: s.version,
@@ -484,6 +555,22 @@ export class RetroRoom extends DurableObject<Env> {
       }
       case "move-item-to-group": {
         const result = await this.moveItemToGroup(participantId, msg.itemId, msg.groupId, msg.index);
+        if (!result.success) {
+          const ws = this.sessions.get(participantId);
+          ws?.send(JSON.stringify({ type: "error", message: result.error }));
+        }
+        break;
+      }
+      case "cast-vote": {
+        const result = await this.castVote(participantId, msg.itemId, msg.count);
+        if (!result.success) {
+          const ws = this.sessions.get(participantId);
+          ws?.send(JSON.stringify({ type: "error", message: result.error }));
+        }
+        break;
+      }
+      case "remove-vote": {
+        const result = await this.removeVote(participantId, msg.itemId);
         if (!result.success) {
           const ws = this.sessions.get(participantId);
           ws?.send(JSON.stringify({ type: "error", message: result.error }));

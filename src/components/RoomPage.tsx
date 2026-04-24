@@ -5,6 +5,7 @@ import { useRoom } from "../hooks";
 import type { RoomState, Phase } from "../domain";
 import { sanitizeItemText, isValidItemText, PHASE_ORDER, getUngroupedItems } from "../domain";
 import { OrganiseBoard } from "./OrganiseBoard";
+import { VoteBoard } from "./VoteBoard";
 
 type PageState = "loading" | "join" | "room" | "not-found";
 
@@ -259,6 +260,8 @@ export function RoomPage() {
 
         {roomState?.phase === "organise" ? (
           <OrganiseBoard roomState={roomState} send={send} />
+        ) : roomState?.phase === "vote" ? (
+          <VoteBoard roomState={roomState} participantId={participantId} send={send} />
         ) : roomState?.phase === "write" ? (
           (roomState?.items?.length ?? 0) === 0 ? (
             <p style={{ color: "#888" }}>No items yet. The board is ready for the write phase.</p>
