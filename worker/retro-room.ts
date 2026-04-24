@@ -25,6 +25,12 @@ import {
   getVotesForItem,
 } from "../src/domain";
 
+interface StoredTimer {
+  startedAt: number | null;
+  durationSeconds: number | null;
+  expired: boolean;
+}
+
 interface StoredState {
   roomId: string;
   phase: RoomState["phase"];
@@ -36,6 +42,7 @@ interface StoredState {
   voteBudget: number;
   version: number;
   connectionTokens: Record<string, string>;
+  timer: StoredTimer;
 }
 
 function generateToken(): string {
@@ -93,12 +100,14 @@ export class RetroRoom extends DurableObject<Env> {
       voteBudget: 5,
       version: 0,
       connectionTokens: {},
+      timer: { startedAt: null, durationSeconds: null, expired: false },
     };
     await this.saveState();
   }
 
   async getRoomState(): Promise<RoomState> {
     const s = await this.loadState();
+    const timer = this.computeTimerStatus(s.timer);
     return {
       roomId: s.roomId,
       phase: s.phase,
@@ -106,10 +115,20 @@ export class RetroRoom extends DurableObject<Env> {
       items: s.items,
       groups: s.groups,
       votes: s.votes,
-      timer: { startedAt: null, durationSeconds: null, expired: false },
+      timer,
       voteBudget: s.voteBudget,
       version: s.version,
     };
+  }
+
+  private computeTimerStatus(timer: StoredTimer): StoredTimer {
+    if (timer.startedAt !== null && timer.durationSeconds !== null && !timer.expired) {
+      const elapsed = (Date.now() - timer.startedAt) / 1000;
+      if (elapsed >= timer.durationSeconds) {
+        return { ...timer, expired: true };
+      }
+    }
+    return timer;
   }
 
   async hasRoom(): Promise<boolean> {
@@ -224,6 +243,8 @@ export class RetroRoom extends DurableObject<Env> {
     }
 
     s.phase = phase;
+    // Reset timer on phase change
+    s.timer = { startedAt: null, durationSeconds: null, expired: false };
     await this.saveState();
 
     // Broadcast phase change to all connected clients
@@ -231,6 +252,33 @@ export class RetroRoom extends DurableObject<Env> {
     this.broadcast(broadcast);
 
     this.broadcastState(s);
+
+    return { success: true };
+  }
+
+  async setTimer(participantId: string, durationSeconds: number): Promise<{ success: boolean; error?: string }> {
+    const s = await this.loadState();
+
+    if (s.facilitatorId !== participantId) {
+      return { success: false, error: "Only the facilitator can set timers" };
+    }
+
+    if (typeof durationSeconds !== "number" || durationSeconds < 1 || !Number.isInteger(durationSeconds)) {
+      return { success: false, error: "Timer duration must be a positive integer (seconds)" };
+    }
+
+    s.timer = {
+      startedAt: Date.now(),
+      durationSeconds,
+      expired: false,
+    };
+    await this.saveState();
+
+    const timerBroadcast: ServerToClientMessage = {
+      type: "timer-updated",
+      timer: s.timer,
+    };
+    this.broadcast(timerBroadcast);
 
     return { success: true };
   }
@@ -395,6 +443,7 @@ export class RetroRoom extends DurableObject<Env> {
   }
 
   private broadcastState(s: StoredState, excludeId?: string) {
+    const timer = this.computeTimerStatus(s.timer);
     const state: RoomState = {
       roomId: s.roomId,
       phase: s.phase,
@@ -402,7 +451,7 @@ export class RetroRoom extends DurableObject<Env> {
       items: s.items,
       groups: s.groups,
       votes: s.votes,
-      timer: { startedAt: null, durationSeconds: null, expired: false },
+      timer,
       voteBudget: s.voteBudget,
       version: s.version,
     };
@@ -555,6 +604,14 @@ export class RetroRoom extends DurableObject<Env> {
       }
       case "move-item-to-group": {
         const result = await this.moveItemToGroup(participantId, msg.itemId, msg.groupId, msg.index);
+        if (!result.success) {
+          const ws = this.sessions.get(participantId);
+          ws?.send(JSON.stringify({ type: "error", message: result.error }));
+        }
+        break;
+      }
+      case "set-timer": {
+        const result = await this.setTimer(participantId, msg.durationSeconds);
         if (!result.success) {
           const ws = this.sessions.get(participantId);
           ws?.send(JSON.stringify({ type: "error", message: result.error }));

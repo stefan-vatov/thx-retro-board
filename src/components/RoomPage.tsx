@@ -18,6 +18,32 @@ function mergeRoomState(local: RoomState | null, ws: RoomState | null): RoomStat
   return local;
 }
 
+function TimerDisplay({ timer }: { timer: RoomState["timer"] }) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (timer.startedAt === null || timer.durationSeconds === null) return;
+    const interval = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, [timer.startedAt, timer.durationSeconds]);
+
+  if (timer.startedAt === null || timer.durationSeconds === null) {
+    return <span style={{ marginLeft: "1rem", fontSize: "0.9rem", color: "#888" }}>No timer set</span>;
+  }
+
+  const elapsed = (now - timer.startedAt) / 1000;
+  const remaining = Math.max(0, timer.durationSeconds - elapsed);
+  const expired = remaining <= 0;
+  const mins = Math.floor(remaining / 60);
+  const secs = Math.floor(remaining % 60);
+
+  return (
+    <span style={{ marginLeft: "1rem", fontSize: "0.9rem", color: expired ? "#c00" : "#333", fontWeight: expired ? 600 : 400 }}>
+      {expired ? "⏰ Timer expired" : `⏱ ${mins}:${secs.toString().padStart(2, "0")} remaining`}
+    </span>
+  );
+}
+
 function getStoredIdentity(roomId: string): { participantId: string; displayName: string; connectionToken?: string } {
   const pidKey = `retro-participant-${roomId}`;
   const nameKey = `retro-name-${roomId}`;
@@ -42,6 +68,8 @@ export function RoomPage() {
   const [connectionToken, setConnectionToken] = useState<string | undefined>(() => identity.connectionToken);
   const [voteBudgetInput, setVoteBudgetInput] = useState("5");
   const [budgetMsg, setBudgetMsg] = useState<string | null>(null);
+  const [timerMinutesInput, setTimerMinutesInput] = useState("5");
+  const [timerMsg, setTimerMsg] = useState<string | null>(null);
   const [phaseMsg, setPhaseMsg] = useState<string | null>(null);
 
   const { state: wsState, connected, send } = useRoom(roomId ?? "", participantId, connectionToken);
@@ -149,6 +177,19 @@ export function RoomPage() {
     }
   }
 
+  function handleSetTimer() {
+    if (!roomState) return;
+    setTimerMsg(null);
+    const minutes = parseInt(timerMinutesInput, 10);
+    if (isNaN(minutes) || minutes < 1) {
+      setTimerMsg("Timer must be at least 1 minute.");
+      return;
+    }
+    const durationSeconds = minutes * 60;
+    send({ type: "set-timer", durationSeconds });
+    setTimerMsg("Timer started.");
+  }
+
   function handleAddItem(e: React.FormEvent) {
     e.preventDefault();
     setItemError(null);
@@ -207,6 +248,7 @@ export function RoomPage() {
 
       <div style={{ marginBottom: "1rem", padding: "0.75rem", border: "1px solid #ccc", borderRadius: 4 }}>
         <strong>Phase: {roomState?.phase?.toUpperCase() ?? "UNKNOWN"}</strong>
+        <TimerDisplay timer={roomState?.timer ?? { startedAt: null, durationSeconds: null, expired: false }} />
         <span style={{ marginLeft: "1rem" }}>
           Participants: {roomState?.participants.map((p) => p.displayName).join(", ") || "None"}
         </span>
@@ -238,6 +280,20 @@ export function RoomPage() {
               Advance to Next Phase
             </button>
             {phaseMsg && <span style={{ fontSize: "0.85rem" }}>{phaseMsg}</span>}
+          </div>
+          <div style={{ marginTop: "0.5rem", display: "flex", gap: "0.5rem", alignItems: "center" }}>
+            <label htmlFor="timerMinutes">Timer (min):</label>
+            <input
+              id="timerMinutes"
+              type="number"
+              min={1}
+              max={60}
+              value={timerMinutesInput}
+              onChange={(e) => setTimerMinutesInput(e.target.value)}
+              style={{ width: 80 }}
+            />
+            <button onClick={handleSetTimer}>Start Timer</button>
+            {timerMsg && <span style={{ fontSize: "0.85rem" }}>{timerMsg}</span>}
           </div>
         </div>
       )}

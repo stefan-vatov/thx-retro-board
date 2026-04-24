@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import type { RoomState } from "../domain";
 import { getUngroupedItems, getGroupedItems, getVotesForItem, getRemainingBudget, getVotesByParticipant } from "../domain";
 
@@ -35,13 +35,15 @@ export function VoteBoard({ roomState, participantId, send }: VoteBoardProps) {
     [pendingRemoves, send],
   );
 
-  // Reset pending optimistic state when server version changes (snapshot arrives)
-  if (pendingCastCount > 0) {
-    setPendingCastCount(0);
-  }
-  if (pendingRemoves.size > 0) {
-    setPendingRemoves(new Set());
-  }
+  const serverVersionRef = useRef(roomState.version);
+
+  useEffect(() => {
+    if (serverVersionRef.current !== roomState.version) {
+      serverVersionRef.current = roomState.version;
+      setPendingCastCount(0);
+      setPendingRemoves(new Set());
+    }
+  }, [roomState.version]);
 
   function getParticipantVotesForItem(itemId: string): number {
     return roomState.votes

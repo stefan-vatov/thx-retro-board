@@ -10,7 +10,7 @@
     "lint": "eslint src worker",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "echo 'e2e placeholder — no tests yet' && exit 0",
+    "test:e2e": "playwright test",
     "preview": "npm run build && vite preview",
     "deploy": "npm run build && wrangler deploy"
   },
@@ -19,6 +19,7 @@
     "@cloudflare/vitest-pool-workers": "^0.15.0",
     "@cloudflare/workers-types": "^4.20260424.1",
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.59.1",
     "@types/node": "^25.6.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",

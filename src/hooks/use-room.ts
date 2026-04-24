@@ -56,6 +56,8 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
         } else if (msg.type === "vote-changed") {
           // Vote updates come via snapshot broadcast; this handler is a no-op
           // since the snapshot will carry the full authoritative votes array.
+        } else if (msg.type === "timer-updated") {
+          setState((prev) => prev ? { ...prev, timer: msg.timer } : prev);
         }
       } catch {
         // ignore parse errors

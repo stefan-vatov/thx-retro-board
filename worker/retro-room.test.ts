@@ -1395,4 +1395,298 @@ describe("RetroRoom Durable Object", () => {
       expect(totalSecond).toBe(0);
     });
   });
+
+  describe("timer", () => {
+    async function setupTimerRoom(roomId: string) {
+      const id = env.RETRO_ROOM.idFromName(roomId);
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.initRoom(roomId);
+      await stub.join("fac1", "Facilitator");
+      await stub.join("p2", "Bob");
+      return stub;
+    }
+
+    it("initial room has no timer set", async () => {
+      const stub = await setupTimerRoom("test-timer-init");
+      const state = await stub.getRoomState();
+      expect(state.timer.startedAt).toBeNull();
+      expect(state.timer.durationSeconds).toBeNull();
+      expect(state.timer.expired).toBe(false);
+    });
+
+    it("facilitator can set a timer", async () => {
+      const stub = await setupTimerRoom("test-timer-set");
+      const result = await stub.setTimer("fac1", 300);
+      expect(result.success).toBe(true);
+
+      const state = await stub.getRoomState();
+      expect(state.timer.startedAt).not.toBeNull();
+      expect(state.timer.durationSeconds).toBe(300);
+      expect(state.timer.expired).toBe(false);
+    });
+
+    it("non-facilitator cannot set a timer", async () => {
+      const stub = await setupTimerRoom("test-timer-nonfac");
+      const result = await stub.setTimer("p2", 300);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("facilitator");
+
+      const state = await stub.getRoomState();
+      expect(state.timer.startedAt).toBeNull();
+    });
+
+    it("timer rejects invalid durations", async () => {
+      const stub = await setupTimerRoom("test-timer-invalid");
+
+      const r1 = await stub.setTimer("fac1", 0);
+      expect(r1.success).toBe(false);
+
+      const r2 = await stub.setTimer("fac1", -1);
+      expect(r2.success).toBe(false);
+
+      const r3 = await stub.setTimer("fac1", 1.5);
+      expect(r3.success).toBe(false);
+
+      const state = await stub.getRoomState();
+      expect(state.timer.startedAt).toBeNull();
+    });
+
+    it("timer resets on phase change", async () => {
+      const stub = await setupTimerRoom("test-timer-phase-reset");
+      await stub.addItem("fac1", "Item A");
+      await stub.setTimer("fac1", 300);
+
+      const stateBefore = await stub.getRoomState();
+      expect(stateBefore.timer.startedAt).not.toBeNull();
+
+      await stub.setPhase("fac1", "organise");
+
+      const stateAfter = await stub.getRoomState();
+      expect(stateAfter.timer.startedAt).toBeNull();
+      expect(stateAfter.timer.durationSeconds).toBeNull();
+      expect(stateAfter.timer.expired).toBe(false);
+    });
+
+    it("timer persists through state reload", async () => {
+      const stub = await setupTimerRoom("test-timer-persist");
+      await stub.setTimer("fac1", 600);
+
+      const state = await stub.getRoomState();
+      expect(state.timer.startedAt).not.toBeNull();
+      expect(state.timer.durationSeconds).toBe(600);
+    });
+
+    it("timer survives reconnect", async () => {
+      const stub = await setupTimerRoom("test-timer-reconnect");
+      await stub.setTimer("fac1", 300);
+
+      // Reconnect facilitator
+      const rejoin = await stub.join("fac1", "Facilitator");
+      expect(rejoin.success).toBe(true);
+      expect(rejoin.state).toBeDefined();
+      expect(rejoin.state!.timer.startedAt).not.toBeNull();
+      expect(rejoin.state!.timer.durationSeconds).toBe(300);
+    });
+  });
+
+  describe("cross-flow", () => {
+    it("full flow: write → organise → vote → review preserves all state", async () => {
+      const roomId = "test-full-flow";
+      const id = env.RETRO_ROOM.idFromName(roomId);
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.initRoom(roomId);
+      await stub.join("fac1", "Alice (Facilitator)");
+      await stub.join("p2", "Bob");
+      await stub.setVoteBudget("fac1", 5);
+
+      // Write phase
+      await stub.addItem("fac1", "Improve standups");
+      await stub.addItem("p2", "Better docs");
+      await stub.addItem("fac1", "More pair programming");
+
+      let state = await stub.getRoomState();
+      expect(state.phase).toBe("write");
+      expect(state.items).toHaveLength(3);
+
+      // Set timer during write
+      await stub.setTimer("fac1", 300);
+      state = await stub.getRoomState();
+      expect(state.timer.startedAt).not.toBeNull();
+
+      // Advance to organise
+      await stub.setPhase("fac1", "organise");
+      state = await stub.getRoomState();
+      expect(state.phase).toBe("organise");
+      expect(state.timer.startedAt).toBeNull(); // Timer resets on phase change
+
+      // Create group and move items
+      await stub.createGroup("fac1", "Process");
+      state = await stub.getRoomState();
+      const groupId = state.groups[0]!.id;
+      const item1Id = state.items.find((i) => i.text === "Improve standups")!.id;
+      const item2Id = state.items.find((i) => i.text === "Better docs")!.id;
+      await stub.moveItemToGroup("fac1", item1Id, groupId, 0);
+      await stub.moveItemToGroup("fac1", item2Id, groupId, 1);
+
+      // Advance to vote
+      await stub.setPhase("fac1", "vote");
+      state = await stub.getRoomState();
+      expect(state.phase).toBe("vote");
+
+      // Both participants vote
+      await stub.castVote("fac1", item1Id, 3);
+      await stub.castVote("p2", item1Id, 2);
+      await stub.castVote("p2", item2Id, 1);
+
+      // Set timer during vote
+      await stub.setTimer("fac1", 120);
+
+      // Advance to review
+      await stub.setPhase("fac1", "review");
+      state = await stub.getRoomState();
+      expect(state.phase).toBe("review");
+      expect(state.timer.startedAt).toBeNull(); // Timer resets on phase change
+
+      // Verify all state
+      expect(state.items).toHaveLength(3);
+      expect(state.groups).toHaveLength(1);
+      expect(state.participants).toHaveLength(2);
+      expect(state.voteBudget).toBe(5);
+
+      // Check vote totals
+      const item1Total = state.votes
+        .filter((v) => v.itemId === item1Id)
+        .reduce((sum, v) => sum + v.count, 0);
+      expect(item1Total).toBe(5);
+
+      const item2Total = state.votes
+        .filter((v) => v.itemId === item2Id)
+        .reduce((sum, v) => sum + v.count, 0);
+      expect(item2Total).toBe(1);
+
+      // Group structure preserved
+      const groupedItems = state.items.filter((i) => i.groupId === groupId);
+      expect(groupedItems).toHaveLength(2);
+    });
+
+    it("room isolation: actions in room A do not affect room B", async () => {
+      const stubA = env.RETRO_ROOM.get(env.RETRO_ROOM.idFromName("isolation-a"));
+      const stubB = env.RETRO_ROOM.get(env.RETRO_ROOM.idFromName("isolation-b"));
+      await stubA.initRoom("isolation-a");
+      await stubB.initRoom("isolation-b");
+
+      // Join same participant ID in both rooms
+      await stubA.join("p1", "Alice");
+      await stubB.join("p1", "Alice");
+
+      // Add items in room A
+      await stubA.addItem("p1", "Room A item");
+      await stubB.addItem("p1", "Room B item");
+
+      const stateA = await stubA.getRoomState();
+      const stateB = await stubB.getRoomState();
+
+      expect(stateA.items).toHaveLength(1);
+      expect(stateA.items[0]!.text).toBe("Room A item");
+      expect(stateB.items).toHaveLength(1);
+      expect(stateB.items[0]!.text).toBe("Room B item");
+
+      // Advance phase in room A only
+      await stubA.setPhase("p1", "organise");
+      const stateA2 = await stubA.getRoomState();
+      const stateB2 = await stubB.getRoomState();
+      expect(stateA2.phase).toBe("organise");
+      expect(stateB2.phase).toBe("write");
+    });
+
+    it("reconnect does not duplicate membership or votes", async () => {
+      const roomId = "test-reconnect-no-dupe-votes";
+      const id = env.RETRO_ROOM.idFromName(roomId);
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.initRoom(roomId);
+      await stub.join("fac1", "Alice");
+      await stub.join("p2", "Bob");
+      await stub.addItem("fac1", "Item A");
+      await stub.setVoteBudget("fac1", 5);
+      await stub.setPhase("fac1", "organise");
+      await stub.setPhase("fac1", "vote");
+
+      const state0 = await stub.getRoomState();
+      const itemId = state0.items[0]!.id;
+
+      // Alice votes
+      await stub.castVote("fac1", itemId, 3);
+
+      // Alice reconnects
+      const rejoin = await stub.join("fac1", "Alice");
+      expect(rejoin.success).toBe(true);
+
+      const state = await stub.getRoomState();
+      // No duplicate participants
+      expect(state.participants).toHaveLength(2);
+      const aliceCount = state.participants.filter((p) => p.id === "fac1").length;
+      expect(aliceCount).toBe(1);
+
+      // Votes unchanged
+      const aliceVotes = state.votes.filter((v) => v.participantId === "fac1");
+      expect(aliceVotes).toHaveLength(1);
+      expect(aliceVotes[0]!.count).toBe(3);
+    });
+
+    it("reconnect during review preserves full state", async () => {
+      const roomId = "test-reconnect-review";
+      const id = env.RETRO_ROOM.idFromName(roomId);
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.initRoom(roomId);
+      await stub.join("fac1", "Alice");
+      await stub.join("p2", "Bob");
+      await stub.addItem("fac1", "Item A");
+      await stub.setVoteBudget("fac1", 3);
+      await stub.setPhase("fac1", "organise");
+      await stub.setPhase("fac1", "vote");
+
+      const voteState = await stub.getRoomState();
+      const itemId = voteState.items[0]!.id;
+      await stub.castVote("fac1", itemId, 2);
+      await stub.castVote("p2", itemId, 1);
+      await stub.setPhase("fac1", "review");
+
+      // Alice reconnects
+      const rejoin = await stub.join("fac1", "Alice");
+      expect(rejoin.success).toBe(true);
+      expect(rejoin.state!.phase).toBe("review");
+      expect(rejoin.state!.items).toHaveLength(1);
+      expect(rejoin.state!.votes).toHaveLength(2);
+
+      // Bob also reconnects
+      const rejoin2 = await stub.join("p2", "Bob");
+      expect(rejoin2.success).toBe(true);
+      expect(rejoin2.state!.phase).toBe("review");
+      expect(rejoin2.state!.participants).toHaveLength(2);
+    });
+
+    it("timer expiry does not auto-advance phase", async () => {
+      const roomId = "test-timer-no-auto";
+      const id = env.RETRO_ROOM.idFromName(roomId);
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.initRoom(roomId);
+      await stub.join("fac1", "Alice");
+      await stub.addItem("fac1", "Item A");
+
+      // Set a 1-second timer
+      await stub.setTimer("fac1", 1);
+
+      const stateBefore = await stub.getRoomState();
+      expect(stateBefore.phase).toBe("write");
+
+      // Wait for timer to expire
+      await new Promise((r) => setTimeout(r, 1100));
+
+      const stateAfter = await stub.getRoomState();
+      // Phase should still be write
+      expect(stateAfter.phase).toBe("write");
+      // Timer should be expired
+      expect(stateAfter.timer.expired).toBe(true);
+    });
+  });
 });
