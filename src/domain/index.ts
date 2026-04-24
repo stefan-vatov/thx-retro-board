@@ -18,3 +18,4 @@ export {
   isValidItemText,
   reorderList,
 } from "./state";
+export { generateRoomId, ROOM_ID_LENGTH } from "./room-id";

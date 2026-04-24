@@ -1,8 +1,13 @@
+import { Routes, Route } from "react-router-dom";
+import { HomePage } from "./components/HomePage";
+import { RoomPage } from "./components/RoomPage";
+
 function App() {
   return (
-    <div>
-      <h1>Retro Board</h1>
-    </div>
+    <Routes>
+      <Route path="/" element={<HomePage />} />
+      <Route path="/room/:roomId" element={<RoomPage />} />
+    </Routes>
   );
 }
 

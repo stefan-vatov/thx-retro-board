@@ -10,6 +10,91 @@ describe("RetroRoom Durable Object", () => {
     expect(greeting).toBe("Hello from RetroRoom!");
   });
 
+  it("initializes room state", async () => {
+    const roomId = "test-init-room";
+    const id = env.RETRO_ROOM.idFromName(roomId);
+    const stub = env.RETRO_ROOM.get(id);
+    await stub.initRoom(roomId);
+    const state = await stub.getRoomState();
+    expect(state.roomId).toBe(roomId);
+    expect(state.phase).toBe("write");
+    expect(state.participants).toEqual([]);
+    expect(state.voteBudget).toBe(5);
+  });
+
+  it("detects if room exists", async () => {
+    const roomId = "test-has-room";
+    const id = env.RETRO_ROOM.idFromName(roomId);
+    const stub = env.RETRO_ROOM.get(id);
+    expect(await stub.hasRoom()).toBe(false);
+    await stub.initRoom(roomId);
+    expect(await stub.hasRoom()).toBe(true);
+  });
+
+  it("allows participant to join with valid name", async () => {
+    const roomId = "test-join-room";
+    const id = env.RETRO_ROOM.idFromName(roomId);
+    const stub = env.RETRO_ROOM.get(id);
+    await stub.initRoom(roomId);
+
+    const result = await stub.join("p1", "Alice");
+    expect(result.success).toBe(true);
+    expect(result.state?.participants).toHaveLength(1);
+    expect(result.state?.participants[0]?.displayName).toBe("Alice");
+    expect(result.state?.participants[0]?.isFacilitator).toBe(true);
+  });
+
+  it("rejects blank display name", async () => {
+    const roomId = "test-blank-name";
+    const id = env.RETRO_ROOM.idFromName(roomId);
+    const stub = env.RETRO_ROOM.get(id);
+    await stub.initRoom(roomId);
+
+    const result = await stub.join("p1", "   ");
+    expect(result.success).toBe(false);
+    expect(result.error).toBeTruthy();
+  });
+
+  it("second participant is not facilitator", async () => {
+    const roomId = "test-second-join";
+    const id = env.RETRO_ROOM.idFromName(roomId);
+    const stub = env.RETRO_ROOM.get(id);
+    await stub.initRoom(roomId);
+
+    await stub.join("p1", "Alice");
+    const result = await stub.join("p2", "Bob");
+    expect(result.success).toBe(true);
+    expect(result.state?.participants).toHaveLength(2);
+    const bob = result.state?.participants.find((p) => p.id === "p2");
+    expect(bob?.isFacilitator).toBe(false);
+  });
+
+  it("facilitator can set vote budget", async () => {
+    const roomId = "test-vote-budget";
+    const id = env.RETRO_ROOM.idFromName(roomId);
+    const stub = env.RETRO_ROOM.get(id);
+    await stub.initRoom(roomId);
+    await stub.join("p1", "Alice");
+
+    const result = await stub.setVoteBudget("p1", 10);
+    expect(result.success).toBe(true);
+    const state = await stub.getRoomState();
+    expect(state.voteBudget).toBe(10);
+  });
+
+  it("non-facilitator cannot set vote budget", async () => {
+    const roomId = "test-vote-budget-deny";
+    const id = env.RETRO_ROOM.idFromName(roomId);
+    const stub = env.RETRO_ROOM.get(id);
+    await stub.initRoom(roomId);
+    await stub.join("p1", "Alice");
+    await stub.join("p2", "Bob");
+
+    const result = await stub.setVoteBudget("p2", 10);
+    expect(result.success).toBe(false);
+    expect(result.error).toBeTruthy();
+  });
+
   it("isolates rooms by name", async () => {
     const stub1 = env.RETRO_ROOM.get(env.RETRO_ROOM.idFromName("room-a"));
     const stub2 = env.RETRO_ROOM.get(env.RETRO_ROOM.idFromName("room-b"));
