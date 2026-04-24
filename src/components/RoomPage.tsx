@@ -3,9 +3,10 @@ import { useParams } from "react-router-dom";
 import { joinRoom, getRoomState, setVoteBudget, setPhase } from "../api";
 import { useRoom } from "../hooks";
 import type { RoomState, Phase } from "../domain";
-import { sanitizeItemText, isValidItemText, PHASE_ORDER, getUngroupedItems } from "../domain";
+import { sanitizeItemText, isValidItemText, PHASE_ORDER } from "../domain";
 import { OrganiseBoard } from "./OrganiseBoard";
 import { VoteBoard } from "./VoteBoard";
+import { ReviewBoard } from "./ReviewBoard";
 
 type PageState = "loading" | "join" | "room" | "not-found";
 
@@ -262,6 +263,8 @@ export function RoomPage() {
           <OrganiseBoard roomState={roomState} send={send} />
         ) : roomState?.phase === "vote" ? (
           <VoteBoard roomState={roomState} participantId={participantId} send={send} />
+        ) : roomState?.phase === "review" ? (
+          <ReviewBoard roomState={roomState} />
         ) : roomState?.phase === "write" ? (
           (roomState?.items?.length ?? 0) === 0 ? (
             <p style={{ color: "#888" }}>No items yet. The board is ready for the write phase.</p>
@@ -274,63 +277,12 @@ export function RoomPage() {
               ))}
             </ul>
           )
-        ) : (
-          /* vote and review phases: show organised grouped view (read-only) */
-          roomState ? (
-            <GroupedReadonlyBoard roomState={roomState} />
-          ) : null
-        )}
+        ) : null}
       </div>
 
       <div style={{ fontSize: "0.85rem", color: "#888" }}>
         Room ID: {roomId}
       </div>
     </div>
-  );
-}
-
-function GroupedReadonlyBoard({ roomState }: { roomState: RoomState }) {
-  const sortedGroups = [...roomState.groups].sort((a, b) => a.order - b.order);
-  const ungrouped = getUngroupedItems(roomState.items);
-
-  return (
-    <>
-      {sortedGroups.map((group) => {
-        const groupItems = roomState.items
-          .filter((i) => i.groupId === group.id)
-          .sort((a, b) => a.order - b.order);
-        return (
-          <div key={group.id} style={{ marginTop: "1rem", padding: "0.75rem", border: "1px solid #ddd", borderRadius: 4, background: "#fafafa" }}>
-            <h4 style={{ margin: "0 0 0.5rem 0" }}>{group.name}</h4>
-            {groupItems.length === 0 ? (
-              <p style={{ color: "#aaa", fontSize: "0.85rem", margin: 0 }}>No items.</p>
-            ) : (
-              <ul style={{ listStyle: "none", padding: 0 }}>
-                {groupItems.map((item) => (
-                  <li key={item.id} style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid #eee" }}>
-                    {item.text}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        );
-      })}
-      {ungrouped.length > 0 && (
-        <div style={{ marginTop: "1rem", padding: "0.75rem", border: "1px dashed #ccc", borderRadius: 4 }}>
-          <h4 style={{ margin: "0 0 0.5rem 0" }}>Ungrouped</h4>
-          <ul style={{ listStyle: "none", padding: 0 }}>
-            {ungrouped.map((item) => (
-              <li key={item.id} style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid #eee" }}>
-                {item.text}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-      {roomState.items.length === 0 && (
-        <p style={{ color: "#888" }}>No items.</p>
-      )}
-    </>
   );
 }

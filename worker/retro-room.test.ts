@@ -1175,4 +1175,224 @@ describe("RetroRoom Durable Object", () => {
       expect(r4.success).toBe(false);
     });
   });
+
+  describe("review phase", () => {
+    async function setupReviewRoom(roomId: string, budget: number = 5) {
+      const id = env.RETRO_ROOM.idFromName(roomId);
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.initRoom(roomId);
+      await stub.join("fac1", "Facilitator");
+      await stub.join("p2", "Bob");
+      await stub.addItem("fac1", "Item A");
+      await stub.addItem("fac1", "Item B");
+      await stub.addItem("fac1", "Item C");
+      await stub.setVoteBudget("fac1", budget);
+      await stub.setPhase("fac1", "organise");
+      // Create a group and move items into it
+      await stub.createGroup("fac1", "Process");
+      const orgState = await stub.getRoomState();
+      const groupId = orgState.groups[0]!.id;
+      const itemAId = orgState.items.find((i) => i.text === "Item A")!.id;
+      const itemBId = orgState.items.find((i) => i.text === "Item B")!.id;
+      await stub.moveItemToGroup("fac1", itemAId, groupId, 0);
+      await stub.moveItemToGroup("fac1", itemBId, groupId, 1);
+      // Item C stays ungrouped
+      await stub.setPhase("fac1", "vote");
+      return { stub, groupId, itemAId, itemBId, itemCId: orgState.items.find((i) => i.text === "Item C")!.id };
+    }
+
+    it("facilitator can transition from vote to review", async () => {
+      const { stub } = await setupReviewRoom("test-review-transition");
+      const result = await stub.setPhase("fac1", "review");
+      expect(result.success).toBe(true);
+
+      const state = await stub.getRoomState();
+      expect(state.phase).toBe("review");
+    });
+
+    it("non-facilitator cannot transition to review", async () => {
+      const { stub } = await setupReviewRoom("test-review-nonfac");
+      const result = await stub.setPhase("p2", "review");
+      expect(result.success).toBe(false);
+
+      const state = await stub.getRoomState();
+      expect(state.phase).toBe("vote");
+    });
+
+    it("review preserves grouped item order and group structure", async () => {
+      const { stub, groupId, itemAId, itemBId, itemCId } = await setupReviewRoom("test-review-preserves-order");
+      await stub.setPhase("fac1", "review");
+
+      const state = await stub.getRoomState();
+
+      // Group should exist
+      expect(state.groups).toHaveLength(1);
+      expect(state.groups[0]!.id).toBe(groupId);
+
+      // Items in group should maintain order
+      const groupedItems = state.items
+        .filter((i) => i.groupId === groupId)
+        .sort((a, b) => a.order - b.order);
+      expect(groupedItems.map((i) => i.id)).toEqual([itemAId, itemBId]);
+
+      // Ungrouped items remain
+      const ungrouped = state.items.filter((i) => i.groupId === null);
+      expect(ungrouped).toHaveLength(1);
+      expect(ungrouped[0]!.id).toBe(itemCId);
+    });
+
+    it("review shows vote totals including zero-vote items", async () => {
+      const { stub, itemAId, itemCId } = await setupReviewRoom("test-review-vote-totals");
+      // Vote only on Item A; Item C gets zero votes
+      await stub.castVote("fac1", itemAId, 3);
+      await stub.setPhase("fac1", "review");
+
+      const state = await stub.getRoomState();
+
+      // Item A should have 3 votes
+      const totalA = state.votes
+        .filter((v) => v.itemId === itemAId)
+        .reduce((sum, v) => sum + v.count, 0);
+      expect(totalA).toBe(3);
+
+      // Item C should have 0 votes (no allocation exists)
+      const totalC = state.votes
+        .filter((v) => v.itemId === itemCId)
+        .reduce((sum, v) => sum + v.count, 0);
+      expect(totalC).toBe(0);
+
+      // All 3 items should still be present
+      expect(state.items).toHaveLength(3);
+    });
+
+    it("review blocks add-item mutations", async () => {
+      const { stub } = await setupReviewRoom("test-review-block-add");
+      await stub.setPhase("fac1", "review");
+
+      const result = await stub.addItem("fac1", "Should fail");
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("write phase");
+
+      const state = await stub.getRoomState();
+      expect(state.items).toHaveLength(3);
+    });
+
+    it("review blocks organise mutations", async () => {
+      const { stub, itemAId } = await setupReviewRoom("test-review-block-organise");
+      await stub.setPhase("fac1", "review");
+
+      const r1 = await stub.createGroup("fac1", "Blocked");
+      const r2 = await stub.reorderItems("fac1", [itemAId]);
+      const r3 = await stub.reorderGroups("fac1", []);
+      const r4 = await stub.moveItemToGroup("fac1", itemAId, null, 0);
+
+      expect(r1.success).toBe(false);
+      expect(r2.success).toBe(false);
+      expect(r3.success).toBe(false);
+      expect(r4.success).toBe(false);
+    });
+
+    it("review blocks vote mutations", async () => {
+      const { stub, itemAId } = await setupReviewRoom("test-review-block-vote");
+      await stub.setPhase("fac1", "review");
+
+      const r1 = await stub.castVote("fac1", itemAId, 1);
+      const r2 = await stub.removeVote("fac1", itemAId);
+
+      expect(r1.success).toBe(false);
+      expect(r2.success).toBe(false);
+    });
+
+    it("late joiner during review receives full state snapshot", async () => {
+      const { stub, itemAId } = await setupReviewRoom("test-review-late-join");
+      await stub.castVote("fac1", itemAId, 2);
+      await stub.setPhase("fac1", "review");
+
+      // New participant joins during review
+      const joinResult = await stub.join("p3", "Carol");
+      expect(joinResult.success).toBe(true);
+      expect(joinResult.state).toBeDefined();
+
+      const state = joinResult.state!;
+      expect(state.phase).toBe("review");
+      expect(state.items).toHaveLength(3);
+      expect(state.groups).toHaveLength(1);
+
+      // Votes from before review should be present
+      const totalA = state.votes
+        .filter((v) => v.itemId === itemAId)
+        .reduce((sum, v) => sum + v.count, 0);
+      expect(totalA).toBe(2);
+    });
+
+    it("refresh/reconnect during review preserves state", async () => {
+      const { stub, itemAId } = await setupReviewRoom("test-review-refresh");
+      await stub.castVote("fac1", itemAId, 1);
+      await stub.setPhase("fac1", "review");
+
+      // Simulate reconnect by re-joining existing participant
+      const rejoinResult = await stub.join("fac1", "Facilitator");
+      expect(rejoinResult.success).toBe(true);
+      expect(rejoinResult.state).toBeDefined();
+
+      const state = rejoinResult.state!;
+      expect(state.phase).toBe("review");
+      expect(state.items).toHaveLength(3);
+      expect(state.votes).toHaveLength(1);
+      expect(state.votes[0]!.count).toBe(1);
+    });
+
+    it("empty review is graceful with no items", async () => {
+      const roomId = "test-review-empty";
+      const id = env.RETRO_ROOM.idFromName(roomId);
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.initRoom(roomId);
+      await stub.join("fac1", "Facilitator");
+      await stub.setPhase("fac1", "organise");
+      await stub.setPhase("fac1", "vote");
+      await stub.setPhase("fac1", "review");
+
+      const state = await stub.getRoomState();
+      expect(state.phase).toBe("review");
+      expect(state.items).toEqual([]);
+      expect(state.groups).toEqual([]);
+      expect(state.votes).toEqual([]);
+    });
+
+    it("review preserves duplicate text items with distinct vote totals", async () => {
+      const roomId = "test-review-dup-items";
+      const id = env.RETRO_ROOM.idFromName(roomId);
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.initRoom(roomId);
+      await stub.join("fac1", "Facilitator");
+      await stub.addItem("fac1", "Same text");
+      await stub.addItem("fac1", "Same text");
+      await stub.setVoteBudget("fac1", 5);
+      await stub.setPhase("fac1", "organise");
+      await stub.setPhase("fac1", "vote");
+
+      const voteState = await stub.getRoomState();
+      const firstItem = voteState.items[0]!;
+      const secondItem = voteState.items[1]!;
+
+      // Vote on only the first duplicate
+      await stub.castVote("fac1", firstItem.id, 3);
+      await stub.setPhase("fac1", "review");
+
+      const reviewState = await stub.getRoomState();
+      expect(reviewState.items).toHaveLength(2);
+
+      // First duplicate should have 3 votes
+      const totalFirst = reviewState.votes
+        .filter((v) => v.itemId === firstItem.id)
+        .reduce((sum, v) => sum + v.count, 0);
+      expect(totalFirst).toBe(3);
+
+      // Second duplicate should have 0 votes
+      const totalSecond = reviewState.votes
+        .filter((v) => v.itemId === secondItem.id)
+        .reduce((sum, v) => sum + v.count, 0);
+      expect(totalSecond).toBe(0);
+    });
+  });
 });
