@@ -49,6 +49,10 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
             if (exists) return prev;
             return { ...prev, items: [...prev.items, msg.item] };
           });
+        } else if (msg.type === "items-reordered") {
+          setState((prev) => prev ? { ...prev, items: msg.items } : prev);
+        } else if (msg.type === "groups-changed") {
+          setState((prev) => prev ? { ...prev, groups: msg.groups } : prev);
         }
       } catch {
         // ignore parse errors

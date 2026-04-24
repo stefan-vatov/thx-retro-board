@@ -554,4 +554,279 @@ describe("RetroRoom Durable Object", () => {
       expect(joinedMsg).toBeDefined();
     });
   });
+
+  describe("organise phase", () => {
+    async function setupOrganiseRoom(roomId: string) {
+      const id = env.RETRO_ROOM.idFromName(roomId);
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.initRoom(roomId);
+      await stub.join("fac1", "Facilitator");
+      await stub.join("p2", "Bob");
+      await stub.addItem("fac1", "Item A");
+      await stub.addItem("fac1", "Item B");
+      await stub.addItem("fac1", "Item C");
+      await stub.setPhase("fac1", "organise");
+      return stub;
+    }
+
+    it("createGroup creates a group during organise phase", async () => {
+      const stub = await setupOrganiseRoom("test-create-group");
+      const result = await stub.createGroup("fac1", "Process");
+      expect(result.success).toBe(true);
+      expect(result.group).toBeDefined();
+      expect(result.group!.name).toBe("Process");
+
+      const state = await stub.getRoomState();
+      expect(state.groups).toHaveLength(1);
+      expect(state.groups[0]!.name).toBe("Process");
+    });
+
+    it("createGroup rejects empty name", async () => {
+      const stub = await setupOrganiseRoom("test-create-group-empty");
+      const result = await stub.createGroup("fac1", "   ");
+      expect(result.success).toBe(false);
+      expect(result.error).toBeTruthy();
+
+      const state = await stub.getRoomState();
+      expect(state.groups).toHaveLength(0);
+    });
+
+    it("createGroup is rejected outside organise phase", async () => {
+      const id = env.RETRO_ROOM.idFromName("test-create-group-phase");
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.initRoom("test-create-group-phase");
+      await stub.join("fac1", "Facilitator");
+
+      const result = await stub.createGroup("fac1", "Process");
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("organise phase");
+    });
+
+    it("any participant can create a group during organise", async () => {
+      const stub = await setupOrganiseRoom("test-create-group-any");
+      const result = await stub.createGroup("p2", "Team");
+      expect(result.success).toBe(true);
+      expect(result.group!.name).toBe("Team");
+    });
+
+    it("reorderItems reorders items during organise phase", async () => {
+      const stub = await setupOrganiseRoom("test-reorder-items");
+      const state0 = await stub.getRoomState();
+      const ids = state0.items.map((i) => i.id);
+
+      const result = await stub.reorderItems("fac1", [ids[2]!, ids[0]!, ids[1]!]);
+      expect(result.success).toBe(true);
+
+      const state = await stub.getRoomState();
+      expect(state.items.map((i) => i.text)).toEqual(["Item C", "Item A", "Item B"]);
+    });
+
+    it("reorderItems is rejected outside organise phase", async () => {
+      const id = env.RETRO_ROOM.idFromName("test-reorder-items-phase");
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.initRoom("test-reorder-items-phase");
+      await stub.join("fac1", "Facilitator");
+      await stub.addItem("fac1", "Item A");
+      await stub.addItem("fac1", "Item B");
+
+      const result = await stub.reorderItems("fac1", ["id-b", "id-a"]);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("organise phase");
+    });
+
+    it("reorderGroups reorders groups during organise phase", async () => {
+      const stub = await setupOrganiseRoom("test-reorder-groups");
+      await stub.createGroup("fac1", "Group A");
+      await stub.createGroup("fac1", "Group B");
+
+      const state0 = await stub.getRoomState();
+      const gIds = state0.groups.map((g) => g.id);
+
+      const result = await stub.reorderGroups("fac1", [gIds[1]!, gIds[0]!]);
+      expect(result.success).toBe(true);
+
+      const state = await stub.getRoomState();
+      expect(state.groups.map((g) => g.name)).toEqual(["Group B", "Group A"]);
+    });
+
+    it("reorderGroups is rejected outside organise phase", async () => {
+      const id = env.RETRO_ROOM.idFromName("test-reorder-groups-phase");
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.initRoom("test-reorder-groups-phase");
+      await stub.join("fac1", "Facilitator");
+
+      const result = await stub.reorderGroups("fac1", ["g1", "g2"]);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("organise phase");
+    });
+
+    it("moveItemToGroup moves an item into a group", async () => {
+      const stub = await setupOrganiseRoom("test-move-item-group");
+      const groupResult = await stub.createGroup("fac1", "Process");
+      const groupId = groupResult.group!.id;
+
+      const state0 = await stub.getRoomState();
+      const itemId = state0.items[0]!.id;
+
+      const result = await stub.moveItemToGroup("fac1", itemId, groupId, 0);
+      expect(result.success).toBe(true);
+
+      const state = await stub.getRoomState();
+      const moved = state.items.find((i) => i.id === itemId);
+      expect(moved?.groupId).toBe(groupId);
+    });
+
+    it("moveItemToGroup moves item to ungrouped (null)", async () => {
+      const stub = await setupOrganiseRoom("test-move-item-ungrouped");
+      const groupResult = await stub.createGroup("fac1", "Process");
+      const groupId = groupResult.group!.id;
+
+      const state0 = await stub.getRoomState();
+      const itemId = state0.items[0]!.id;
+
+      await stub.moveItemToGroup("fac1", itemId, groupId, 0);
+      const result = await stub.moveItemToGroup("fac1", itemId, null, 0);
+      expect(result.success).toBe(true);
+
+      const state = await stub.getRoomState();
+      const moved = state.items.find((i) => i.id === itemId);
+      expect(moved?.groupId).toBeNull();
+    });
+
+    it("moveItemToGroup is rejected outside organise phase", async () => {
+      const id = env.RETRO_ROOM.idFromName("test-move-item-phase");
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.initRoom("test-move-item-phase");
+      await stub.join("fac1", "Facilitator");
+      await stub.addItem("fac1", "Item A");
+
+      const result = await stub.moveItemToGroup("fac1", "fake-id", "g1", 0);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("organise phase");
+    });
+
+    it("moveItemToGroup rejects unknown item", async () => {
+      const stub = await setupOrganiseRoom("test-move-item-unknown");
+      await stub.createGroup("fac1", "Process");
+
+      const result = await stub.moveItemToGroup("fac1", "nonexistent", null, 0);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Item not found");
+    });
+
+    it("moveItemToGroup rejects unknown group", async () => {
+      const stub = await setupOrganiseRoom("test-move-item-unknown-group");
+      const state0 = await stub.getRoomState();
+      const itemId = state0.items[0]!.id;
+
+      const result = await stub.moveItemToGroup("fac1", itemId, "nonexistent-group", 0);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Group not found");
+    });
+
+    it("duplicate text items remain distinct through organisation", async () => {
+      const id = env.RETRO_ROOM.idFromName("test-dup-organise");
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.initRoom("test-dup-organise");
+      await stub.join("fac1", "Facilitator");
+      await stub.addItem("fac1", "Same text");
+      await stub.addItem("fac1", "Same text");
+      await stub.setPhase("fac1", "organise");
+
+      const state0 = await stub.getRoomState();
+      expect(state0.items).toHaveLength(2);
+
+      const groupResult = await stub.createGroup("fac1", "Group");
+      const groupId = groupResult.group!.id;
+
+      // Move first duplicate only
+      const firstDup = state0.items[0]!;
+      const result = await stub.moveItemToGroup("fac1", firstDup.id, groupId, 0);
+      expect(result.success).toBe(true);
+
+      const state = await stub.getRoomState();
+      const inGroup = state.items.filter((i) => i.groupId === groupId);
+      const ungrouped = state.items.filter((i) => i.groupId === null);
+      expect(inGroup).toHaveLength(1);
+      expect(ungrouped).toHaveLength(1);
+      expect(inGroup[0]!.id).toBe(firstDup.id);
+    });
+
+    it("any participant can reorder items during organise", async () => {
+      const stub = await setupOrganiseRoom("test-any-reorder");
+      const state0 = await stub.getRoomState();
+      const ids = state0.items.map((i) => i.id);
+
+      const result = await stub.reorderItems("p2", [ids[2]!, ids[1]!, ids[0]!]);
+      expect(result.success).toBe(true);
+
+      const state = await stub.getRoomState();
+      expect(state.items.map((i) => i.text)).toEqual(["Item C", "Item B", "Item A"]);
+    });
+
+    it("empty organise phase is graceful with no items", async () => {
+      const id = env.RETRO_ROOM.idFromName("test-empty-organise");
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.initRoom("test-empty-organise");
+      await stub.join("fac1", "Facilitator");
+      await stub.setPhase("fac1", "organise");
+
+      const state = await stub.getRoomState();
+      expect(state.phase).toBe("organise");
+      expect(state.items).toEqual([]);
+      expect(state.groups).toEqual([]);
+    });
+
+    it("organisation is blocked during vote phase", async () => {
+      const id = env.RETRO_ROOM.idFromName("test-org-blocked-vote");
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.initRoom("test-org-blocked-vote");
+      await stub.join("fac1", "Facilitator");
+      await stub.addItem("fac1", "Item A");
+      await stub.setPhase("fac1", "organise");
+      await stub.setPhase("fac1", "vote");
+
+      const r1 = await stub.createGroup("fac1", "Group");
+      const r2 = await stub.reorderItems("fac1", ["id-a"]);
+      const r3 = await stub.reorderGroups("fac1", []);
+      const r4 = await stub.moveItemToGroup("fac1", "id-a", null, 0);
+
+      expect(r1.success).toBe(false);
+      expect(r2.success).toBe(false);
+      expect(r3.success).toBe(false);
+      expect(r4.success).toBe(false);
+    });
+
+    it("organisation is blocked during review phase", async () => {
+      const id = env.RETRO_ROOM.idFromName("test-org-blocked-review");
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.initRoom("test-org-blocked-review");
+      await stub.join("fac1", "Facilitator");
+      await stub.addItem("fac1", "Item A");
+      await stub.setPhase("fac1", "organise");
+      await stub.setPhase("fac1", "vote");
+      await stub.setPhase("fac1", "review");
+
+      const r1 = await stub.createGroup("fac1", "Group");
+      expect(r1.success).toBe(false);
+    });
+
+    it("groups and item order persist after state save", async () => {
+      const stub = await setupOrganiseRoom("test-org-persist");
+      await stub.createGroup("fac1", "Group A");
+
+      const state0 = await stub.getRoomState();
+      const groupId = state0.groups[0]!.id;
+
+      // Move item A into the group
+      await stub.moveItemToGroup("fac1", state0.items[0]!.id, groupId, 0);
+
+      // Read back from storage
+      const state = await stub.getRoomState();
+      expect(state.groups).toHaveLength(1);
+      expect(state.groups[0]!.name).toBe("Group A");
+      const grouped = state.items.filter((i) => i.groupId === groupId);
+      expect(grouped).toHaveLength(1);
+    });
+  });
 });

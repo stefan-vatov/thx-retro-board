@@ -82,3 +82,55 @@ export function reorderList<T>(list: T[], orderedIds: string[], idExtractor: (it
     .map((id) => map.get(id))
     .filter((item): item is T => item !== undefined);
 }
+
+export function sanitizeGroupName(name: string): string {
+  return name.trim().slice(0, 100);
+}
+
+export function isValidGroupName(name: string): boolean {
+  return sanitizeGroupName(name).length > 0;
+}
+
+export function getUngroupedItems(items: RetroItem[]): RetroItem[] {
+  return items
+    .filter((item) => item.groupId === null)
+    .sort((a, b) => a.order - b.order);
+}
+
+export function getGroupedItems(items: RetroItem[], groupId: string): RetroItem[] {
+  return items
+    .filter((item) => item.groupId === groupId)
+    .sort((a, b) => a.order - b.order);
+}
+
+export function applyReorderItems(items: RetroItem[], orderedIds: string[]): RetroItem[] {
+  const reordered = reorderList(items, orderedIds, (item) => item.id);
+  return reordered.map((item, idx) => ({ ...item, order: idx }));
+}
+
+export function applyReorderGroups(groups: Group[], orderedIds: string[]): Group[] {
+  const reordered = reorderList(groups, orderedIds, (g) => g.id);
+  return reordered.map((g, idx) => ({ ...g, order: idx }));
+}
+
+export function applyMoveItemToGroup(
+  items: RetroItem[],
+  itemId: string,
+  targetGroupId: string | null,
+  targetIndex: number,
+): RetroItem[] {
+  const itemIndex = items.findIndex((i) => i.id === itemId);
+  if (itemIndex === -1) return items;
+
+  const moved: RetroItem = { ...items[itemIndex]!, groupId: targetGroupId };
+  const otherItems = items.filter((i) => i.id !== itemId);
+
+  const sameGroup = otherItems.filter((i) => i.groupId === targetGroupId);
+  const before = sameGroup.slice(0, targetIndex);
+  const after = sameGroup.slice(targetIndex);
+
+  const updatedSameGroup: RetroItem[] = [...before, moved, ...after].map((i, idx) => ({ ...i, order: idx }));
+  const differentGroup = otherItems.filter((i) => i.groupId !== targetGroupId);
+
+  return [...differentGroup, ...updatedSameGroup];
+}

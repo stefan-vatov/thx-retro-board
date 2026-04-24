@@ -17,5 +17,12 @@ export {
   sanitizeItemText,
   isValidItemText,
   reorderList,
+  sanitizeGroupName,
+  isValidGroupName,
+  getUngroupedItems,
+  getGroupedItems,
+  applyReorderItems,
+  applyReorderGroups,
+  applyMoveItemToGroup,
 } from "./state";
 export { generateRoomId, ROOM_ID_LENGTH } from "./room-id";

@@ -5,6 +5,7 @@ import type {
   Phase,
   Participant,
   RetroItem,
+  Group,
   ServerToClientMessage,
   ClientToServerMessage,
 } from "../src/domain";
@@ -13,6 +14,11 @@ import {
   isValidItemText,
   canTransition,
   PHASE_ORDER,
+  sanitizeGroupName,
+  isValidGroupName,
+  applyReorderItems,
+  applyReorderGroups,
+  applyMoveItemToGroup,
 } from "../src/domain";
 
 interface StoredState {
@@ -20,6 +26,7 @@ interface StoredState {
   phase: RoomState["phase"];
   participants: Participant[];
   items: RetroItem[];
+  groups: Group[];
   facilitatorId: string | null;
   voteBudget: number;
   version: number;
@@ -75,6 +82,7 @@ export class RetroRoom extends DurableObject<Env> {
       phase: "write",
       participants: [],
       items: [],
+      groups: [],
       facilitatorId: null,
       voteBudget: 5,
       version: 0,
@@ -90,7 +98,7 @@ export class RetroRoom extends DurableObject<Env> {
       phase: s.phase,
       participants: s.participants,
       items: s.items,
-      groups: [],
+      groups: s.groups,
       votes: [],
       timer: { startedAt: null, durationSeconds: null, expired: false },
       voteBudget: s.voteBudget,
@@ -221,6 +229,91 @@ export class RetroRoom extends DurableObject<Env> {
     return { success: true };
   }
 
+  async createGroup(_participantId: string, rawName: string): Promise<{ success: boolean; error?: string; group?: Group }> {
+    const s = await this.loadState();
+
+    if (s.phase !== "organise") {
+      return { success: false, error: "Cannot create groups outside organise phase" };
+    }
+
+    const sanitized = sanitizeGroupName(rawName);
+    if (!isValidGroupName(rawName)) {
+      return { success: false, error: "Group name cannot be empty" };
+    }
+
+    const group: Group = {
+      id: crypto.randomUUID(),
+      name: sanitized,
+      order: s.groups.length,
+    };
+    s.groups.push(group);
+    await this.saveState();
+
+    const broadcast: ServerToClientMessage = { type: "groups-changed", groups: s.groups };
+    this.broadcast(broadcast);
+
+    return { success: true, group };
+  }
+
+  async reorderItems(_participantId: string, orderedIds: string[]): Promise<{ success: boolean; error?: string }> {
+    const s = await this.loadState();
+
+    if (s.phase !== "organise") {
+      return { success: false, error: "Cannot reorder items outside organise phase" };
+    }
+
+    s.items = applyReorderItems(s.items, orderedIds);
+    await this.saveState();
+
+    const broadcast: ServerToClientMessage = { type: "items-reordered", items: s.items };
+    this.broadcast(broadcast);
+
+    return { success: true };
+  }
+
+  async reorderGroups(_participantId: string, orderedIds: string[]): Promise<{ success: boolean; error?: string }> {
+    const s = await this.loadState();
+
+    if (s.phase !== "organise") {
+      return { success: false, error: "Cannot reorder groups outside organise phase" };
+    }
+
+    s.groups = applyReorderGroups(s.groups, orderedIds);
+    await this.saveState();
+
+    const broadcast: ServerToClientMessage = { type: "groups-changed", groups: s.groups };
+    this.broadcast(broadcast);
+
+    return { success: true };
+  }
+
+  async moveItemToGroup(_participantId: string, itemId: string, targetGroupId: string | null, targetIndex: number): Promise<{ success: boolean; error?: string }> {
+    const s = await this.loadState();
+
+    if (s.phase !== "organise") {
+      return { success: false, error: "Cannot move items outside organise phase" };
+    }
+
+    const itemExists = s.items.some((i) => i.id === itemId);
+    if (!itemExists) {
+      return { success: false, error: "Item not found" };
+    }
+
+    if (targetGroupId !== null) {
+      const groupExists = s.groups.some((g) => g.id === targetGroupId);
+      if (!groupExists) {
+        return { success: false, error: "Group not found" };
+      }
+    }
+
+    s.items = applyMoveItemToGroup(s.items, itemId, targetGroupId, targetIndex);
+    await this.saveState();
+
+    this.broadcastState(s);
+
+    return { success: true };
+  }
+
   private broadcast(message: ServerToClientMessage, excludeId?: string) {
     const payload = JSON.stringify(message);
     for (const [id, ws] of this.sessions) {
@@ -236,7 +329,7 @@ export class RetroRoom extends DurableObject<Env> {
       phase: s.phase,
       participants: s.participants,
       items: s.items,
-      groups: [],
+      groups: s.groups,
       votes: [],
       timer: { startedAt: null, durationSeconds: null, expired: false },
       voteBudget: s.voteBudget,
@@ -359,6 +452,38 @@ export class RetroRoom extends DurableObject<Env> {
       }
       case "set-phase": {
         const result = await this.setPhase(participantId, msg.phase);
+        if (!result.success) {
+          const ws = this.sessions.get(participantId);
+          ws?.send(JSON.stringify({ type: "error", message: result.error }));
+        }
+        break;
+      }
+      case "create-group": {
+        const result = await this.createGroup(participantId, msg.name);
+        if (!result.success) {
+          const ws = this.sessions.get(participantId);
+          ws?.send(JSON.stringify({ type: "error", message: result.error }));
+        }
+        break;
+      }
+      case "reorder-items": {
+        const result = await this.reorderItems(participantId, msg.itemIds);
+        if (!result.success) {
+          const ws = this.sessions.get(participantId);
+          ws?.send(JSON.stringify({ type: "error", message: result.error }));
+        }
+        break;
+      }
+      case "reorder-groups": {
+        const result = await this.reorderGroups(participantId, msg.groupIds);
+        if (!result.success) {
+          const ws = this.sessions.get(participantId);
+          ws?.send(JSON.stringify({ type: "error", message: result.error }));
+        }
+        break;
+      }
+      case "move-item-to-group": {
+        const result = await this.moveItemToGroup(participantId, msg.itemId, msg.groupId, msg.index);
         if (!result.success) {
           const ws = this.sessions.get(participantId);
           ws?.send(JSON.stringify({ type: "error", message: result.error }));

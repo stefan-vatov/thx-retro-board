@@ -15,8 +15,15 @@ import {
   sanitizeItemText,
   isValidItemText,
   reorderList,
+  sanitizeGroupName,
+  isValidGroupName,
+  getUngroupedItems,
+  getGroupedItems,
+  applyReorderItems,
+  applyReorderGroups,
+  applyMoveItemToGroup,
 } from "./state";
-import type { RetroItem, RoomState } from "./types";
+import type { RetroItem, Group, RoomState } from "./types";
 
 function makeState(overrides: Partial<RoomState> & { roomId: string }): RoomState {
   return {
@@ -245,5 +252,140 @@ describe("version-aware state reconciliation", () => {
     const merged = (ws.version >= local.version) ? ws : local;
     expect(merged.version).toBe(10);
     expect(merged.participants).toHaveLength(3);
+  });
+});
+
+describe("sanitizeGroupName", () => {
+  it("trims whitespace", () => {
+    expect(sanitizeGroupName("  Process  ")).toBe("Process");
+  });
+
+  it("truncates to 100 characters", () => {
+    const long = "A".repeat(120);
+    expect(sanitizeGroupName(long).length).toBe(100);
+  });
+});
+
+describe("isValidGroupName", () => {
+  it("rejects empty strings", () => {
+    expect(isValidGroupName("")).toBe(false);
+  });
+
+  it("rejects whitespace-only strings", () => {
+    expect(isValidGroupName("   ")).toBe(false);
+  });
+
+  it("accepts valid group names", () => {
+    expect(isValidGroupName("Process")).toBe(true);
+  });
+});
+
+describe("getUngroupedItems", () => {
+  const items: RetroItem[] = [
+    { id: "a", text: "A", authorId: "p1", groupId: null, order: 2 },
+    { id: "b", text: "B", authorId: "p1", groupId: "g1", order: 0 },
+    { id: "c", text: "C", authorId: "p1", groupId: null, order: 1 },
+  ];
+
+  it("returns items with null groupId sorted by order", () => {
+    const result = getUngroupedItems(items);
+    expect(result.map((i) => i.id)).toEqual(["c", "a"]);
+  });
+
+  it("returns empty array when all items are grouped", () => {
+    const grouped: RetroItem[] = [
+      { id: "a", text: "A", authorId: "p1", groupId: "g1", order: 0 },
+    ];
+    expect(getUngroupedItems(grouped)).toEqual([]);
+  });
+});
+
+describe("getGroupedItems", () => {
+  const items: RetroItem[] = [
+    { id: "a", text: "A", authorId: "p1", groupId: "g1", order: 1 },
+    { id: "b", text: "B", authorId: "p1", groupId: null, order: 0 },
+    { id: "c", text: "C", authorId: "p1", groupId: "g1", order: 0 },
+    { id: "d", text: "D", authorId: "p1", groupId: "g2", order: 0 },
+  ];
+
+  it("returns items in specified group sorted by order", () => {
+    const result = getGroupedItems(items, "g1");
+    expect(result.map((i) => i.id)).toEqual(["c", "a"]);
+  });
+
+  it("returns empty array for non-existent group", () => {
+    expect(getGroupedItems(items, "g99")).toEqual([]);
+  });
+});
+
+describe("applyReorderItems", () => {
+  const items: RetroItem[] = [
+    { id: "a", text: "A", authorId: "p1", groupId: null, order: 0 },
+    { id: "b", text: "B", authorId: "p1", groupId: null, order: 1 },
+    { id: "c", text: "C", authorId: "p1", groupId: null, order: 2 },
+  ];
+
+  it("reorders items and reassigns order indices", () => {
+    const result = applyReorderItems(items, ["c", "a", "b"]);
+    expect(result.map((i) => i.id)).toEqual(["c", "a", "b"]);
+    expect(result.map((i) => i.order)).toEqual([0, 1, 2]);
+  });
+
+  it("preserves items not in the ordered list", () => {
+    const result = applyReorderItems(items, ["c", "a"]);
+    expect(result.map((i) => i.id)).toEqual(["c", "a"]);
+  });
+});
+
+describe("applyReorderGroups", () => {
+  const groups: Group[] = [
+    { id: "g1", name: "A", order: 0 },
+    { id: "g2", name: "B", order: 1 },
+    { id: "g3", name: "C", order: 2 },
+  ];
+
+  it("reorders groups and reassigns order indices", () => {
+    const result = applyReorderGroups(groups, ["g3", "g1", "g2"]);
+    expect(result.map((g) => g.id)).toEqual(["g3", "g1", "g2"]);
+    expect(result.map((g) => g.order)).toEqual([0, 1, 2]);
+  });
+});
+
+describe("applyMoveItemToGroup", () => {
+  const items: RetroItem[] = [
+    { id: "a", text: "A", authorId: "p1", groupId: null, order: 0 },
+    { id: "b", text: "B", authorId: "p1", groupId: null, order: 1 },
+    { id: "c", text: "C", authorId: "p1", groupId: "g1", order: 0 },
+  ];
+
+  it("moves item to a group at specified index", () => {
+    const result = applyMoveItemToGroup(items, "a", "g1", 0);
+    const moved = result.find((i) => i.id === "a");
+    expect(moved?.groupId).toBe("g1");
+    expect(moved?.order).toBe(0);
+  });
+
+  it("moves item to ungrouped (null groupId)", () => {
+    const result = applyMoveItemToGroup(items, "c", null, 1);
+    const moved = result.find((i) => i.id === "c");
+    expect(moved?.groupId).toBeNull();
+  });
+
+  it("returns unchanged items if itemId not found", () => {
+    const result = applyMoveItemToGroup(items, "z", "g1", 0);
+    expect(result).toEqual(items);
+  });
+
+  it("keeps duplicate text items distinct when moving one", () => {
+    const dupItems: RetroItem[] = [
+      { id: "x1", text: "Same", authorId: "p1", groupId: null, order: 0 },
+      { id: "x2", text: "Same", authorId: "p1", groupId: null, order: 1 },
+    ];
+    const result = applyMoveItemToGroup(dupItems, "x1", "g1", 0);
+    expect(result).toHaveLength(2);
+    const moved = result.find((i) => i.id === "x1");
+    const stayed = result.find((i) => i.id === "x2");
+    expect(moved?.groupId).toBe("g1");
+    expect(stayed?.groupId).toBeNull();
   });
 });
