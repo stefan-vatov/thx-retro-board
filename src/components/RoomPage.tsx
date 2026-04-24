@@ -15,24 +15,28 @@ function mergeRoomState(local: RoomState | null, ws: RoomState | null): RoomStat
   return local;
 }
 
+function getStoredIdentity(roomId: string): { participantId: string; displayName: string; connectionToken?: string } {
+  const pidKey = `retro-participant-${roomId}`;
+  const nameKey = `retro-name-${roomId}`;
+  const tokenKey = `retro-token-${roomId}`;
+  const participantId = localStorage.getItem(pidKey) ?? crypto.randomUUID();
+  const displayName = localStorage.getItem(nameKey) ?? "";
+  const connectionToken = localStorage.getItem(tokenKey) ?? undefined;
+  if (!localStorage.getItem(pidKey)) {
+    localStorage.setItem(pidKey, participantId);
+  }
+  return { participantId, displayName, connectionToken };
+}
+
 export function RoomPage() {
   const { roomId } = useParams<{ roomId: string }>();
   const [pageState, setPageState] = useState<PageState>("loading");
-  const [participantId] = useState(() => {
-    const key = `retro-participant-${roomId}`;
-    const existing = sessionStorage.getItem(key);
-    if (existing) return existing;
-    const id = crypto.randomUUID();
-    sessionStorage.setItem(key, id);
-    return id;
-  });
-  const [displayName, setDisplayName] = useState("");
+  const [identity] = useState(() => getStoredIdentity(roomId!));
+  const [participantId] = useState(() => identity.participantId);
+  const [displayName, setDisplayName] = useState(() => identity.displayName);
   const [joinError, setJoinError] = useState<string | null>(null);
   const [localRoomState, setLocalRoomState] = useState<RoomState | null>(null);
-  const [connectionToken, setConnectionToken] = useState<string | undefined>(() => {
-    const key = `retro-token-${roomId}`;
-    return sessionStorage.getItem(key) ?? undefined;
-  });
+  const [connectionToken, setConnectionToken] = useState<string | undefined>(() => identity.connectionToken);
   const [voteBudgetInput, setVoteBudgetInput] = useState("5");
   const [budgetMsg, setBudgetMsg] = useState<string | null>(null);
   const [phaseMsg, setPhaseMsg] = useState<string | null>(null);
@@ -52,6 +56,20 @@ export function RoomPage() {
         setLocalRoomState(state);
         const existing = state.participants.find((p) => p.id === participantId);
         if (existing) {
+          const name = identity.displayName || existing.displayName;
+          try {
+            const result = await joinRoom(roomId, participantId, name);
+            if (result.success) {
+              localStorage.setItem(`retro-name-${roomId}`, name);
+              setLocalRoomState(result.state ?? state);
+              if (result.connectionToken) {
+                localStorage.setItem(`retro-token-${roomId}`, result.connectionToken);
+                setConnectionToken(result.connectionToken);
+              }
+            }
+          } catch {
+            // Re-join failed; still show room with stale token if available
+          }
           setPageState("room");
         } else {
           setPageState("join");
@@ -60,7 +78,7 @@ export function RoomPage() {
         setPageState("not-found");
       }
     })();
-  }, [roomId, participantId]);
+  }, [roomId, participantId, identity.displayName]);
 
   const displayBudget = useMemo(() => {
     if (roomState) return String(roomState.voteBudget);
@@ -84,10 +102,10 @@ export function RoomPage() {
         setJoinError(result.error ?? "Failed to join room.");
         return;
       }
+      localStorage.setItem(`retro-name-${roomId}`, trimmed);
       setLocalRoomState(result.state ?? null);
       if (result.connectionToken) {
-        const key = `retro-token-${roomId}`;
-        sessionStorage.setItem(key, result.connectionToken);
+        localStorage.setItem(`retro-token-${roomId}`, result.connectionToken);
         setConnectionToken(result.connectionToken);
       }
       setPageState("room");

@@ -458,4 +458,100 @@ describe("RetroRoom Durable Object", () => {
       expect(second.state).toBeDefined();
     });
   });
+
+  describe("reconnect identity persistence", () => {
+    it("reconnect reuses same participant identity without creating duplicate", async () => {
+      const roomId = "test-reconnect-identity";
+      const id = env.RETRO_ROOM.idFromName(roomId);
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.initRoom(roomId);
+
+      // Alice joins, adds an item
+      await stub.join("p1", "Alice");
+      await stub.addItem("p1", "Item from Alice");
+
+      // Bob joins
+      await stub.join("p2", "Bob");
+
+      // Alice disconnects and reconnects (simulated by re-joining with same participantId)
+      const rejoinResult = await stub.join("p1", "Alice");
+      expect(rejoinResult.success).toBe(true);
+      expect(rejoinResult.connectionToken).toBeDefined();
+
+      // No duplicate membership
+      const state = await stub.getRoomState();
+      expect(state.participants).toHaveLength(2);
+      const aliceCount = state.participants.filter((p) => p.id === "p1").length;
+      expect(aliceCount).toBe(1);
+
+      // Alice's items are still there
+      expect(state.items).toHaveLength(1);
+      expect(state.items[0]!.authorId).toBe("p1");
+    });
+
+    it("reconnect with new token can open WebSocket", async () => {
+      const roomId = "test-reconnect-ws";
+      const id = env.RETRO_ROOM.idFromName(roomId);
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.initRoom(roomId);
+
+      const firstJoin = await stub.join("p1", "Alice");
+      await stub.join("p2", "Bob");
+
+      // Alice reconnects and gets a new token
+      const rejoinResult = await stub.join("p1", "Alice");
+      expect(rejoinResult.success).toBe(true);
+      const newToken = rejoinResult.connectionToken!;
+
+      // Old token should be invalid (replaced)
+      const oldWsRes = await stub.fetch(new Request(`http://do/ws?pid=p1&token=${encodeURIComponent(firstJoin.connectionToken!)}`, {
+        headers: { Upgrade: "websocket" },
+      }));
+      expect(oldWsRes.status).toBe(403);
+
+      // New token should work
+      const newWsRes = await stub.fetch(new Request(`http://do/ws?pid=p1&token=${encodeURIComponent(newToken)}`, {
+        headers: { Upgrade: "websocket" },
+      }));
+      expect(newWsRes.status).toBe(101);
+    });
+
+    it("reconnecting participant presence is broadcast to other clients", async () => {
+      const roomId = "test-reconnect-broadcast";
+      const id = env.RETRO_ROOM.idFromName(roomId);
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.initRoom(roomId);
+
+      await stub.join("p1", "Alice");
+      const bobJoin = await stub.join("p2", "Bob");
+
+      // Connect Bob's WebSocket
+      const bobWsRes = await stub.fetch(new Request(`http://do/ws?pid=p2&token=${encodeURIComponent(bobJoin.connectionToken!)}`, {
+        headers: { Upgrade: "websocket" },
+      }));
+      expect(bobWsRes.status).toBe(101);
+      const bobWs = bobWsRes.webSocket!;
+      bobWs.accept();
+
+      const messages: string[] = [];
+      bobWs.addEventListener("message", (e) => {
+        messages.push(e.data as string);
+      });
+
+      // Alice reconnects (which broadcasts participant-joined to others)
+      await stub.join("p1", "Alice");
+
+      // Wait for messages to propagate
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Bob should receive a participant-joined broadcast for Alice's reconnect
+      const joinedMsg = messages.find((m) => {
+        try {
+          const parsed = JSON.parse(m);
+          return parsed.type === "participant-joined" && parsed.participant?.id === "p1";
+        } catch { return false; }
+      });
+      expect(joinedMsg).toBeDefined();
+    });
+  });
 });
