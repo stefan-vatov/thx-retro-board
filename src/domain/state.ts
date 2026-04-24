@@ -10,6 +10,7 @@ export function createRoomState(roomId: string, voteBudget: number = 5): RoomSta
     votes: [],
     timer: { startedAt: null, durationSeconds: null, expired: false },
     voteBudget,
+    version: 0,
   };
 }
 

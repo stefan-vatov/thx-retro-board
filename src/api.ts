@@ -16,13 +16,13 @@ export async function joinRoom(
   roomId: string,
   participantId: string,
   displayName: string,
-): Promise<{ success: boolean; error?: string; state?: RoomState }> {
+): Promise<{ success: boolean; error?: string; state?: RoomState; connectionToken?: string }> {
   const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/join`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ participantId, displayName }),
   });
-  return res.json() as Promise<{ success: boolean; error?: string; state?: RoomState }>;
+  return res.json() as Promise<{ success: boolean; error?: string; state?: RoomState; connectionToken?: string }>;
 }
 
 export async function setVoteBudget(

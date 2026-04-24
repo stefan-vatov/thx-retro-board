@@ -41,4 +41,5 @@ export interface RoomState {
   votes: VoteAllocation[];
   timer: TimerState;
   voteBudget: number;
+  version: number;
 }

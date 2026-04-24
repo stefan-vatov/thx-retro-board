@@ -20,6 +20,7 @@ describe("RetroRoom Durable Object", () => {
     expect(state.phase).toBe("write");
     expect(state.participants).toEqual([]);
     expect(state.voteBudget).toBe(5);
+    expect(state.version).toBe(1);
   });
 
   it("detects if room exists", async () => {
@@ -101,5 +102,102 @@ describe("RetroRoom Durable Object", () => {
     const g1 = await stub1.sayHello();
     const g2 = await stub2.sayHello();
     expect(g1).toBe(g2);
+  });
+
+  it("join returns a connection token", async () => {
+    const roomId = "test-conn-token";
+    const id = env.RETRO_ROOM.idFromName(roomId);
+    const stub = env.RETRO_ROOM.get(id);
+    await stub.initRoom(roomId);
+
+    const result = await stub.join("p1", "Alice");
+    expect(result.success).toBe(true);
+    expect(typeof result.connectionToken).toBe("string");
+    expect(result.connectionToken!.length).toBeGreaterThan(0);
+  });
+
+  it("re-joining returns a new connection token", async () => {
+    const roomId = "test-conn-token-rejoin";
+    const id = env.RETRO_ROOM.idFromName(roomId);
+    const stub = env.RETRO_ROOM.get(id);
+    await stub.initRoom(roomId);
+
+    const result1 = await stub.join("p1", "Alice");
+    const result2 = await stub.join("p1", "Alice");
+    expect(result2.success).toBe(true);
+    expect(result2.connectionToken).toBeDefined();
+    expect(result2.connectionToken).not.toBe(result1.connectionToken);
+  });
+
+  it("version increments on each state mutation", async () => {
+    const roomId = "test-version-incr";
+    const id = env.RETRO_ROOM.idFromName(roomId);
+    const stub = env.RETRO_ROOM.get(id);
+    await stub.initRoom(roomId);
+
+    const state0 = await stub.getRoomState();
+    const v0 = state0.version;
+
+    await stub.join("p1", "Alice");
+    const state1 = await stub.getRoomState();
+    expect(state1.version).toBeGreaterThan(v0);
+
+    await stub.setVoteBudget("p1", 8);
+    const state2 = await stub.getRoomState();
+    expect(state2.version).toBeGreaterThan(state1.version);
+  });
+
+  it("rejects WebSocket without pid and token", async () => {
+    const roomId = "test-ws-auth-missing";
+    const id = env.RETRO_ROOM.idFromName(roomId);
+    const stub = env.RETRO_ROOM.get(id);
+    await stub.initRoom(roomId);
+    await stub.join("p1", "Alice");
+
+    const response = await stub.fetch(new Request("http://do/ws", {
+      headers: { Upgrade: "websocket" },
+    }));
+    expect(response.status).toBe(400);
+  });
+
+  it("rejects WebSocket with wrong token", async () => {
+    const roomId = "test-ws-auth-wrong";
+    const id = env.RETRO_ROOM.idFromName(roomId);
+    const stub = env.RETRO_ROOM.get(id);
+    await stub.initRoom(roomId);
+    await stub.join("p1", "Alice");
+
+    const response = await stub.fetch(new Request("http://do/ws?pid=p1&token=wrong-token", {
+      headers: { Upgrade: "websocket" },
+    }));
+    expect(response.status).toBe(403);
+  });
+
+  it("rejects WebSocket for unknown participant", async () => {
+    const roomId = "test-ws-auth-unknown";
+    const id = env.RETRO_ROOM.idFromName(roomId);
+    const stub = env.RETRO_ROOM.get(id);
+    await stub.initRoom(roomId);
+    await stub.join("p1", "Alice");
+
+    const response = await stub.fetch(new Request("http://do/ws?pid=p2&token=some-token", {
+      headers: { Upgrade: "websocket" },
+    }));
+    expect(response.status).toBe(403);
+  });
+
+  it("accepts WebSocket with correct token", async () => {
+    const roomId = "test-ws-auth-correct";
+    const id = env.RETRO_ROOM.idFromName(roomId);
+    const stub = env.RETRO_ROOM.get(id);
+    await stub.initRoom(roomId);
+    const joinResult = await stub.join("p1", "Alice");
+    const token = joinResult.connectionToken!;
+
+    const response = await stub.fetch(new Request(`http://do/ws?pid=p1&token=${encodeURIComponent(token)}`, {
+      headers: { Upgrade: "websocket" },
+    }));
+    expect(response.status).toBe(101);
+    expect(response.webSocket).toBeDefined();
   });
 });

@@ -13,6 +13,14 @@ interface StoredState {
   participants: Participant[];
   facilitatorId: string | null;
   voteBudget: number;
+  version: number;
+  connectionTokens: Record<string, string>;
+}
+
+function generateToken(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 export class RetroRoom extends DurableObject<Env> {
@@ -35,6 +43,7 @@ export class RetroRoom extends DurableObject<Env> {
 
   private async saveState(): Promise<void> {
     if (this.state) {
+      this.state.version += 1;
       await this.ctx.storage.put("room", this.state);
     }
   }
@@ -51,6 +60,8 @@ export class RetroRoom extends DurableObject<Env> {
       participants: [],
       facilitatorId: null,
       voteBudget: 5,
+      version: 0,
+      connectionTokens: {},
     };
     await this.saveState();
   }
@@ -66,6 +77,7 @@ export class RetroRoom extends DurableObject<Env> {
       votes: [],
       timer: { startedAt: null, durationSeconds: null, expired: false },
       voteBudget: s.voteBudget,
+      version: s.version,
     };
   }
 
@@ -74,7 +86,7 @@ export class RetroRoom extends DurableObject<Env> {
     return stored !== undefined;
   }
 
-  async join(participantId: string, displayName: string): Promise<{ success: boolean; error?: string; state?: RoomState }> {
+  async join(participantId: string, displayName: string): Promise<{ success: boolean; error?: string; state?: RoomState; connectionToken?: string }> {
     const s = await this.loadState();
     const trimmed = displayName.trim();
     if (trimmed.length === 0) {
@@ -84,7 +96,10 @@ export class RetroRoom extends DurableObject<Env> {
 
     const existing = s.participants.find((p) => p.id === participantId);
     if (existing) {
-      return { success: true, state: await this.getRoomState() };
+      const token = generateToken();
+      s.connectionTokens[participantId] = token;
+      await this.saveState();
+      return { success: true, state: await this.getRoomState(), connectionToken: token };
     }
 
     const isFacilitator = s.participants.length === 0;
@@ -97,6 +112,8 @@ export class RetroRoom extends DurableObject<Env> {
     if (isFacilitator) {
       s.facilitatorId = participantId;
     }
+    const token = generateToken();
+    s.connectionTokens[participantId] = token;
     await this.saveState();
 
     const broadcast: ServerToClientMessage = {
@@ -105,7 +122,7 @@ export class RetroRoom extends DurableObject<Env> {
     };
     this.broadcast(broadcast, participantId);
 
-    return { success: true, state: await this.getRoomState() };
+    return { success: true, state: await this.getRoomState(), connectionToken: token };
   }
 
   async setVoteBudget(participantId: string, budget: number): Promise<{ success: boolean; error?: string }> {
@@ -154,7 +171,20 @@ export class RetroRoom extends DurableObject<Env> {
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
 
-      const participantId = url.searchParams.get("pid") || crypto.randomUUID();
+      const pid = url.searchParams.get("pid");
+      const token = url.searchParams.get("token");
+
+      if (!pid || !token) {
+        return new Response(JSON.stringify({ error: "Missing pid or token" }), { status: 400 });
+      }
+
+      const s = await this.loadState();
+      const expectedToken = s.connectionTokens[pid];
+      if (!expectedToken || expectedToken !== token) {
+        return new Response(JSON.stringify({ error: "Invalid participant credentials" }), { status: 403 });
+      }
+
+      const participantId = pid;
       this.sessions.set(participantId, server);
 
       this.ctx.acceptWebSocket(server);

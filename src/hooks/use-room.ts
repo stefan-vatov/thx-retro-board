@@ -7,14 +7,15 @@ interface UseRoomResult {
   send: (message: unknown) => void;
 }
 
-export function useRoom(roomId: string, participantId: string): UseRoomResult {
+export function useRoom(roomId: string, participantId: string, connectionToken?: string): UseRoomResult {
   const [state, setState] = useState<RoomState | null>(null);
   const [connected, setConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
+    if (!connectionToken) return;
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//${window.location.host}/api/rooms/${encodeURIComponent(roomId)}/ws?pid=${encodeURIComponent(participantId)}`;
+    const wsUrl = `${protocol}//${window.location.host}/api/rooms/${encodeURIComponent(roomId)}/ws?pid=${encodeURIComponent(participantId)}&token=${encodeURIComponent(connectionToken)}`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
@@ -57,7 +58,7 @@ export function useRoom(roomId: string, participantId: string): UseRoomResult {
       ws.close();
       wsRef.current = null;
     };
-  }, [roomId, participantId]);
+  }, [roomId, participantId, connectionToken]);
 
   const send = useCallback((message: unknown) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {

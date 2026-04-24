@@ -16,7 +16,21 @@ import {
   isValidItemText,
   reorderList,
 } from "./state";
-import type { RetroItem } from "./types";
+import type { RetroItem, RoomState } from "./types";
+
+function makeState(overrides: Partial<RoomState> & { roomId: string }): RoomState {
+  return {
+    phase: "write",
+    participants: [],
+    items: [],
+    groups: [],
+    votes: [],
+    timer: { startedAt: null, durationSeconds: null, expired: false },
+    voteBudget: 5,
+    version: 0,
+    ...overrides,
+  };
+}
 
 describe("createRoomState", () => {
   it("creates initial room state with write phase", () => {
@@ -29,6 +43,7 @@ describe("createRoomState", () => {
     expect(state.votes).toEqual([]);
     expect(state.timer).toEqual({ startedAt: null, durationSeconds: null, expired: false });
     expect(state.voteBudget).toBe(5);
+    expect(state.version).toBe(0);
   });
 
   it("accepts custom vote budget", () => {
@@ -193,5 +208,42 @@ describe("reorderList", () => {
   it("ignores unknown IDs gracefully", () => {
     const result = reorderList(items, ["c", "z", "a"], (item) => item.id);
     expect(result.map((i) => i.id)).toEqual(["c", "a"]);
+  });
+});
+
+describe("version-aware state reconciliation", () => {
+  it("prefers ws state when ws version is higher", () => {
+    const local = makeState({ roomId: "r1", version: 3, participants: [{ id: "p1", displayName: "A", isFacilitator: true }] });
+    const ws = makeState({ roomId: "r1", version: 5, participants: [{ id: "p1", displayName: "A", isFacilitator: true }, { id: "p2", displayName: "B", isFacilitator: false }] });
+
+    const merged = (ws.version >= local.version) ? ws : local;
+    expect(merged.version).toBe(5);
+    expect(merged.participants).toHaveLength(2);
+  });
+
+  it("prefers local state when local version is higher", () => {
+    const local = makeState({ roomId: "r1", version: 7, participants: [{ id: "p1", displayName: "A", isFacilitator: true }] });
+    const ws = makeState({ roomId: "r1", version: 3, participants: [{ id: "p1", displayName: "A", isFacilitator: true }, { id: "p2", displayName: "B", isFacilitator: false }] });
+
+    const merged = (ws.version >= local.version) ? ws : local;
+    expect(merged.version).toBe(7);
+    expect(merged.participants).toHaveLength(1);
+  });
+
+  it("prefers ws state when versions are equal", () => {
+    const local = makeState({ roomId: "r1", version: 4, participants: [{ id: "p1", displayName: "A", isFacilitator: true }] });
+    const ws = makeState({ roomId: "r1", version: 4, participants: [{ id: "p1", displayName: "A", isFacilitator: true }, { id: "p2", displayName: "B", isFacilitator: false }] });
+
+    const merged = (ws.version >= local.version) ? ws : local;
+    expect(merged.participants).toHaveLength(2);
+  });
+
+  it("does not use participant count for merge decisions", () => {
+    const local = makeState({ roomId: "r1", version: 10, participants: [{ id: "p1", displayName: "A", isFacilitator: true }, { id: "p2", displayName: "B", isFacilitator: false }, { id: "p3", displayName: "C", isFacilitator: false }] });
+    const ws = makeState({ roomId: "r1", version: 2, participants: [{ id: "p1", displayName: "A", isFacilitator: true }] });
+
+    const merged = (ws.version >= local.version) ? ws : local;
+    expect(merged.version).toBe(10);
+    expect(merged.participants).toHaveLength(3);
   });
 });

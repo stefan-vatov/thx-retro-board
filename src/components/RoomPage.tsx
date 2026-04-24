@@ -10,8 +10,7 @@ function mergeRoomState(local: RoomState | null, ws: RoomState | null): RoomStat
   if (!local && !ws) return null;
   if (!local) return ws;
   if (!ws) return local;
-  // Prefer the state with more participants (more recent join data)
-  if (ws.participants.length >= local.participants.length) return ws;
+  if (ws.version >= local.version) return ws;
   return local;
 }
 
@@ -29,10 +28,14 @@ export function RoomPage() {
   const [displayName, setDisplayName] = useState("");
   const [joinError, setJoinError] = useState<string | null>(null);
   const [localRoomState, setLocalRoomState] = useState<RoomState | null>(null);
+  const [connectionToken, setConnectionToken] = useState<string | undefined>(() => {
+    const key = `retro-token-${roomId}`;
+    return sessionStorage.getItem(key) ?? undefined;
+  });
   const [voteBudgetInput, setVoteBudgetInput] = useState("5");
   const [budgetMsg, setBudgetMsg] = useState<string | null>(null);
 
-  const { state: wsState, connected, send } = useRoom(roomId ?? "", participantId);
+  const { state: wsState, connected } = useRoom(roomId ?? "", participantId, connectionToken);
 
   const roomState = mergeRoomState(localRoomState, wsState);
 
@@ -77,7 +80,11 @@ export function RoomPage() {
         return;
       }
       setLocalRoomState(result.state ?? null);
-      send({ type: "join", participantId, displayName: trimmed });
+      if (result.connectionToken) {
+        const key = `retro-token-${roomId}`;
+        sessionStorage.setItem(key, result.connectionToken);
+        setConnectionToken(result.connectionToken);
+      }
       setPageState("room");
     } catch {
       setJoinError("Failed to join room. Please try again.");
