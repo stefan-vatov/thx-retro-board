@@ -22,7 +22,15 @@ export type ClientToServerMessage =
   | { type: "edit-column"; columnId: string; name: string }
   | { type: "reorder-columns"; columnIds: string[] }
   | { type: "reorder-groups"; groupIds: string[] }
-  | { type: "move-item-to-group"; itemId: string; groupId: string | null; index: number }
+  | {
+      type: "move-item-to-group";
+      itemId: string;
+      groupId: string | null;
+      index: number;
+      expectedVersion?: number;
+      sourceGroupId?: string | null;
+      sourceIndex?: number;
+    }
   | { type: "set-phase"; phase: import("./types").Phase }
   | { type: "set-vote-budget"; budget: number }
   | { type: "cast-vote"; itemId: string; count: number }

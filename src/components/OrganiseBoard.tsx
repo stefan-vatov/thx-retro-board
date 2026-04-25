@@ -21,6 +21,7 @@ export function OrganiseBoard({ roomState, isFacilitator, send, serverError = nu
   const [newGroupName, setNewGroupName] = useState("");
   const [groupError, setGroupError] = useState<string | null>(null);
   const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
+  const [dragStart, setDragStart] = useState<{ itemId: string; expectedVersion: number; sourceGroupId: string | null; sourceIndex: number } | null>(null);
   const [activeDrop, setActiveDrop] = useState<DropTarget | null>(null);
 
   const isOrganise = roomState.phase === "organise";
@@ -65,6 +66,7 @@ export function OrganiseBoard({ roomState, isFacilitator, send, serverError = nu
 
   const cancelDrag = useCallback(() => {
     setDraggingItemId(null);
+    setDragStart(null);
     setActiveDrop(null);
   }, []);
 
@@ -98,8 +100,16 @@ export function OrganiseBoard({ roomState, isFacilitator, send, serverError = nu
       if (target) {
         const groupId = target.dataset.groupId === "__ungrouped__" ? null : target.dataset.groupId ?? null;
         const index = Number(target.dataset.index);
-        if (Number.isInteger(index)) {
-          send({ type: "move-item-to-group", itemId: draggingItemId, groupId, index });
+        if (Number.isInteger(index) && dragStart?.itemId === draggingItemId) {
+          send({
+            type: "move-item-to-group",
+            itemId: draggingItemId,
+            groupId,
+            index,
+            expectedVersion: dragStart.expectedVersion,
+            sourceGroupId: dragStart.sourceGroupId,
+            sourceIndex: dragStart.sourceIndex,
+          });
         }
       }
       cancelDrag();
@@ -125,11 +135,19 @@ export function OrganiseBoard({ roomState, isFacilitator, send, serverError = nu
       window.removeEventListener("pointercancel", onPointerCancel);
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [cancelDrag, draggingItemId, send]);
+  }, [cancelDrag, dragStart, draggingItemId, send]);
 
   function startDrag(itemId: string) {
     clearServerError?.();
+    const item = roomState.items.find((candidate) => candidate.id === itemId);
+    if (!item) return;
     setDraggingItemId(itemId);
+    setDragStart({
+      itemId,
+      expectedVersion: roomState.version,
+      sourceGroupId: item.columnId ?? item.groupId,
+      sourceIndex: item.order,
+    });
     setActiveDrop(null);
   }
 

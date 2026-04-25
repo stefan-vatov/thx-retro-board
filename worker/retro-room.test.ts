@@ -955,6 +955,56 @@ describe("RetroRoom Durable Object", () => {
       expect(finalState.items.find((item) => item.id === draggedItemId)?.columnId).toBe(stopColumnId);
     });
 
+    it("moveItemToGroup rejects stale drag/drop version preconditions without mutating state", async () => {
+      const stub = await setupOrganiseRoom("test-move-item-stale-version");
+      const state0 = await stub.getRoomState();
+      const startColumnId = state0.columns.find((column) => column.name === "Start")!.id;
+      const stopColumnId = state0.columns.find((column) => column.name === "Stop")!.id;
+      const draggedItem = state0.items[0]!;
+
+      const accepted = await stub.moveItemToGroup("fac1", draggedItem.id, startColumnId, 0, {
+        expectedVersion: state0.version,
+        sourceGroupId: draggedItem.columnId,
+        sourceIndex: draggedItem.order,
+      });
+      expect(accepted.success).toBe(true);
+
+      const beforeStaleDrop = await stub.getRoomState();
+      const stale = await stub.moveItemToGroup("p2", draggedItem.id, stopColumnId, 0, {
+        expectedVersion: state0.version,
+        sourceGroupId: draggedItem.columnId,
+        sourceIndex: draggedItem.order,
+      });
+      expect(stale.success).toBe(false);
+      expect(stale.error).toContain("Stale item move rejected");
+      expect(await stub.getRoomState()).toEqual(beforeStaleDrop);
+    });
+
+    it("moveItemToGroup rejects stale source layout preconditions without mutating state", async () => {
+      const stub = await setupOrganiseRoom("test-move-item-stale-source-layout");
+      const state0 = await stub.getRoomState();
+      const startColumnId = state0.columns.find((column) => column.name === "Start")!.id;
+      const stopColumnId = state0.columns.find((column) => column.name === "Stop")!.id;
+      const draggedItem = state0.items[0]!;
+
+      const accepted = await stub.moveItemToGroup("fac1", draggedItem.id, startColumnId, 0, {
+        expectedVersion: state0.version,
+        sourceGroupId: draggedItem.columnId,
+        sourceIndex: draggedItem.order,
+      });
+      expect(accepted.success).toBe(true);
+
+      const beforeStaleDrop = await stub.getRoomState();
+      const stale = await stub.moveItemToGroup("p2", draggedItem.id, stopColumnId, 0, {
+        expectedVersion: beforeStaleDrop.version,
+        sourceGroupId: draggedItem.columnId,
+        sourceIndex: draggedItem.order,
+      });
+      expect(stale.success).toBe(false);
+      expect(stale.error).toContain("source column changed");
+      expect(await stub.getRoomState()).toEqual(beforeStaleDrop);
+    });
+
     it("duplicate text items remain distinct through organisation", async () => {
       const id = env.RETRO_ROOM.idFromName("test-dup-organise");
       const stub = env.RETRO_ROOM.get(id);

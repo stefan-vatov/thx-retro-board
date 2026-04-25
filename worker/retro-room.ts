@@ -51,6 +51,12 @@ interface StoredState {
   timer: StoredTimer;
 }
 
+interface MoveItemPreconditions {
+  expectedVersion?: number;
+  sourceGroupId?: string | null;
+  sourceIndex?: number;
+}
+
 function normalizeColumns(stored: Pick<StoredState, "columns" | "groups">): Column[] {
   const source = stored.columns ?? stored.groups;
   if (!Array.isArray(source) || source.length === 0) {
@@ -437,7 +443,13 @@ export class RetroRoom extends DurableObject<Env> {
     return this.reorderColumns(participantId, orderedIds);
   }
 
-  async moveItemToGroup(participantId: string, itemId: string, targetGroupId: string | null, targetIndex: number): Promise<{ success: boolean; error?: string }> {
+  async moveItemToGroup(
+    participantId: string,
+    itemId: string,
+    targetGroupId: string | null,
+    targetIndex: number,
+    preconditions: MoveItemPreconditions = {},
+  ): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
 
     if (s.phase !== "organise") {
@@ -452,6 +464,31 @@ export class RetroRoom extends DurableObject<Env> {
     const item = s.items.find((i) => i.id === itemId);
     if (!item) {
       return { success: false, error: "Item not found" };
+    }
+
+    if (preconditions.expectedVersion !== undefined) {
+      if (!Number.isFinite(preconditions.expectedVersion) || !Number.isInteger(preconditions.expectedVersion)) {
+        return { success: false, error: "Expected version must be a finite integer" };
+      }
+      if (preconditions.expectedVersion !== s.version) {
+        return { success: false, error: "Stale item move rejected: room version changed" };
+      }
+    }
+
+    if (preconditions.sourceGroupId !== undefined) {
+      const currentSourceGroupId = item.columnId ?? item.groupId;
+      if (preconditions.sourceGroupId !== currentSourceGroupId) {
+        return { success: false, error: "Stale item move rejected: source column changed" };
+      }
+    }
+
+    if (preconditions.sourceIndex !== undefined) {
+      if (!Number.isFinite(preconditions.sourceIndex) || !Number.isInteger(preconditions.sourceIndex)) {
+        return { success: false, error: "Source index must be a finite integer" };
+      }
+      if (preconditions.sourceIndex !== item.order) {
+        return { success: false, error: "Stale item move rejected: source order changed" };
+      }
     }
 
     if (targetGroupId !== null && !s.groups.some((g) => g.id === targetGroupId)) {
@@ -737,7 +774,11 @@ export class RetroRoom extends DurableObject<Env> {
         break;
       }
       case "move-item-to-group": {
-        const result = await this.moveItemToGroup(participantId, msg.itemId, msg.groupId, msg.index);
+        const result = await this.moveItemToGroup(participantId, msg.itemId, msg.groupId, msg.index, {
+          expectedVersion: msg.expectedVersion,
+          sourceGroupId: msg.sourceGroupId,
+          sourceIndex: msg.sourceIndex,
+        });
         if (!result.success) {
           const ws = this.sessions.get(participantId);
           ws?.send(JSON.stringify({ type: "error", message: result.error }));
