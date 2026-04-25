@@ -165,6 +165,7 @@ export function RoomPage() {
   const [budgetMsg, setBudgetMsg] = useState<string | null>(null);
   const [timerMinutesInput, setTimerMinutesInput] = useState("5");
   const [timerMsg, setTimerMsg] = useState<string | null>(null);
+  const [timerInputError, setTimerInputError] = useState<string | null>(null);
   const [phaseMsg, setPhaseMsg] = useState<string | null>(null);
 
   const { state: wsState, connected, send } = useRoom(roomId ?? "", participantId, connectionToken);
@@ -278,9 +279,19 @@ export function RoomPage() {
   function handleSetTimer() {
     if (!roomState) return;
     setTimerMsg(null);
-    const minutes = parseInt(timerMinutesInput, 10);
+    setTimerInputError(null);
+    const raw = timerMinutesInput.trim();
+    if (!raw) {
+      setTimerInputError("Timer cannot be blank.");
+      return;
+    }
+    const minutes = parseInt(raw, 10);
     if (isNaN(minutes) || minutes < 1) {
-      setTimerMsg("Timer must be at least 1 minute.");
+      setTimerInputError("Timer must be at least 1 minute.");
+      return;
+    }
+    if (minutes > 60) {
+      setTimerInputError("Timer cannot exceed 60 minutes.");
       return;
     }
     const durationSeconds = minutes * 60;
@@ -462,16 +473,26 @@ export function RoomPage() {
               <label className="input-label" htmlFor="timerMinutes">Timer (minutes)</label>
               <input
                 id="timerMinutes"
-                className="input"
+                className={`input${timerInputError ? " input--error" : ""}`}
                 type="number"
                 min={1}
                 max={60}
                 value={timerMinutesInput}
-                onChange={(e) => setTimerMinutesInput(e.target.value)}
+                onChange={(e) => {
+                  setTimerMinutesInput(e.target.value);
+                  if (timerInputError) setTimerInputError(null);
+                }}
                 style={{ width: "5rem" }}
+                aria-describedby={timerInputError ? "timer-error" : undefined}
+                aria-invalid={timerInputError ? "true" : undefined}
               />
               <button className="btn btn--secondary btn--sm" onClick={handleSetTimer}>Start Timer</button>
-              {timerMsg && (
+              {timerInputError && (
+                <span id="timer-error" className="status-msg status-msg--error" style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }} role="alert">
+                  {timerInputError}
+                </span>
+              )}
+              {timerMsg && !timerInputError && (
                 <span className="status-msg status-msg--info" style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }} role="status">
                   {timerMsg}
                 </span>
