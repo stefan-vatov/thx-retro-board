@@ -216,12 +216,124 @@ test.describe("Retro Board E2E", () => {
       await page.getByRole("button", { name: /add/i }).click();
       await expect(page.getByText("Persisted item")).toBeVisible();
 
-      // Refresh
+      // Refresh in WRITE phase
       await page.reload();
       await expect(page.getByText("Persisted item")).toBeVisible({ timeout: 5000 });
       await expect(page.getByText(/Phase: WRITE/i)).toBeVisible();
 
+      // Advance to ORGANISE phase
+      await page.getByRole("button", { name: /advance to next phase/i }).click();
+      await expect(page.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
+
+      // Add a group
+      await page.getByPlaceholder(/new group name/i).fill("My Group");
+      await page.getByRole("button", { name: /create group/i }).click();
+      await expect(page.getByText("My Group")).toBeVisible();
+
+      // Refresh in ORGANISE phase
+      await page.reload();
+      await expect(page.getByText("Persisted item")).toBeVisible({ timeout: 5000 });
+      await expect(page.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
+      await expect(page.getByText("My Group")).toBeVisible({ timeout: 5000 });
+
+      // Advance to VOTE phase
+      await page.getByRole("button", { name: /advance to next phase/i }).click();
+      await expect(page.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
+
+      // Refresh in VOTE phase
+      await page.reload();
+      await expect(page.getByText("Persisted item")).toBeVisible({ timeout: 5000 });
+      await expect(page.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
+
+      // Advance to REVIEW phase
+      await page.getByRole("button", { name: /advance to next phase/i }).click();
+      await expect(page.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
+
+      // Refresh in REVIEW phase
+      await page.reload();
+      await expect(page.getByText("Persisted item")).toBeVisible({ timeout: 5000 });
+      await expect(page.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
+      await expect(page.getByText(/Results are read-only/i)).toBeVisible();
+
       await ctx.close();
+    });
+
+    test("late join reconstructs state in each phase", async ({ browser }) => {
+      // Alice creates room and advances through phases
+      const ctx1 = await browser.newContext();
+      const alice = await ctx1.newPage();
+      await alice.goto("/");
+      await alice.getByRole("button", { name: /create room/i }).click();
+      await alice.waitForURL(/\/room\//);
+      const roomUrl = alice.url();
+      await alice.getByLabel(/display name/i).fill("Alice");
+      await alice.getByRole("button", { name: /join/i }).click();
+      await expect(alice.getByText(/Phase: WRITE/i)).toBeVisible();
+
+      // Add items
+      await alice.getByPlaceholder(/add a retro item/i).fill("Alice's item");
+      await alice.getByRole("button", { name: /add/i }).click();
+      await expect(alice.getByText("Alice's item")).toBeVisible();
+
+      // Advance to ORGANISE
+      await alice.getByRole("button", { name: /advance to next phase/i }).click();
+      await expect(alice.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
+
+      // Create a group
+      await alice.getByPlaceholder(/new group name/i).fill("Late Group");
+      await alice.getByRole("button", { name: /create group/i }).click();
+      await expect(alice.getByText("Late Group")).toBeVisible();
+
+      // Bob joins late during ORGANISE phase
+      const ctx2 = await browser.newContext();
+      const bob = await ctx2.newPage();
+      await bob.goto(roomUrl);
+      await bob.getByLabel(/display name/i).fill("Bob");
+      await bob.getByRole("button", { name: /join/i }).click();
+
+      // Bob sees ORGANISE phase and existing items/groups
+      await expect(bob.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
+      await expect(bob.getByText("Alice's item")).toBeVisible({ timeout: 5000 });
+      await expect(bob.getByText("Late Group")).toBeVisible({ timeout: 5000 });
+
+      // Advance to VOTE
+      await alice.getByRole("button", { name: /advance to next phase/i }).click();
+      await expect(alice.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
+      await expect(bob.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
+
+      // Carol joins late during VOTE phase
+      const ctx3 = await browser.newContext();
+      const carol = await ctx3.newPage();
+      await carol.goto(roomUrl);
+      await carol.getByLabel(/display name/i).fill("Carol");
+      await carol.getByRole("button", { name: /join/i }).click();
+
+      // Carol sees VOTE phase and existing items
+      await expect(carol.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
+      await expect(carol.getByText("Alice's item")).toBeVisible({ timeout: 5000 });
+
+      // Advance to REVIEW
+      await alice.getByRole("button", { name: /advance to next phase/i }).click();
+      await expect(alice.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
+      await expect(bob.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
+      await expect(carol.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
+
+      // Dave joins late during REVIEW phase
+      const ctx4 = await browser.newContext();
+      const dave = await ctx4.newPage();
+      await dave.goto(roomUrl);
+      await dave.getByLabel(/display name/i).fill("Dave");
+      await dave.getByRole("button", { name: /join/i }).click();
+
+      // Dave sees REVIEW phase and results
+      await expect(dave.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
+      await expect(dave.getByText("Alice's item")).toBeVisible({ timeout: 5000 });
+      await expect(dave.getByText(/Results are read-only/i)).toBeVisible({ timeout: 5000 });
+
+      await ctx1.close();
+      await ctx2.close();
+      await ctx3.close();
+      await ctx4.close();
     });
   });
 
