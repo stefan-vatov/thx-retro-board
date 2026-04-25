@@ -1,8 +1,20 @@
 // @ts-expect-error -- cloudflare:workers vitest module
 import { env } from "cloudflare:workers";
 import { describe, it, expect } from "vitest";
+import type { RoomState } from "../src/domain";
 
 describe("RetroRoom Durable Object", () => {
+  async function getFreshMovePreconditions(stub: { getRoomState: () => Promise<RoomState> }, itemId: string) {
+    const state = await stub.getRoomState();
+    const item = state.items.find((candidate) => candidate.id === itemId);
+    if (!item) throw new Error(`Missing item ${itemId}`);
+    return {
+      expectedVersion: state.version,
+      sourceGroupId: item.columnId ?? item.groupId,
+      sourceIndex: item.order,
+    };
+  }
+
   it("responds to sayHello RPC", async () => {
     const id = env.RETRO_ROOM.idFromName("test-room-hello");
     const stub = env.RETRO_ROOM.get(id);
@@ -251,7 +263,12 @@ describe("RetroRoom Durable Object", () => {
 
       await stub.setPhase("fac1", "organise");
       const beforeInvalidMove = await stub.getRoomState();
-      const moveInvalid = await stub.moveItemToGroup("fac1", addValid.item!.id, "missing-column", 0);
+      const movedItem = beforeInvalidMove.items.find((item) => item.id === addValid.item!.id)!;
+      const moveInvalid = await stub.moveItemToGroup("fac1", addValid.item!.id, "missing-column", 0, {
+        expectedVersion: beforeInvalidMove.version,
+        sourceGroupId: movedItem.columnId ?? movedItem.groupId,
+        sourceIndex: movedItem.order,
+      });
       expect(moveInvalid.success).toBe(false);
       expect(await stub.getRoomState()).toEqual(beforeInvalidMove);
     });
@@ -707,6 +724,27 @@ describe("RetroRoom Durable Object", () => {
       return stub;
     }
 
+    async function freshMovePreconditions(stub: Awaited<ReturnType<typeof setupOrganiseRoom>>, itemId: string) {
+      const state = await stub.getRoomState();
+      const item = state.items.find((candidate) => candidate.id === itemId);
+      if (!item) throw new Error(`Missing item ${itemId}`);
+      return {
+        expectedVersion: state.version,
+        sourceGroupId: item.columnId ?? item.groupId,
+        sourceIndex: item.order,
+      };
+    }
+
+    async function moveItemWithFreshPreconditions(
+      stub: Awaited<ReturnType<typeof setupOrganiseRoom>>,
+      participantId: string,
+      itemId: string,
+      targetGroupId: string | null,
+      targetIndex: number,
+    ) {
+      return stub.moveItemToGroup(participantId, itemId, targetGroupId, targetIndex, await freshMovePreconditions(stub, itemId));
+    }
+
     it("createGroup creates a group during organise phase", async () => {
       const stub = await setupOrganiseRoom("test-create-group");
       const result = await stub.createGroup("fac1", "Process");
@@ -806,13 +844,49 @@ describe("RetroRoom Durable Object", () => {
       const state0 = await stub.getRoomState();
       const itemId = state0.items[0]!.id;
 
-      const result = await stub.moveItemToGroup("fac1", itemId, groupId, 0);
+      const result = await moveItemWithFreshPreconditions(stub, "fac1", itemId, groupId, 0);
       expect(result.success).toBe(true);
 
       const state = await stub.getRoomState();
       expect(state.version).toBe(state0.version + 1);
       const moved = state.items.find((i) => i.id === itemId);
       expect(moved?.groupId).toBe(groupId);
+    });
+
+    it("moveItemToGroup rejects missing preconditions without mutating state", async () => {
+      const stub = await setupOrganiseRoom("test-move-item-missing-preconditions");
+      const groupResult = await stub.createGroup("fac1", "Process");
+      const before = await stub.getRoomState();
+      const itemId = before.items[0]!.id;
+
+      const result = await stub.moveItemToGroup("fac1", itemId, groupResult.group!.id, 0);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/precondition/i);
+      expect(await stub.getRoomState()).toEqual(before);
+    });
+
+    it("moveItemToGroup rejects partial preconditions without mutating state", async () => {
+      const stub = await setupOrganiseRoom("test-move-item-partial-preconditions");
+      const groupResult = await stub.createGroup("fac1", "Process");
+      const before = await stub.getRoomState();
+      const item = before.items[0]!;
+
+      const partialRequests = [
+        { expectedVersion: before.version },
+        { sourceGroupId: item.columnId },
+        { sourceIndex: item.order },
+        { expectedVersion: before.version, sourceGroupId: item.columnId },
+        { expectedVersion: before.version, sourceIndex: item.order },
+        { sourceGroupId: item.columnId, sourceIndex: item.order },
+      ];
+
+      for (const preconditions of partialRequests) {
+        const result = await stub.moveItemToGroup("fac1", item.id, groupResult.group!.id, 0, preconditions);
+        expect(result.success).toBe(false);
+        expect(result.error).toMatch(/precondition/i);
+        expect(await stub.getRoomState()).toEqual(before);
+      }
     });
 
     it("moveItemToGroup moves item to ungrouped (null)", async () => {
@@ -823,8 +897,8 @@ describe("RetroRoom Durable Object", () => {
       const state0 = await stub.getRoomState();
       const itemId = state0.items[0]!.id;
 
-      await stub.moveItemToGroup("fac1", itemId, groupId, 0);
-      const result = await stub.moveItemToGroup("fac1", itemId, null, 0);
+      await moveItemWithFreshPreconditions(stub, "fac1", itemId, groupId, 0);
+      const result = await moveItemWithFreshPreconditions(stub, "fac1", itemId, null, 0);
       expect(result.success).toBe(true);
 
       const state = await stub.getRoomState();
@@ -849,7 +923,12 @@ describe("RetroRoom Durable Object", () => {
       await stub.createGroup("fac1", "Process");
       const before = await stub.getRoomState();
 
-      const result = await stub.moveItemToGroup("fac1", "nonexistent", null, 0);
+      const state = await stub.getRoomState();
+      const result = await stub.moveItemToGroup("fac1", "nonexistent", null, 0, {
+        expectedVersion: state.version,
+        sourceGroupId: null,
+        sourceIndex: 0,
+      });
       expect(result.success).toBe(false);
       expect(result.error).toContain("Item not found");
       expect(await stub.getRoomState()).toEqual(before);
@@ -860,7 +939,7 @@ describe("RetroRoom Durable Object", () => {
       const state0 = await stub.getRoomState();
       const itemId = state0.items[0]!.id;
 
-      const result = await stub.moveItemToGroup("fac1", itemId, "nonexistent-group", 0);
+      const result = await moveItemWithFreshPreconditions(stub, "fac1", itemId, "nonexistent-group", 0);
       expect(result.success).toBe(false);
       expect(result.error).toContain("Column not found");
       expect(await stub.getRoomState()).toEqual(state0);
@@ -886,7 +965,7 @@ describe("RetroRoom Durable Object", () => {
       const itemId = before.items[0]!.id;
 
       for (const targetIndex of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
-        const result = await stub.moveItemToGroup("fac1", itemId, targetGroupId, targetIndex);
+        const result = await moveItemWithFreshPreconditions(stub, "fac1", itemId, targetGroupId, targetIndex);
         expect(result.success).toBe(false);
         expect(result.error).toMatch(/Target index/);
         expect(await stub.getRoomState()).toEqual(before);
@@ -900,7 +979,7 @@ describe("RetroRoom Durable Object", () => {
       const before = await stub.getRoomState();
       const itemId = before.items[0]!.id;
 
-      const result = await stub.moveItemToGroup("fac1", itemId, targetGroupId, 1);
+      const result = await moveItemWithFreshPreconditions(stub, "fac1", itemId, targetGroupId, 1);
       expect(result.success).toBe(false);
       expect(result.error).toContain("Target index out of bounds");
       expect(await stub.getRoomState()).toEqual(before);
@@ -913,14 +992,14 @@ describe("RetroRoom Durable Object", () => {
       let state = await stub.getRoomState();
       const [itemA, itemB, itemC] = state.items;
 
-      await stub.moveItemToGroup("fac1", itemA!.id, startColumnId, 0);
-      await stub.moveItemToGroup("fac1", itemB!.id, stopColumnId, 0);
-      await stub.moveItemToGroup("fac1", itemC!.id, startColumnId, 1);
+      await moveItemWithFreshPreconditions(stub, "fac1", itemA!.id, startColumnId, 0);
+      await moveItemWithFreshPreconditions(stub, "fac1", itemB!.id, stopColumnId, 0);
+      await moveItemWithFreshPreconditions(stub, "fac1", itemC!.id, startColumnId, 1);
       state = await stub.getRoomState();
       const versionBeforeMove = state.version;
       const itemCBeforeMove = state.items.find((item) => item.id === itemC!.id)!;
 
-      const result = await stub.moveItemToGroup("p2", itemC!.id, stopColumnId, 1);
+      const result = await moveItemWithFreshPreconditions(stub, "p2", itemC!.id, stopColumnId, 1);
       expect(result.success).toBe(true);
 
       const after = await stub.getRoomState();
@@ -943,8 +1022,8 @@ describe("RetroRoom Durable Object", () => {
       const itemIds = state0.items.map((item) => item.id);
       const draggedItemId = itemIds[0]!;
 
-      const first = await stub.moveItemToGroup("fac1", draggedItemId, startColumnId, 0);
-      const second = await stub.moveItemToGroup("p2", draggedItemId, stopColumnId, 0);
+      const first = await moveItemWithFreshPreconditions(stub, "fac1", draggedItemId, startColumnId, 0);
+      const second = await moveItemWithFreshPreconditions(stub, "p2", draggedItemId, stopColumnId, 0);
       expect(first.success).toBe(true);
       expect(second.success).toBe(true);
 
@@ -953,6 +1032,25 @@ describe("RetroRoom Durable Object", () => {
       expect(finalState.items.map((item) => item.id).sort()).toEqual([...itemIds].sort());
       expect(finalState.items.filter((item) => item.id === draggedItemId)).toHaveLength(1);
       expect(finalState.items.find((item) => item.id === draggedItemId)?.columnId).toBe(stopColumnId);
+    });
+
+    it("sequential no-precondition drag/drop requests are rejected without version changes", async () => {
+      const stub = await setupOrganiseRoom("test-move-item-no-precondition-sequential");
+      const state0 = await stub.getRoomState();
+      const startColumnId = state0.columns.find((column) => column.name === "Start")!.id;
+      const stopColumnId = state0.columns.find((column) => column.name === "Stop")!.id;
+      const draggedItemId = state0.items[0]!.id;
+
+      const first = await stub.moveItemToGroup("fac1", draggedItemId, startColumnId, 0);
+      const afterFirst = await stub.getRoomState();
+      const second = await stub.moveItemToGroup("p2", draggedItemId, stopColumnId, 0);
+
+      expect(first.success).toBe(false);
+      expect(second.success).toBe(false);
+      expect(first.error).toMatch(/precondition/i);
+      expect(second.error).toMatch(/precondition/i);
+      expect(afterFirst).toEqual(state0);
+      expect(await stub.getRoomState()).toEqual(state0);
     });
 
     it("moveItemToGroup rejects stale drag/drop version preconditions without mutating state", async () => {
@@ -1022,7 +1120,7 @@ describe("RetroRoom Durable Object", () => {
 
       // Move first duplicate only
       const firstDup = state0.items[0]!;
-      const result = await stub.moveItemToGroup("fac1", firstDup.id, groupId, 0);
+      const result = await moveItemWithFreshPreconditions(stub, "fac1", firstDup.id, groupId, 0);
       expect(result.success).toBe(true);
 
       const state = await stub.getRoomState();
@@ -1100,7 +1198,7 @@ describe("RetroRoom Durable Object", () => {
       const groupId = groupResult.group!.id;
 
       // Move item A into the group
-      await stub.moveItemToGroup("fac1", state0.items[0]!.id, groupId, 0);
+      await moveItemWithFreshPreconditions(stub, "fac1", state0.items[0]!.id, groupId, 0);
 
       // Read back from storage
       const state = await stub.getRoomState();
@@ -1135,10 +1233,10 @@ describe("RetroRoom Durable Object", () => {
       const g2a = orgState.items.find((i) => i.text === "G2-A")!;
       const g2b = orgState.items.find((i) => i.text === "G2-B")!;
 
-      await stub.moveItemToGroup("fac1", g1a.id, g1Id, 0);
-      await stub.moveItemToGroup("fac1", g1b.id, g1Id, 1);
-      await stub.moveItemToGroup("fac1", g2a.id, g2Id, 0);
-      await stub.moveItemToGroup("fac1", g2b.id, g2Id, 1);
+      await moveItemWithFreshPreconditions(stub, "fac1", g1a.id, g1Id, 0);
+      await moveItemWithFreshPreconditions(stub, "fac1", g1b.id, g1Id, 1);
+      await moveItemWithFreshPreconditions(stub, "fac1", g2a.id, g2Id, 0);
+      await moveItemWithFreshPreconditions(stub, "fac1", g2b.id, g2Id, 1);
       // Ungrouped-1 stays ungrouped
 
       // Now reorder only g1 items (partial reorder - send only g1 IDs)
@@ -1352,7 +1450,7 @@ describe("RetroRoom Durable Object", () => {
       await stub.createGroup("fac1", "Process");
       const orgState = await stub.getRoomState();
       const groupId = orgState.groups[0]!.id;
-      await stub.moveItemToGroup("fac1", orgState.items[0]!.id, groupId, 0);
+      await stub.moveItemToGroup("fac1", orgState.items[0]!.id, groupId, 0, await getFreshMovePreconditions(stub, orgState.items[0]!.id));
       await stub.setPhase("fac1", "vote");
 
       const voteState = await stub.getRoomState();
@@ -1473,8 +1571,8 @@ describe("RetroRoom Durable Object", () => {
       const groupId = orgState.groups[0]!.id;
       const itemAId = orgState.items.find((i) => i.text === "Item A")!.id;
       const itemBId = orgState.items.find((i) => i.text === "Item B")!.id;
-      await stub.moveItemToGroup("fac1", itemAId, groupId, 0);
-      await stub.moveItemToGroup("fac1", itemBId, groupId, 1);
+      await stub.moveItemToGroup("fac1", itemAId, groupId, 0, await getFreshMovePreconditions(stub, itemAId));
+      await stub.moveItemToGroup("fac1", itemBId, groupId, 1, await getFreshMovePreconditions(stub, itemBId));
       // Item C stays ungrouped
       await stub.setPhase("fac1", "vote");
       return { stub, groupId, itemAId, itemBId, itemCId: orgState.items.find((i) => i.text === "Item C")!.id };
@@ -1803,8 +1901,8 @@ describe("RetroRoom Durable Object", () => {
       const groupId = state.groups[0]!.id;
       const item1Id = state.items.find((i) => i.text === "Improve standups")!.id;
       const item2Id = state.items.find((i) => i.text === "Better docs")!.id;
-      await stub.moveItemToGroup("fac1", item1Id, groupId, 0);
-      await stub.moveItemToGroup("fac1", item2Id, groupId, 1);
+      await stub.moveItemToGroup("fac1", item1Id, groupId, 0, await getFreshMovePreconditions(stub, item1Id));
+      await stub.moveItemToGroup("fac1", item2Id, groupId, 1, await getFreshMovePreconditions(stub, item2Id));
 
       // Advance to vote
       await stub.setPhase("fac1", "vote");

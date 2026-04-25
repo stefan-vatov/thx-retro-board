@@ -52,9 +52,44 @@ interface StoredState {
 }
 
 interface MoveItemPreconditions {
-  expectedVersion?: number;
-  sourceGroupId?: string | null;
-  sourceIndex?: number;
+  expectedVersion: number;
+  sourceGroupId: string | null;
+  sourceIndex: number;
+}
+
+function validateMoveItemPreconditions(
+  preconditions: Partial<MoveItemPreconditions> | undefined,
+): { success: true; preconditions: MoveItemPreconditions } | { success: false; error: string } {
+  const hasExpectedVersion = Object.prototype.hasOwnProperty.call(preconditions ?? {}, "expectedVersion");
+  const hasSourceGroupId = Object.prototype.hasOwnProperty.call(preconditions ?? {}, "sourceGroupId");
+  const hasSourceIndex = Object.prototype.hasOwnProperty.call(preconditions ?? {}, "sourceIndex");
+
+  if (!hasExpectedVersion || !hasSourceGroupId || !hasSourceIndex) {
+    return { success: false, error: "Move item preconditions are required" };
+  }
+
+  const expectedVersion = preconditions?.expectedVersion;
+  const sourceGroupId = preconditions?.sourceGroupId;
+  const sourceIndex = preconditions?.sourceIndex;
+
+  if (typeof expectedVersion !== "number" || !Number.isFinite(expectedVersion) || !Number.isInteger(expectedVersion)) {
+    return { success: false, error: "Expected version must be a finite integer" };
+  }
+  if (sourceGroupId !== null && typeof sourceGroupId !== "string") {
+    return { success: false, error: "Source column precondition must be a string or null" };
+  }
+  if (typeof sourceIndex !== "number" || !Number.isFinite(sourceIndex) || !Number.isInteger(sourceIndex)) {
+    return { success: false, error: "Source index must be a finite integer" };
+  }
+
+  return {
+    success: true,
+    preconditions: {
+      expectedVersion,
+      sourceGroupId,
+      sourceIndex,
+    },
+  };
 }
 
 function normalizeColumns(stored: Pick<StoredState, "columns" | "groups">): Column[] {
@@ -448,7 +483,7 @@ export class RetroRoom extends DurableObject<Env> {
     itemId: string,
     targetGroupId: string | null,
     targetIndex: number,
-    preconditions: MoveItemPreconditions = {},
+    preconditions?: Partial<MoveItemPreconditions>,
   ): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
 
@@ -461,34 +496,27 @@ export class RetroRoom extends DurableObject<Env> {
       return { success: false, error: "Participant not found" };
     }
 
+    const validatedPreconditions = validateMoveItemPreconditions(preconditions);
+    if (!validatedPreconditions.success) {
+      return validatedPreconditions;
+    }
+
     const item = s.items.find((i) => i.id === itemId);
     if (!item) {
       return { success: false, error: "Item not found" };
     }
 
-    if (preconditions.expectedVersion !== undefined) {
-      if (!Number.isFinite(preconditions.expectedVersion) || !Number.isInteger(preconditions.expectedVersion)) {
-        return { success: false, error: "Expected version must be a finite integer" };
-      }
-      if (preconditions.expectedVersion !== s.version) {
-        return { success: false, error: "Stale item move rejected: room version changed" };
-      }
+    if (validatedPreconditions.preconditions.expectedVersion !== s.version) {
+      return { success: false, error: "Stale item move rejected: room version changed" };
     }
 
-    if (preconditions.sourceGroupId !== undefined) {
-      const currentSourceGroupId = item.columnId ?? item.groupId;
-      if (preconditions.sourceGroupId !== currentSourceGroupId) {
-        return { success: false, error: "Stale item move rejected: source column changed" };
-      }
+    const currentSourceGroupId = item.columnId ?? item.groupId;
+    if (validatedPreconditions.preconditions.sourceGroupId !== currentSourceGroupId) {
+      return { success: false, error: "Stale item move rejected: source column changed" };
     }
 
-    if (preconditions.sourceIndex !== undefined) {
-      if (!Number.isFinite(preconditions.sourceIndex) || !Number.isInteger(preconditions.sourceIndex)) {
-        return { success: false, error: "Source index must be a finite integer" };
-      }
-      if (preconditions.sourceIndex !== item.order) {
-        return { success: false, error: "Stale item move rejected: source order changed" };
-      }
+    if (validatedPreconditions.preconditions.sourceIndex !== item.order) {
+      return { success: false, error: "Stale item move rejected: source order changed" };
     }
 
     if (targetGroupId !== null && !s.groups.some((g) => g.id === targetGroupId)) {

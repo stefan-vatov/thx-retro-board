@@ -27,9 +27,9 @@ export type ClientToServerMessage =
       itemId: string;
       groupId: string | null;
       index: number;
-      expectedVersion?: number;
-      sourceGroupId?: string | null;
-      sourceIndex?: number;
+      expectedVersion: number;
+      sourceGroupId: string | null;
+      sourceIndex: number;
     }
   | { type: "set-phase"; phase: import("./types").Phase }
   | { type: "set-vote-budget"; budget: number }
