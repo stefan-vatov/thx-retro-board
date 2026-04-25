@@ -20,13 +20,26 @@ export function HomePage() {
   }
 
   return (
-    <div style={{ maxWidth: 480, margin: "4rem auto", padding: "0 1rem" }}>
-      <h1>Retro Board</h1>
-      <p>Create a new retrospective room and invite your team.</p>
-      <button onClick={handleCreate} disabled={creating}>
-        {creating ? "Creating..." : "Create Room"}
-      </button>
-      {error && <p style={{ color: "red" }}>{error}</p>}
+    <div className="content-shell content-shell--narrow" style={{ minHeight: "100vh", display: "flex", flexDirection: "column", justifyContent: "center" }}>
+      <div className="glass-panel" style={{ textAlign: "center" }}>
+        <h1 className="page-title" style={{ marginBottom: "var(--space-3)", letterSpacing: "-0.03em" }}>Retro Board</h1>
+        <p style={{ color: "var(--text-secondary)", marginBottom: "var(--space-6)", lineHeight: "var(--leading-relaxed)" }}>
+          Create a new retrospective room and invite your team to collaborate through timed phases.
+        </p>
+        <button
+          className="btn btn--primary"
+          style={{ width: "100%" }}
+          onClick={handleCreate}
+          disabled={creating}
+        >
+          {creating ? "Creating…" : "Create Room"}
+        </button>
+        {error && (
+          <div className="status-msg status-msg--error" style={{ marginTop: "var(--space-4)", textAlign: "left" }} role="alert">
+            {error}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

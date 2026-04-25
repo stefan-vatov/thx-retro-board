@@ -12,30 +12,31 @@ export function ReviewBoard({ roomState }: ReviewBoardProps) {
 
   if (!hasItems) {
     return (
-      <div style={{ padding: "2rem 0", textAlign: "center", color: "#888" }}>
-        <p>No items were added during this retro.</p>
+      <div className="empty-state">
+        <div className="empty-state__icon">📋</div>
+        <p className="empty-state__text">No items were added during this retro.</p>
       </div>
     );
   }
 
   return (
     <div>
-      <div style={{ marginBottom: "1rem", padding: "0.5rem 0.75rem", border: "1px solid #ddd", borderRadius: 4, background: "#f5f5f5" }}>
-        <strong>Review Phase</strong>
-        <span style={{ marginLeft: "0.5rem", fontSize: "0.85rem", color: "#666" }}>
-          — Results are read-only
-        </span>
+      <div className="review-banner" role="status" aria-live="polite">
+        <span>📋</span>
+        <span>Review Phase — Results are read-only</span>
       </div>
 
       {sortedGroups.map((group) => {
         const groupItems = getGroupedItems(roomState.items, group.id);
         return (
-          <div key={group.id} style={{ marginTop: "1rem", padding: "0.75rem", border: "1px solid #ddd", borderRadius: 4, background: "#fafafa" }}>
-            <h4 style={{ margin: "0 0 0.5rem 0" }}>{group.name}</h4>
+          <div key={group.id} className="group-panel">
+            <div className="group-panel__header">
+              <h4 className="group-panel__title">{group.name}</h4>
+            </div>
             {groupItems.length === 0 ? (
-              <p style={{ color: "#aaa", fontSize: "0.85rem", margin: 0 }}>No items.</p>
+              <p className="text-muted" style={{ fontSize: "var(--text-sm)", margin: 0 }}>No items.</p>
             ) : (
-              <ul style={{ listStyle: "none", padding: 0 }}>
+              <ul className="item-list">
                 {groupItems.map((item) => (
                   <ReviewItemRow key={item.id} item={item} votes={roomState.votes} />
                 ))}
@@ -46,9 +47,11 @@ export function ReviewBoard({ roomState }: ReviewBoardProps) {
       })}
 
       {ungrouped.length > 0 && (
-        <div style={{ marginTop: "1rem", padding: "0.75rem", border: "1px dashed #ccc", borderRadius: 4 }}>
-          <h4 style={{ margin: "0 0 0.5rem 0" }}>Ungrouped</h4>
-          <ul style={{ listStyle: "none", padding: 0 }}>
+        <div className="ungrouped-section">
+          <div className="section-header">
+            <span className="section-title">Ungrouped</span>
+          </div>
+          <ul className="item-list">
             {ungrouped.map((item) => (
               <ReviewItemRow key={item.id} item={item} votes={roomState.votes} />
             ))}
@@ -63,15 +66,15 @@ function ReviewItemRow({ item, votes }: { item: { id: string; text: string }; vo
   const totalVotes = getVotesForItem(votes, item.id);
 
   return (
-    <li style={{ padding: "0.5rem 0.6rem", borderBottom: "1px solid #eee", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-      <span style={{ flex: 1 }}>{item.text}</span>
+    <li className="item-row">
+      <span className="item-row__text">{item.text}</span>
       <span style={{
-        fontSize: "0.85rem",
-        color: totalVotes > 0 ? "#333" : "#aaa",
-        marginLeft: "1rem",
+        fontSize: "var(--text-sm)",
+        color: totalVotes > 0 ? "var(--text-primary)" : "var(--text-muted)",
+        marginLeft: "var(--space-3)",
         minWidth: "3.5rem",
         textAlign: "right",
-        fontWeight: totalVotes > 0 ? 600 : 400,
+        fontWeight: totalVotes > 0 ? "var(--weight-semibold)" : "var(--weight-normal)",
       }}>
         {totalVotes} vote{totalVotes !== 1 ? "s" : ""}
       </span>

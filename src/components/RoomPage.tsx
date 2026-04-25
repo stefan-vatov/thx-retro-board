@@ -28,7 +28,7 @@ function TimerDisplay({ timer }: { timer: RoomState["timer"] }) {
   }, [timer.startedAt, timer.durationSeconds]);
 
   if (timer.startedAt === null || timer.durationSeconds === null) {
-    return <span style={{ marginLeft: "1rem", fontSize: "0.9rem", color: "#888" }}>No timer set</span>;
+    return <span className="timer-display" style={{ marginLeft: "var(--space-3)" }}>No timer set</span>;
   }
 
   const elapsed = (now - timer.startedAt) / 1000;
@@ -38,7 +38,10 @@ function TimerDisplay({ timer }: { timer: RoomState["timer"] }) {
   const secs = Math.floor(remaining % 60);
 
   return (
-    <span style={{ marginLeft: "1rem", fontSize: "0.9rem", color: expired ? "#c00" : "#333", fontWeight: expired ? 600 : 400 }}>
+    <span
+      className={`timer-display${expired ? " timer-display--expired" : " timer-display--running"}`}
+      style={{ marginLeft: "var(--space-3)" }}
+    >
       {expired ? "⏰ Timer expired" : `⏱ ${mins}:${secs.toString().padStart(2, "0")} remaining`}
     </span>
   );
@@ -202,34 +205,59 @@ export function RoomPage() {
   }
 
   if (pageState === "loading") {
-    return <div style={{ maxWidth: 480, margin: "4rem auto", padding: "0 1rem" }}>Loading...</div>;
+    return (
+      <div className="content-shell content-shell--narrow" style={{ minHeight: "100vh", display: "flex", flexDirection: "column", justifyContent: "center" }}>
+        <div className="glass-panel loading-state">
+          <p className="loading-state__text">Loading room…</p>
+        </div>
+      </div>
+    );
   }
 
   if (pageState === "not-found") {
-    return <div style={{ maxWidth: 480, margin: "4rem auto", padding: "0 1rem" }}><h1>Room Not Found</h1><p>This room does not exist or has been closed.</p></div>;
+    return (
+      <div className="content-shell content-shell--narrow" style={{ minHeight: "100vh", display: "flex", flexDirection: "column", justifyContent: "center" }}>
+        <div className="glass-panel empty-state">
+          <div className="empty-state__icon">🔍</div>
+          <h1 className="page-title" style={{ marginBottom: "var(--space-3)" }}>Room Not Found</h1>
+          <p className="empty-state__text">This room does not exist or has been closed.</p>
+        </div>
+      </div>
+    );
   }
 
   if (pageState === "join") {
     return (
-      <div style={{ maxWidth: 480, margin: "4rem auto", padding: "0 1rem" }}>
-        <h1>Join Room</h1>
-        <p>Enter your display name to join this retrospective.</p>
-        <form onSubmit={handleJoin}>
-          <div>
-            <label htmlFor="displayName">Display Name</label>
-            <br />
-            <input
-              id="displayName"
-              type="text"
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              maxLength={50}
-              placeholder="Your name"
-            />
-          </div>
-          <button type="submit" style={{ marginTop: "0.5rem" }}>Join</button>
-          {joinError && <p style={{ color: "red" }}>{joinError}</p>}
-        </form>
+      <div className="content-shell content-shell--narrow" style={{ minHeight: "100vh", display: "flex", flexDirection: "column", justifyContent: "center" }}>
+        <div className="glass-panel">
+          <h1 className="page-title" style={{ marginBottom: "var(--space-3)" }}>Join Room</h1>
+          <p style={{ color: "var(--text-secondary)", marginBottom: "var(--space-5)", lineHeight: "var(--leading-relaxed)" }}>
+            Enter your display name to join this retrospective.
+          </p>
+          <form onSubmit={handleJoin}>
+            <div className="input-group" style={{ marginBottom: "var(--space-4)" }}>
+              <label className="input-label" htmlFor="displayName">Display Name</label>
+              <input
+                id="displayName"
+                className="input"
+                type="text"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                maxLength={50}
+                placeholder="Your name"
+                autoComplete="nickname"
+              />
+            </div>
+            <button type="submit" className="btn btn--primary" style={{ width: "100%" }}>
+              Join
+            </button>
+            {joinError && (
+              <div className="status-msg status-msg--error" style={{ marginTop: "var(--space-3)" }} role="alert">
+                {joinError}
+              </div>
+            )}
+          </form>
+        </div>
       </div>
     );
   }
@@ -238,82 +266,101 @@ export function RoomPage() {
   const isFacilitator = currentParticipant?.isFacilitator === true;
 
   return (
-    <div style={{ maxWidth: 720, margin: "2rem auto", padding: "0 1rem" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
-        <h1>Retro Board</h1>
-        <span>
-          {connected ? "🟢 Connected" : "🔴 Disconnected"}
-        </span>
+    <div className="content-shell">
+      <div className="room-header">
+        <h1 className="room-header__title">Retro Board</h1>
+        <div className="room-header__meta">
+          <span className="connection-dot-wrapper" style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+            <span className={`connection-dot ${connected ? "connection-dot--connected" : "connection-dot--disconnected"}`} aria-hidden="true" />
+            <span className="sr-only">{connected ? "Connected" : "Disconnected"}</span>
+            <span aria-live="polite">{connected ? "Connected" : "Disconnected"}</span>
+          </span>
+        </div>
       </div>
 
-      <div style={{ marginBottom: "1rem", padding: "0.75rem", border: "1px solid #ccc", borderRadius: 4 }}>
-        <strong>Phase: {roomState?.phase?.toUpperCase() ?? "UNKNOWN"}</strong>
+      <div className="phase-status" role="region" aria-label="Room status">
+        <span className="phase-status__label">Phase</span>
+        <span className="phase-status__value badge badge--phase">{roomState?.phase?.toUpperCase() ?? "UNKNOWN"}</span>
         <TimerDisplay timer={roomState?.timer ?? { startedAt: null, durationSeconds: null, expired: false }} />
-        <span style={{ marginLeft: "1rem" }}>
+        <span style={{ marginLeft: "var(--space-2)", color: "var(--text-muted)", fontSize: "var(--text-sm)" }}>
           Participants: {roomState?.participants.map((p) => p.displayName).join(", ") || "None"}
         </span>
-        {isFacilitator && <span style={{ marginLeft: "1rem" }}>⭐ Facilitator</span>}
+        {isFacilitator && (
+          <span className="facilitator-badge">
+            ⭐ Facilitator
+          </span>
+        )}
       </div>
 
       {isFacilitator && (
-        <div style={{ marginBottom: "1rem", padding: "0.75rem", border: "1px solid #ddd", borderRadius: 4, background: "#f9f9f9" }}>
-          <strong>Facilitator Controls</strong>
-          <div style={{ marginTop: "0.5rem", display: "flex", gap: "0.5rem", alignItems: "center" }}>
-            <label htmlFor="voteBudget">Vote Budget:</label>
-            <input
-              id="voteBudget"
-              type="number"
-              min={1}
-              max={100}
-              value={displayBudget}
-              onChange={(e) => setVoteBudgetInput(e.target.value)}
-              style={{ width: 80 }}
-            />
-            <button onClick={handleSetBudget}>Set</button>
-            {budgetMsg && <span style={{ fontSize: "0.85rem" }}>{budgetMsg}</span>}
-          </div>
-          <div style={{ marginTop: "0.5rem", display: "flex", gap: "0.5rem", alignItems: "center" }}>
-            <button
-              onClick={handleAdvancePhase}
-              disabled={roomState?.phase === "review"}
-            >
-              Advance to Next Phase
-            </button>
-            {phaseMsg && <span style={{ fontSize: "0.85rem" }}>{phaseMsg}</span>}
-          </div>
-          <div style={{ marginTop: "0.5rem", display: "flex", gap: "0.5rem", alignItems: "center" }}>
-            <label htmlFor="timerMinutes">Timer (min):</label>
-            <input
-              id="timerMinutes"
-              type="number"
-              min={1}
-              max={60}
-              value={timerMinutesInput}
-              onChange={(e) => setTimerMinutesInput(e.target.value)}
-              style={{ width: 80 }}
-            />
-            <button onClick={handleSetTimer}>Start Timer</button>
-            {timerMsg && <span style={{ fontSize: "0.85rem" }}>{timerMsg}</span>}
+        <div className="facilitator-panel" role="region" aria-label="Facilitator controls">
+          <p className="facilitator-panel__title">Facilitator Controls</p>
+          <div className="facilitator-panel__controls">
+            <div className="facilitator-panel__row">
+              <label className="input-label" htmlFor="voteBudget">Vote Budget</label>
+              <input
+                id="voteBudget"
+                className="input"
+                type="number"
+                min={1}
+                max={100}
+                value={displayBudget}
+                onChange={(e) => setVoteBudgetInput(e.target.value)}
+                style={{ width: "5rem" }}
+              />
+              <button className="btn btn--secondary btn--sm" onClick={handleSetBudget}>Set</button>
+              {budgetMsg && <span className="status-msg status-msg--info" style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }}>{budgetMsg}</span>}
+            </div>
+            <div className="facilitator-panel__row">
+              <button
+                className="btn btn--primary"
+                onClick={handleAdvancePhase}
+                disabled={roomState?.phase === "review"}
+              >
+                Advance to Next Phase
+              </button>
+              {phaseMsg && <span className="status-msg status-msg--info" style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }}>{phaseMsg}</span>}
+            </div>
+            <div className="facilitator-panel__row">
+              <label className="input-label" htmlFor="timerMinutes">Timer (minutes)</label>
+              <input
+                id="timerMinutes"
+                className="input"
+                type="number"
+                min={1}
+                max={60}
+                value={timerMinutesInput}
+                onChange={(e) => setTimerMinutesInput(e.target.value)}
+                style={{ width: "5rem" }}
+              />
+              <button className="btn btn--secondary btn--sm" onClick={handleSetTimer}>Start Timer</button>
+              {timerMsg && <span className="status-msg status-msg--info" style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }}>{timerMsg}</span>}
+            </div>
           </div>
         </div>
       )}
 
-      <div style={{ marginBottom: "1rem" }}>
-        <h2>Board</h2>
+      <div className="board-area glass-panel">
+        <h2 className="section-title" style={{ marginBottom: "var(--space-4)" }}>Board</h2>
         {roomState?.phase === "write" && (
-          <form onSubmit={handleAddItem} style={{ marginBottom: "1rem", display: "flex", gap: "0.5rem" }}>
+          <form onSubmit={handleAddItem} style={{ marginBottom: "var(--space-5)", display: "flex", gap: "var(--space-2)" }}>
             <input
               type="text"
+              className="input"
               value={itemInput}
               onChange={(e) => setItemInput(e.target.value)}
               maxLength={500}
-              placeholder="Add a retro item..."
-              style={{ flex: 1, padding: "0.4rem" }}
+              placeholder="Add a retro item…"
+              style={{ flex: 1 }}
             />
-            <button type="submit">Add</button>
+            <button type="submit" className="btn btn--primary">Add</button>
           </form>
         )}
-        {itemError && <p style={{ color: "red", marginBottom: "0.5rem" }}>{itemError}</p>}
+        {itemError && (
+          <div className="status-msg status-msg--error" style={{ marginBottom: "var(--space-3)" }} role="alert">
+            {itemError}
+          </div>
+        )}
 
         {roomState?.phase === "organise" ? (
           <OrganiseBoard roomState={roomState} send={send} />
@@ -323,12 +370,15 @@ export function RoomPage() {
           <ReviewBoard roomState={roomState} />
         ) : roomState?.phase === "write" ? (
           (roomState?.items?.length ?? 0) === 0 ? (
-            <p style={{ color: "#888" }}>No items yet. The board is ready for the write phase.</p>
+            <div className="empty-state">
+              <div className="empty-state__icon">📝</div>
+              <p className="empty-state__text">No items yet. The board is ready for the write phase.</p>
+            </div>
           ) : (
-            <ul style={{ listStyle: "none", padding: 0 }}>
+            <ul className="item-list">
               {roomState?.items?.map((item) => (
-                <li key={item.id} style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid #eee" }}>
-                  {item.text}
+                <li key={item.id} className="item-row">
+                  <span className="item-row__text">{item.text}</span>
                 </li>
               ))}
             </ul>
@@ -336,7 +386,7 @@ export function RoomPage() {
         ) : null}
       </div>
 
-      <div style={{ fontSize: "0.85rem", color: "#888" }}>
+      <div className="room-footer">
         Room ID: {roomId}
       </div>
     </div>

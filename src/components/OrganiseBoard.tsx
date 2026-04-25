@@ -60,19 +60,19 @@ export function OrganiseBoard({ roomState, send }: OrganiseBoardProps) {
   return (
     <div>
       {isOrganise && (
-        <div style={{ marginBottom: "1rem", display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
-          <form onSubmit={handleCreateGroup} style={{ display: "flex", gap: "0.5rem" }}>
+        <div style={{ marginBottom: "var(--space-4)", display: "flex", gap: "var(--space-3)", alignItems: "flex-start" }}>
+          <form onSubmit={handleCreateGroup} className="input-row" style={{ flex: 1 }}>
             <input
               type="text"
+              className="input"
               value={newGroupName}
               onChange={(e) => setNewGroupName(e.target.value)}
               maxLength={100}
-              placeholder="New group name..."
-              style={{ padding: "0.4rem", width: 200 }}
+              placeholder="New group name…"
             />
-            <button type="submit">Create Group</button>
+            <button type="submit" className="btn btn--secondary btn--sm">Create Group</button>
           </form>
-          {groupError && <span style={{ color: "red", fontSize: "0.85rem" }}>{groupError}</span>}
+          {groupError && <span className="status-msg status-msg--error" style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }}>{groupError}</span>}
         </div>
       )}
 
@@ -85,7 +85,10 @@ export function OrganiseBoard({ roomState, send }: OrganiseBoardProps) {
       )}
 
       {allItemsEmpty ? (
-        <p style={{ color: "#888" }}>No items to organise.</p>
+        <div className="empty-state">
+          <div className="empty-state__icon">📋</div>
+          <p className="empty-state__text">No items to organise.</p>
+        </div>
       ) : (
         <>
           {/* Ordered groups */}
@@ -108,31 +111,35 @@ export function OrganiseBoard({ roomState, send }: OrganiseBoardProps) {
 
           {/* Ungrouped items */}
           {ungrouped.length > 0 && (
-            <div style={{ marginTop: "1rem", padding: "0.75rem", border: "1px dashed #ccc", borderRadius: 4 }}>
-              <h4 style={{ margin: "0 0 0.5rem 0" }}>Ungrouped</h4>
-              <ul style={{ listStyle: "none", padding: 0 }}>
+            <div className="ungrouped-section">
+              <div className="section-header">
+                <span className="section-title">Ungrouped</span>
+              </div>
+              <ul className="item-list">
                 {ungrouped.map((item, idx) => (
-                  <li key={item.id} style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid #eee", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span>{item.text}</span>
+                  <li key={item.id} className="item-row">
+                    <span className="item-row__text">{item.text}</span>
                     {isOrganise && (
-                      <span style={{ display: "flex", gap: "0.25rem" }}>
+                      <span className="item-row__actions">
                         <button
+                          className="reorder-btn"
                           disabled={idx === 0}
                           onClick={() => handleReorderItems(ungrouped, idx, idx - 1)}
                           title="Move up"
-                          style={{ padding: "0 0.4rem" }}
+                          aria-label="Move up"
                         >
                           ↑
                         </button>
                         <button
+                          className="reorder-btn"
                           disabled={idx === ungrouped.length - 1}
                           onClick={() => handleReorderItems(ungrouped, idx, idx + 1)}
                           title="Move down"
-                          style={{ padding: "0 0.4rem" }}
+                          aria-label="Move down"
                         >
                           ↓
                         </button>
-                        <button onClick={() => setMovingItemId(item.id)} title="Move to group">
+                        <button className="btn btn--secondary btn--sm" onClick={() => setMovingItemId(item.id)} title="Move to group">
                           →
                         </button>
                       </span>
@@ -161,24 +168,26 @@ interface GroupSectionProps {
 
 function GroupSection({ group, items, groupIndex, totalGroups, isOrganise, onReorderItems, onReorderGroups, onMoveItem }: GroupSectionProps) {
   return (
-    <div style={{ marginTop: "1rem", padding: "0.75rem", border: "1px solid #ddd", borderRadius: 4, background: "#fafafa" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
-        <h4 style={{ margin: 0 }}>{group.name}</h4>
+    <div className="group-panel">
+      <div className="group-panel__header">
+        <h4 className="group-panel__title">{group.name}</h4>
         {isOrganise && (
-          <span style={{ display: "flex", gap: "0.25rem" }}>
+          <span className="group-panel__controls">
             <button
+              className="reorder-btn"
               disabled={groupIndex === 0}
               onClick={() => onReorderGroups(groupIndex, groupIndex - 1)}
               title="Move group up"
-              style={{ padding: "0 0.4rem" }}
+              aria-label="Move group up"
             >
               ↑
             </button>
             <button
+              className="reorder-btn"
               disabled={groupIndex === totalGroups - 1}
               onClick={() => onReorderGroups(groupIndex, groupIndex + 1)}
               title="Move group down"
-              style={{ padding: "0 0.4rem" }}
+              aria-label="Move group down"
             >
               ↓
             </button>
@@ -186,31 +195,33 @@ function GroupSection({ group, items, groupIndex, totalGroups, isOrganise, onReo
         )}
       </div>
       {items.length === 0 ? (
-        <p style={{ color: "#aaa", fontSize: "0.85rem", margin: 0 }}>No items in this group.</p>
+        <p className="text-muted" style={{ fontSize: "var(--text-sm)", margin: 0 }}>No items in this group.</p>
       ) : (
-        <ul style={{ listStyle: "none", padding: 0 }}>
+        <ul className="item-list">
           {items.map((item, idx) => (
-            <li key={item.id} style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid #eee", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span>{item.text}</span>
+            <li key={item.id} className="item-row">
+              <span className="item-row__text">{item.text}</span>
               {isOrganise && (
-                <span style={{ display: "flex", gap: "0.25rem" }}>
+                <span className="item-row__actions">
                   <button
+                    className="reorder-btn"
                     disabled={idx === 0}
                     onClick={() => onReorderItems(items, idx, idx - 1)}
                     title="Move up"
-                    style={{ padding: "0 0.4rem" }}
+                    aria-label="Move up"
                   >
                     ↑
                   </button>
                   <button
+                    className="reorder-btn"
                     disabled={idx === items.length - 1}
                     onClick={() => onReorderItems(items, idx, idx + 1)}
                     title="Move down"
-                    style={{ padding: "0 0.4rem" }}
+                    aria-label="Move down"
                   >
                     ↓
                   </button>
-                  <button onClick={() => onMoveItem(item.id)} title="Move to group">
+                  <button className="btn btn--secondary btn--sm" onClick={() => onMoveItem(item.id)} title="Move to group">
                     →
                   </button>
                 </span>
@@ -231,16 +242,16 @@ interface MoveTargetPickerProps {
 
 function MoveTargetPicker({ groups, onCancel, onSelect }: MoveTargetPickerProps) {
   return (
-    <div style={{ marginBottom: "1rem", padding: "0.75rem", border: "1px solid #4a90d9", borderRadius: 4, background: "#f0f7ff" }}>
-      <strong>Move item to:</strong>
-      <div style={{ marginTop: "0.5rem", display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-        <button onClick={() => onSelect(null, 0)}>Ungrouped</button>
+    <div className="move-picker" role="dialog" aria-label="Move item to group">
+      <p className="move-picker__title">Move item to:</p>
+      <div className="move-picker__options">
+        <button className="btn btn--secondary btn--sm" onClick={() => onSelect(null, 0)}>Ungrouped</button>
         {groups.map((g) => (
-          <button key={g.id} onClick={() => onSelect(g.id, 0)}>
+          <button key={g.id} className="btn btn--secondary btn--sm" onClick={() => onSelect(g.id, 0)}>
             {g.name}
           </button>
         ))}
-        <button onClick={onCancel} style={{ color: "red" }}>Cancel</button>
+        <button className="btn btn--danger btn--sm" onClick={onCancel}>Cancel</button>
       </div>
     </div>
   );

@@ -56,30 +56,32 @@ export function VoteBoard({ roomState, participantId, send }: VoteBoardProps) {
     const myVotes = getParticipantVotesForItem(item.id);
 
     return (
-      <li key={item.id} style={{ padding: "0.4rem 0.6rem", borderBottom: "1px solid #eee", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span style={{ flex: 1 }}>{item.text}</span>
-        <span style={{ display: "flex", gap: "0.25rem", alignItems: "center", marginLeft: "1rem" }}>
-          <span style={{ fontSize: "0.85rem", color: "#666", minWidth: "3rem", textAlign: "right" }}>
+      <li key={item.id} className="item-row">
+        <span className="item-row__text">{item.text}</span>
+        <span className="item-row__actions" style={{ display: "flex", gap: "var(--space-2)", alignItems: "center" }}>
+          <span style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", minWidth: "3rem", textAlign: "right" }}>
             {totalVotes} vote{totalVotes !== 1 ? "s" : ""}
           </span>
           {myVotes > 0 && (
-            <span style={{ fontSize: "0.75rem", color: "#4a90d9", marginLeft: "0.25rem" }}>
+            <span style={{ fontSize: "var(--text-xs)", color: "var(--accent)", marginLeft: "var(--space-1)" }}>
               (you: {myVotes})
             </span>
           )}
           <button
+            className="reorder-btn"
             onClick={() => handleRemoveVote(item.id)}
             disabled={myVotes === 0 || pendingRemoves.has(item.id)}
             title="Remove one of your votes"
-            style={{ padding: "0 0.4rem", fontSize: "0.85rem" }}
+            aria-label="Remove one of your votes"
           >
             −
           </button>
           <button
+            className="reorder-btn"
             onClick={() => handleVote(item.id)}
             disabled={effectiveRemaining <= 0}
             title="Add a vote"
-            style={{ padding: "0 0.4rem", fontSize: "0.85rem" }}
+            aria-label="Add a vote"
           >
             +
           </button>
@@ -90,9 +92,10 @@ export function VoteBoard({ roomState, participantId, send }: VoteBoardProps) {
 
   return (
     <div>
-      <div style={{ marginBottom: "1rem", padding: "0.5rem 0.75rem", border: "1px solid #ddd", borderRadius: 4, background: "#f5f5f5" }}>
-        <strong>Your votes:</strong> {used} used / {roomState.voteBudget} total
-        <span style={{ marginLeft: "1rem", color: effectiveRemaining === 0 ? "#c00" : "#555" }}>
+      <div className="vote-budget-bar" role="status" aria-live="polite">
+        <span className="vote-budget-bar__label">Your votes:</span>
+        <span className="vote-budget-bar__value">{used} used / {roomState.voteBudget} total</span>
+        <span className={`vote-budget-bar__remaining${effectiveRemaining === 0 ? " vote-budget-bar__remaining--zero" : ""}`}>
           ({effectiveRemaining} remaining)
         </span>
       </div>
@@ -100,12 +103,14 @@ export function VoteBoard({ roomState, participantId, send }: VoteBoardProps) {
       {sortedGroups.map((group) => {
         const groupItems = getGroupedItems(roomState.items, group.id);
         return (
-          <div key={group.id} style={{ marginTop: "1rem", padding: "0.75rem", border: "1px solid #ddd", borderRadius: 4, background: "#fafafa" }}>
-            <h4 style={{ margin: "0 0 0.5rem 0" }}>{group.name}</h4>
+          <div key={group.id} className="group-panel">
+            <div className="group-panel__header">
+              <h4 className="group-panel__title">{group.name}</h4>
+            </div>
             {groupItems.length === 0 ? (
-              <p style={{ color: "#aaa", fontSize: "0.85rem", margin: 0 }}>No items.</p>
+              <p className="text-muted" style={{ fontSize: "var(--text-sm)", margin: 0 }}>No items.</p>
             ) : (
-              <ul style={{ listStyle: "none", padding: 0 }}>
+              <ul className="item-list">
                 {groupItems.map((item) => renderItem(item))}
               </ul>
             )}
@@ -117,9 +122,11 @@ export function VoteBoard({ roomState, participantId, send }: VoteBoardProps) {
         const ungrouped = getUngroupedItems(roomState.items);
         if (ungrouped.length === 0) return null;
         return (
-          <div style={{ marginTop: "1rem", padding: "0.75rem", border: "1px dashed #ccc", borderRadius: 4 }}>
-            <h4 style={{ margin: "0 0 0.5rem 0" }}>Ungrouped</h4>
-            <ul style={{ listStyle: "none", padding: 0 }}>
+          <div className="ungrouped-section">
+            <div className="section-header">
+              <span className="section-title">Ungrouped</span>
+            </div>
+            <ul className="item-list">
               {ungrouped.map((item) => renderItem(item))}
             </ul>
           </div>
@@ -127,7 +134,10 @@ export function VoteBoard({ roomState, participantId, send }: VoteBoardProps) {
       })()}
 
       {roomState.items.length === 0 && (
-        <p style={{ color: "#888" }}>No items to vote on.</p>
+        <div className="empty-state">
+          <div className="empty-state__icon">🗳️</div>
+          <p className="empty-state__text">No items to vote on.</p>
+        </div>
       )}
     </div>
   );
