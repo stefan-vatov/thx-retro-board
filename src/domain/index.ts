@@ -1,10 +1,14 @@
-export { type Phase, type Participant, type RetroItem, type Group, type VoteAllocation, type TimerState, type RoomState } from "./types";
+export { type Phase, type Participant, type RetroItem, type Column, type Group, type VoteAllocation, type TimerState, type RoomState } from "./types";
 export { type ServerToClientMessage, type ClientToServerMessage } from "./messages";
 export {
   createRoomState,
   createParticipant,
   createItem,
+  createColumn,
   createGroup,
+  DEFAULT_COLUMNS,
+  getDefaultColumns,
+  MAX_COLUMN_NAME_LENGTH,
   PHASE_ORDER,
   canTransition,
   isPhaseAllowed,
@@ -19,10 +23,15 @@ export {
   reorderList,
   sanitizeGroupName,
   isValidGroupName,
+  sanitizeColumnName,
+  isValidColumnName,
   getUngroupedItems,
   getGroupedItems,
   applyReorderItems,
   applyReorderGroups,
+  applyReorderColumns,
+  applyEditColumn,
+  validateFullColumnPermutation,
   applyMoveItemToGroup,
   applyCastVote,
   applyRemoveVote,

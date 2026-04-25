@@ -147,6 +147,128 @@ describe("RetroRoom Durable Object", () => {
     expect(state2.version).toBeGreaterThan(state1.version);
   });
 
+  describe("configurable columns protocol", () => {
+    async function setupColumnRoom(roomId: string) {
+      const id = env.RETRO_ROOM.idFromName(roomId);
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.initRoom(roomId);
+      await stub.join("fac1", "Facilitator");
+      await stub.join("p2", "Bob");
+      return stub;
+    }
+
+    it("new rooms start with stable default Start Stop Continue columns", async () => {
+      const id = env.RETRO_ROOM.idFromName("test-columns-defaults");
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.initRoom("test-columns-defaults");
+
+      const state = await stub.getRoomState();
+      expect(state.columns).toEqual([
+        { id: "start", name: "Start", order: 0 },
+        { id: "stop", name: "Stop", order: 1 },
+        { id: "continue", name: "Continue", order: 2 },
+      ]);
+      expect(state.groups).toEqual(state.columns);
+    });
+
+    it("facilitator can create edit and reorder columns with version increments", async () => {
+      const stub = await setupColumnRoom("test-columns-mutate");
+      const before = await stub.getRoomState();
+      const create = await stub.createColumn("fac1", "  Learn  ");
+      expect(create.success).toBe(true);
+      expect(create.column?.name).toBe("Learn");
+      expect(create.column?.id).toEqual(expect.any(String));
+
+      const afterCreate = await stub.getRoomState();
+      expect(afterCreate.version).toBeGreaterThan(before.version);
+      expect(afterCreate.columns.at(-1)).toEqual(create.column);
+
+      const edit = await stub.editColumn("fac1", create.column!.id, "Improve");
+      expect(edit.success).toBe(true);
+      const afterEdit = await stub.getRoomState();
+      expect(afterEdit.version).toBeGreaterThan(afterCreate.version);
+      expect(afterEdit.columns.find((column) => column.id === create.column!.id)?.name).toBe("Improve");
+
+      const order = afterEdit.columns.map((column) => column.id).reverse();
+      const reorder = await stub.reorderColumns("fac1", order);
+      expect(reorder.success).toBe(true);
+      const afterReorder = await stub.getRoomState();
+      expect(afterReorder.version).toBeGreaterThan(afterEdit.version);
+      expect(afterReorder.columns.map((column) => column.id)).toEqual(order);
+      expect(afterReorder.columns.map((column) => column.order)).toEqual([0, 1, 2, 3]);
+    });
+
+    it("rejects non-facilitator and out-of-phase column mutations atomically", async () => {
+      const stub = await setupColumnRoom("test-columns-permissions");
+      const before = await stub.getRoomState();
+      expect((await stub.createColumn("p2", "Blocked")).success).toBe(false);
+      expect((await stub.editColumn("p2", "start", "Blocked")).success).toBe(false);
+      expect((await stub.reorderColumns("p2", before.columns.map((column) => column.id).reverse())).success).toBe(false);
+      expect(await stub.getRoomState()).toEqual(before);
+
+      await stub.setPhase("fac1", "organise");
+      await stub.setPhase("fac1", "vote");
+      const voteState = await stub.getRoomState();
+      expect((await stub.createColumn("fac1", "Blocked")).success).toBe(false);
+      expect((await stub.editColumn("fac1", "start", "Blocked")).success).toBe(false);
+      expect((await stub.reorderColumns("fac1", voteState.columns.map((column) => column.id).reverse())).success).toBe(false);
+      expect(await stub.getRoomState()).toEqual(voteState);
+    });
+
+    it("rejects invalid column IDs and reorder payloads without version changes", async () => {
+      const stub = await setupColumnRoom("test-columns-invalid");
+      const before = await stub.getRoomState();
+      expect((await stub.editColumn("fac1", "missing", "Name")).success).toBe(false);
+      expect((await stub.reorderColumns("fac1", ["start", "start", "continue"])).success).toBe(false);
+      expect((await stub.reorderColumns("fac1", ["start", "stop"])).success).toBe(false);
+      expect((await stub.reorderColumns("fac1", ["start", "stop", "other"])).success).toBe(false);
+      expect(await stub.getRoomState()).toEqual(before);
+    });
+
+    it("validates item column associations on create and move", async () => {
+      const stub = await setupColumnRoom("test-columns-item-associations");
+      const addInvalid = await stub.addItem("fac1", "Invalid", "missing-column");
+      expect(addInvalid.success).toBe(false);
+      const addValid = await stub.addItem("fac1", "In Start", "start");
+      expect(addValid.success).toBe(true);
+      expect(addValid.item?.columnId).toBe("start");
+
+      await stub.setPhase("fac1", "organise");
+      const beforeInvalidMove = await stub.getRoomState();
+      const moveInvalid = await stub.moveItemToGroup("fac1", addValid.item!.id, "missing-column", 0);
+      expect(moveInvalid.success).toBe(false);
+      expect(await stub.getRoomState()).toEqual(beforeInvalidMove);
+    });
+
+    it("keeps column IDs stable across edits so item associations survive", async () => {
+      const stub = await setupColumnRoom("test-columns-stable-edit");
+      const itemResult = await stub.addItem("fac1", "Start doing this", "start");
+      expect(itemResult.success).toBe(true);
+      const edit = await stub.editColumn("fac1", "start", "Begin");
+      expect(edit.success).toBe(true);
+      const state = await stub.getRoomState();
+      expect(state.columns.find((column) => column.id === "start")?.name).toBe("Begin");
+      expect(state.items.find((item) => item.id === itemResult.item!.id)?.columnId).toBe("start");
+    });
+
+    it("normalizes legacy snapshots without columns or item column IDs", async () => {
+      const id = env.RETRO_ROOM.idFromName("test-columns-legacy-normalize");
+      const stub = env.RETRO_ROOM.get(id);
+      await stub.seedStoredStateForTest({
+        roomId: "test-columns-legacy-normalize",
+        participants: [{ id: "fac1", displayName: "Facilitator", isFacilitator: true }],
+        facilitatorId: "fac1",
+        items: [{ id: "legacy-item", text: "Old item", authorId: "fac1", groupId: "legacy-group", order: 0 } as never],
+        groups: [],
+      });
+
+      const state = await stub.getRoomState();
+      expect(state.columns.map((column) => column.name)).toEqual(["Start", "Stop", "Continue"]);
+      expect(state.items[0]?.columnId).toBeNull();
+      expect(state.items[0]?.groupId).toBeNull();
+    });
+  });
+
   it("rejects WebSocket without pid and token", async () => {
     const roomId = "test-ws-auth-missing";
     const id = env.RETRO_ROOM.idFromName(roomId);
@@ -577,8 +699,8 @@ describe("RetroRoom Durable Object", () => {
       expect(result.group!.name).toBe("Process");
 
       const state = await stub.getRoomState();
-      expect(state.groups).toHaveLength(1);
-      expect(state.groups[0]!.name).toBe("Process");
+      expect(state.groups.map((group) => group.name)).toEqual(["Start", "Stop", "Continue", "Process"]);
+      expect(state.columns).toEqual(state.groups);
     });
 
     it("createGroup rejects empty name", async () => {
@@ -588,25 +710,25 @@ describe("RetroRoom Durable Object", () => {
       expect(result.error).toBeTruthy();
 
       const state = await stub.getRoomState();
-      expect(state.groups).toHaveLength(0);
+      expect(state.groups.map((group) => group.name)).toEqual(["Start", "Stop", "Continue"]);
     });
 
-    it("createGroup is rejected outside organise phase", async () => {
+    it("createGroup is allowed during write phase for facilitators", async () => {
       const id = env.RETRO_ROOM.idFromName("test-create-group-phase");
       const stub = env.RETRO_ROOM.get(id);
       await stub.initRoom("test-create-group-phase");
       await stub.join("fac1", "Facilitator");
 
       const result = await stub.createGroup("fac1", "Process");
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("organise phase");
+      expect(result.success).toBe(true);
+      expect(result.group?.name).toBe("Process");
     });
 
-    it("any participant can create a group during organise", async () => {
+    it("non-facilitator cannot create a group during organise", async () => {
       const stub = await setupOrganiseRoom("test-create-group-any");
       const result = await stub.createGroup("p2", "Team");
-      expect(result.success).toBe(true);
-      expect(result.group!.name).toBe("Team");
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("facilitator");
     });
 
     it("reorderItems reorders items during organise phase", async () => {
@@ -642,11 +764,11 @@ describe("RetroRoom Durable Object", () => {
       const state0 = await stub.getRoomState();
       const gIds = state0.groups.map((g) => g.id);
 
-      const result = await stub.reorderGroups("fac1", [gIds[1]!, gIds[0]!]);
+      const result = await stub.reorderGroups("fac1", [gIds[4]!, gIds[3]!, gIds[0]!, gIds[1]!, gIds[2]!]);
       expect(result.success).toBe(true);
 
       const state = await stub.getRoomState();
-      expect(state.groups.map((g) => g.name)).toEqual(["Group B", "Group A"]);
+      expect(state.groups.map((g) => g.name)).toEqual(["Group B", "Group A", "Start", "Stop", "Continue"]);
     });
 
     it("reorderGroups is rejected outside organise phase", async () => {
@@ -657,7 +779,7 @@ describe("RetroRoom Durable Object", () => {
 
       const result = await stub.reorderGroups("fac1", ["g1", "g2"]);
       expect(result.success).toBe(false);
-      expect(result.error).toContain("organise phase");
+      expect(result.error).toContain("Column reorder");
     });
 
     it("moveItemToGroup moves an item into a group", async () => {
@@ -721,7 +843,7 @@ describe("RetroRoom Durable Object", () => {
 
       const result = await stub.moveItemToGroup("fac1", itemId, "nonexistent-group", 0);
       expect(result.success).toBe(false);
-      expect(result.error).toContain("Group not found");
+      expect(result.error).toContain("Column not found");
     });
 
     it("duplicate text items remain distinct through organisation", async () => {
@@ -774,7 +896,7 @@ describe("RetroRoom Durable Object", () => {
       const state = await stub.getRoomState();
       expect(state.phase).toBe("organise");
       expect(state.items).toEqual([]);
-      expect(state.groups).toEqual([]);
+      expect(state.groups.map((group) => group.name)).toEqual(["Start", "Stop", "Continue"]);
     });
 
     it("organisation is blocked during vote phase", async () => {
@@ -813,18 +935,17 @@ describe("RetroRoom Durable Object", () => {
 
     it("groups and item order persist after state save", async () => {
       const stub = await setupOrganiseRoom("test-org-persist");
-      await stub.createGroup("fac1", "Group A");
+      const groupResult = await stub.createGroup("fac1", "Group A");
 
       const state0 = await stub.getRoomState();
-      const groupId = state0.groups[0]!.id;
+      const groupId = groupResult.group!.id;
 
       // Move item A into the group
       await stub.moveItemToGroup("fac1", state0.items[0]!.id, groupId, 0);
 
       // Read back from storage
       const state = await stub.getRoomState();
-      expect(state.groups).toHaveLength(1);
-      expect(state.groups[0]!.name).toBe("Group A");
+      expect(state.groups.map((group) => group.name)).toContain("Group A");
       const grouped = state.items.filter((i) => i.groupId === groupId);
       expect(grouped).toHaveLength(1);
     });
@@ -1076,8 +1197,7 @@ describe("RetroRoom Durable Object", () => {
       await stub.setPhase("fac1", "vote");
 
       const voteState = await stub.getRoomState();
-      expect(voteState.groups).toHaveLength(1);
-      expect(voteState.groups[0]!.name).toBe("Process");
+      expect(voteState.groups.map((group) => group.name)).toContain("Process");
       const inGroup = voteState.items.filter((i) => i.groupId === groupId);
       expect(inGroup).toHaveLength(1);
 
@@ -1226,8 +1346,7 @@ describe("RetroRoom Durable Object", () => {
       const state = await stub.getRoomState();
 
       // Group should exist
-      expect(state.groups).toHaveLength(1);
-      expect(state.groups[0]!.id).toBe(groupId);
+      expect(state.groups.map((group) => group.id)).toContain(groupId);
 
       // Items in group should maintain order
       const groupedItems = state.items
@@ -1316,7 +1435,7 @@ describe("RetroRoom Durable Object", () => {
       const state = joinResult.state!;
       expect(state.phase).toBe("review");
       expect(state.items).toHaveLength(3);
-      expect(state.groups).toHaveLength(1);
+      expect(state.groups.map((group) => group.name)).toEqual(["Start", "Stop", "Continue", "Process"]);
 
       // Votes from before review should be present
       const totalA = state.votes
@@ -1355,7 +1474,7 @@ describe("RetroRoom Durable Object", () => {
       const state = await stub.getRoomState();
       expect(state.phase).toBe("review");
       expect(state.items).toEqual([]);
-      expect(state.groups).toEqual([]);
+      expect(state.groups.map((group) => group.name)).toEqual(["Start", "Stop", "Continue"]);
       expect(state.votes).toEqual([]);
     });
 
@@ -1549,7 +1668,7 @@ describe("RetroRoom Durable Object", () => {
 
       // Verify all state
       expect(state.items).toHaveLength(3);
-      expect(state.groups).toHaveLength(1);
+      expect(state.groups.map((group) => group.name)).toContain("Process");
       expect(state.participants).toHaveLength(2);
       expect(state.voteBudget).toBe(5);
 

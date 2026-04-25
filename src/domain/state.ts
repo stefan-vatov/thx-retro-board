@@ -1,4 +1,16 @@
-import type { Phase, Participant, RetroItem, Group, VoteAllocation, TimerState, RoomState } from "./types";
+import type { Phase, Participant, RetroItem, Group, Column, VoteAllocation, TimerState, RoomState } from "./types";
+
+export const DEFAULT_COLUMNS: readonly Column[] = [
+  { id: "start", name: "Start", order: 0 },
+  { id: "stop", name: "Stop", order: 1 },
+  { id: "continue", name: "Continue", order: 2 },
+] as const;
+
+export const MAX_COLUMN_NAME_LENGTH = 100;
+
+export function getDefaultColumns(): Column[] {
+  return DEFAULT_COLUMNS.map((column) => ({ ...column }));
+}
 
 export function createRoomState(roomId: string, voteBudget: number = 5): RoomState {
   return {
@@ -6,7 +18,8 @@ export function createRoomState(roomId: string, voteBudget: number = 5): RoomSta
     phase: "write",
     participants: [],
     items: [],
-    groups: [],
+    columns: getDefaultColumns(),
+    groups: getDefaultColumns(),
     votes: [],
     timer: { startedAt: null, durationSeconds: null, expired: false },
     voteBudget,
@@ -18,11 +31,15 @@ export function createParticipant(id: string, displayName: string, isFacilitator
   return { id, displayName, isFacilitator };
 }
 
-export function createItem(id: string, text: string, authorId: string, order: number): RetroItem {
-  return { id, text, authorId, groupId: null, order };
+export function createItem(id: string, text: string, authorId: string, order: number, columnId: string | null = null): RetroItem {
+  return { id, text, authorId, columnId, groupId: columnId, order };
 }
 
 export function createGroup(id: string, name: string, order: number): Group {
+  return { id, name, order };
+}
+
+export function createColumn(id: string, name: string, order: number): Column {
   return { id, name, order };
 }
 
@@ -84,22 +101,25 @@ export function reorderList<T>(list: T[], orderedIds: string[], idExtractor: (it
 }
 
 export function sanitizeGroupName(name: string): string {
-  return name.trim().slice(0, 100);
+  return name.trim().slice(0, MAX_COLUMN_NAME_LENGTH);
 }
 
 export function isValidGroupName(name: string): boolean {
   return sanitizeGroupName(name).length > 0;
 }
 
+export const sanitizeColumnName = sanitizeGroupName;
+export const isValidColumnName = isValidGroupName;
+
 export function getUngroupedItems(items: RetroItem[]): RetroItem[] {
   return items
-    .filter((item) => item.groupId === null)
+    .filter((item) => (item.columnId ?? item.groupId) === null)
     .sort((a, b) => a.order - b.order);
 }
 
 export function getGroupedItems(items: RetroItem[], groupId: string): RetroItem[] {
   return items
-    .filter((item) => item.groupId === groupId)
+    .filter((item) => (item.columnId ?? item.groupId) === groupId)
     .sort((a, b) => a.order - b.order);
 }
 
@@ -123,6 +143,45 @@ export function applyReorderGroups(groups: Group[], orderedIds: string[]): Group
   return reordered.map((g, idx) => ({ ...g, order: idx }));
 }
 
+export function validateFullColumnPermutation(columns: Column[], orderedIds: unknown): { valid: true; ids: string[] } | { valid: false; error: string } {
+  if (!Array.isArray(orderedIds)) {
+    return { valid: false, error: "Column order must be an array" };
+  }
+  if (!orderedIds.every((id): id is string => typeof id === "string")) {
+    return { valid: false, error: "Column order must contain only IDs" };
+  }
+  if (orderedIds.length !== columns.length) {
+    return { valid: false, error: "Column reorder must include every column exactly once" };
+  }
+  const existingIds = new Set(columns.map((column) => column.id));
+  const seen = new Set<string>();
+  for (const id of orderedIds) {
+    if (!existingIds.has(id)) {
+      return { valid: false, error: "Column reorder contains an unknown column" };
+    }
+    if (seen.has(id)) {
+      return { valid: false, error: "Column reorder contains a duplicate column" };
+    }
+    seen.add(id);
+  }
+  return { valid: true, ids: orderedIds };
+}
+
+export function applyReorderColumns(columns: Column[], orderedIds: string[]): Column[] {
+  return applyReorderGroups(columns, orderedIds);
+}
+
+export function applyEditColumn(columns: Column[], columnId: string, rawName: string): { columns: Column[]; error?: string } {
+  const sanitized = sanitizeColumnName(rawName);
+  if (!isValidColumnName(rawName)) {
+    return { columns, error: "Column name cannot be empty" };
+  }
+  if (!columns.some((column) => column.id === columnId)) {
+    return { columns, error: "Column not found" };
+  }
+  return { columns: columns.map((column) => column.id === columnId ? { ...column, name: sanitized } : column) };
+}
+
 export function applyMoveItemToGroup(
   items: RetroItem[],
   itemId: string,
@@ -132,15 +191,15 @@ export function applyMoveItemToGroup(
   const itemIndex = items.findIndex((i) => i.id === itemId);
   if (itemIndex === -1) return items;
 
-  const moved: RetroItem = { ...items[itemIndex]!, groupId: targetGroupId };
+  const moved: RetroItem = { ...items[itemIndex]!, columnId: targetGroupId, groupId: targetGroupId };
   const otherItems = items.filter((i) => i.id !== itemId);
 
-  const sameGroup = otherItems.filter((i) => i.groupId === targetGroupId);
+  const sameGroup = otherItems.filter((i) => (i.columnId ?? i.groupId) === targetGroupId);
   const before = sameGroup.slice(0, targetIndex);
   const after = sameGroup.slice(targetIndex);
 
   const updatedSameGroup: RetroItem[] = [...before, moved, ...after].map((i, idx) => ({ ...i, order: idx }));
-  const differentGroup = otherItems.filter((i) => i.groupId !== targetGroupId);
+  const differentGroup = otherItems.filter((i) => (i.columnId ?? i.groupId) !== targetGroupId);
 
   return [...differentGroup, ...updatedSameGroup];
 }

@@ -4,6 +4,10 @@ import {
   createParticipant,
   createItem,
   createGroup,
+  getDefaultColumns,
+  validateFullColumnPermutation,
+  applyReorderColumns,
+  applyEditColumn,
   PHASE_ORDER,
   canTransition,
   isPhaseAllowed,
@@ -32,7 +36,8 @@ function makeState(overrides: Partial<RoomState> & { roomId: string }): RoomStat
     phase: "write",
     participants: [],
     items: [],
-    groups: [],
+    columns: getDefaultColumns(),
+    groups: getDefaultColumns(),
     votes: [],
     timer: { startedAt: null, durationSeconds: null, expired: false },
     voteBudget: 5,
@@ -48,7 +53,8 @@ describe("createRoomState", () => {
     expect(state.phase).toBe("write");
     expect(state.participants).toEqual([]);
     expect(state.items).toEqual([]);
-    expect(state.groups).toEqual([]);
+    expect(state.columns.map((column) => column.name)).toEqual(["Start", "Stop", "Continue"]);
+    expect(state.groups).toEqual(state.columns);
     expect(state.votes).toEqual([]);
     expect(state.timer).toEqual({ startedAt: null, durationSeconds: null, expired: false });
     expect(state.voteBudget).toBe(5);
@@ -71,7 +77,7 @@ describe("createParticipant", () => {
 describe("createItem", () => {
   it("creates an item with null groupId", () => {
     const item = createItem("i1", "Improve standups", "p1", 0);
-    expect(item).toEqual({ id: "i1", text: "Improve standups", authorId: "p1", groupId: null, order: 0 });
+    expect(item).toEqual({ id: "i1", text: "Improve standups", authorId: "p1", columnId: null, groupId: null, order: 0 });
   });
 });
 
@@ -79,6 +85,32 @@ describe("createGroup", () => {
   it("creates a group with correct fields", () => {
     const g = createGroup("g1", "Process", 0);
     expect(g).toEqual({ id: "g1", name: "Process", order: 0 });
+  });
+});
+
+
+describe("column helpers", () => {
+  it("validates complete column reorder payloads atomically", () => {
+    const columns = getDefaultColumns();
+    expect(validateFullColumnPermutation(columns, columns.map((column) => column.id)).valid).toBe(true);
+    expect(validateFullColumnPermutation(columns, ["start", "start", "continue"]).valid).toBe(false);
+    expect(validateFullColumnPermutation(columns, ["start", "stop"]).valid).toBe(false);
+    expect(validateFullColumnPermutation(columns, ["start", "stop", "unknown"]).valid).toBe(false);
+    expect(validateFullColumnPermutation(columns, "start").valid).toBe(false);
+  });
+
+  it("reorders columns with stable IDs and contiguous order", () => {
+    const result = applyReorderColumns(getDefaultColumns(), ["continue", "start", "stop"]);
+    expect(result.map((column) => column.id)).toEqual(["continue", "start", "stop"]);
+    expect(result.map((column) => column.order)).toEqual([0, 1, 2]);
+  });
+
+  it("edits column names without changing IDs", () => {
+    const columns = getDefaultColumns();
+    const result = applyEditColumn(columns, "start", "  Begin  ");
+    expect(result.error).toBeUndefined();
+    expect(result.columns.find((column) => column.id === "start")?.name).toBe("Begin");
+    expect(result.columns.map((column) => column.id)).toEqual(columns.map((column) => column.id));
   });
 });
 

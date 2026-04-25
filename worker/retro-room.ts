@@ -6,6 +6,7 @@ import type {
   Participant,
   RetroItem,
   Group,
+  Column,
   VoteAllocation,
   ServerToClientMessage,
   ClientToServerMessage,
@@ -15,10 +16,13 @@ import {
   isValidItemText,
   canTransition,
   PHASE_ORDER,
-  sanitizeGroupName,
-  isValidGroupName,
+  sanitizeColumnName,
+  isValidColumnName,
+  getDefaultColumns,
+  applyReorderColumns,
+  applyEditColumn,
+  validateFullColumnPermutation,
   applyReorderItems,
-  applyReorderGroups,
   applyMoveItemToGroup,
   applyCastVote,
   applyRemoveVote,
@@ -36,6 +40,7 @@ interface StoredState {
   phase: RoomState["phase"];
   participants: Participant[];
   items: RetroItem[];
+  columns?: Column[];
   groups: Group[];
   votes: VoteAllocation[];
   facilitatorId: string | null;
@@ -43,6 +48,36 @@ interface StoredState {
   version: number;
   connectionTokens: Record<string, string>;
   timer: StoredTimer;
+}
+
+function normalizeColumns(stored: Pick<StoredState, "columns" | "groups">): Column[] {
+  const source = stored.columns ?? stored.groups;
+  if (!Array.isArray(source) || source.length === 0) {
+    return getDefaultColumns();
+  }
+  return source
+    .filter((column): column is Column => Boolean(column) && typeof column.id === "string" && typeof column.name === "string")
+    .map((column, index) => ({
+      id: column.id,
+      name: sanitizeColumnName(column.name) || `Column ${index + 1}`,
+      order: Number.isInteger(column.order) ? column.order : index,
+    }))
+    .sort((a, b) => a.order - b.order)
+    .map((column, index) => ({ ...column, order: index }));
+}
+
+function normalizeItems(items: RetroItem[], columns: Column[]): RetroItem[] {
+  const validColumnIds = new Set(columns.map((column) => column.id));
+  return items.map((item, index) => {
+    const candidate = item.columnId ?? item.groupId ?? null;
+    const columnId = candidate !== null && validColumnIds.has(candidate) ? candidate : null;
+    return {
+      ...item,
+      columnId,
+      groupId: columnId,
+      order: Number.isInteger(item.order) ? item.order : index,
+    };
+  });
 }
 
 function generateToken(): string {
@@ -70,14 +105,21 @@ export class RetroRoom extends DurableObject<Env> {
     if (this.state) return this.state;
     const stored = await this.ctx.storage.get<StoredState>("room");
     if (stored) {
-      this.state = stored;
-      return stored;
+      const columns = normalizeColumns(stored);
+      this.state = {
+        ...stored,
+        columns,
+        groups: columns,
+        items: normalizeItems(stored.items ?? [], columns),
+      };
+      return this.state;
     }
     return this.state!;
   }
 
   private async saveState(): Promise<void> {
     if (this.state) {
+      this.state.groups = this.state.columns ?? this.state.groups;
       this.state.version += 1;
       await this.ctx.storage.put("room", this.state);
     }
@@ -94,7 +136,8 @@ export class RetroRoom extends DurableObject<Env> {
       phase: "write",
       participants: [],
       items: [],
-      groups: [],
+      columns: getDefaultColumns(),
+      groups: getDefaultColumns(),
       votes: [],
       facilitatorId: null,
       voteBudget: 5,
@@ -113,6 +156,7 @@ export class RetroRoom extends DurableObject<Env> {
       phase: s.phase,
       participants: s.participants,
       items: s.items,
+      columns: s.columns ?? s.groups,
       groups: s.groups,
       votes: s.votes,
       timer,
@@ -199,7 +243,7 @@ export class RetroRoom extends DurableObject<Env> {
     return { success: true };
   }
 
-  async addItem(participantId: string, rawText: string): Promise<{ success: boolean; error?: string; item?: RetroItem }> {
+  async addItem(participantId: string, rawText: string, columnId: string | null = null): Promise<{ success: boolean; error?: string; item?: RetroItem }> {
     const s = await this.loadState();
 
     if (s.phase !== "write") {
@@ -210,12 +254,19 @@ export class RetroRoom extends DurableObject<Env> {
     if (!isValidItemText(rawText)) {
       return { success: false, error: "Item text cannot be empty" };
     }
+    if (!s.participants.some((participant) => participant.id === participantId)) {
+      return { success: false, error: "Participant not found" };
+    }
+    if (columnId !== null && !s.groups.some((column) => column.id === columnId)) {
+      return { success: false, error: "Column not found" };
+    }
 
     const item: RetroItem = {
       id: crypto.randomUUID(),
       text: sanitized,
       authorId: participantId,
-      groupId: null,
+      columnId,
+      groupId: columnId,
       order: s.items.length,
     };
     s.items.push(item);
@@ -283,30 +334,83 @@ export class RetroRoom extends DurableObject<Env> {
     return { success: true };
   }
 
-  async createGroup(_participantId: string, rawName: string): Promise<{ success: boolean; error?: string; group?: Group }> {
+  private canMutateColumns(s: StoredState, participantId: string): { success: true } | { success: false; error: string } {
+    if (!s.participants.some((participant) => participant.id === participantId)) {
+      return { success: false, error: "Participant not found" };
+    }
+    if (s.facilitatorId !== participantId) {
+      return { success: false, error: "Only the facilitator can configure columns" };
+    }
+    if (s.phase !== "write" && s.phase !== "organise") {
+      return { success: false, error: "Cannot configure columns during vote or review phase" };
+    }
+    return { success: true };
+  }
+
+  async createColumn(participantId: string, rawName: string): Promise<{ success: boolean; error?: string; column?: Column }> {
     const s = await this.loadState();
+    const allowed = this.canMutateColumns(s, participantId);
+    if (!allowed.success) return allowed;
 
-    if (s.phase !== "organise") {
-      return { success: false, error: "Cannot create groups outside organise phase" };
+    const sanitized = sanitizeColumnName(rawName);
+    if (!isValidColumnName(rawName)) {
+      return { success: false, error: "Column name cannot be empty" };
     }
 
-    const sanitized = sanitizeGroupName(rawName);
-    if (!isValidGroupName(rawName)) {
-      return { success: false, error: "Group name cannot be empty" };
-    }
-
-    const group: Group = {
+    const column: Column = {
       id: crypto.randomUUID(),
       name: sanitized,
       order: s.groups.length,
     };
-    s.groups.push(group);
+    s.groups.push(column);
+    s.columns = s.groups;
     await this.saveState();
+    this.broadcastState(s);
 
-    const broadcast: ServerToClientMessage = { type: "groups-changed", groups: s.groups };
-    this.broadcast(broadcast);
+    return { success: true, column };
+  }
 
-    return { success: true, group };
+  async editColumn(participantId: string, columnId: string, rawName: string): Promise<{ success: boolean; error?: string; column?: Column }> {
+    const s = await this.loadState();
+    const allowed = this.canMutateColumns(s, participantId);
+    if (!allowed.success) return allowed;
+    if (typeof columnId !== "string" || columnId.trim().length === 0) {
+      return { success: false, error: "Column not found" };
+    }
+
+    const result = applyEditColumn(s.groups, columnId, rawName);
+    if (result.error) {
+      return { success: false, error: result.error };
+    }
+    s.groups = result.columns;
+    s.columns = result.columns;
+    await this.saveState();
+    this.broadcastState(s);
+    return { success: true, column: s.groups.find((column) => column.id === columnId) };
+  }
+
+  async reorderColumns(participantId: string, orderedIds: unknown): Promise<{ success: boolean; error?: string }> {
+    const s = await this.loadState();
+    const allowed = this.canMutateColumns(s, participantId);
+    if (!allowed.success) return allowed;
+
+    const validation = validateFullColumnPermutation(s.groups, orderedIds);
+    if (!validation.valid) {
+      return { success: false, error: validation.error };
+    }
+    s.groups = applyReorderColumns(s.groups, validation.ids);
+    s.columns = s.groups;
+    await this.saveState();
+    this.broadcastState(s);
+    return { success: true };
+  }
+
+  async createGroup(participantId: string, rawName: string): Promise<{ success: boolean; error?: string; group?: Group }> {
+    const columnResult = await this.createColumn(participantId, rawName);
+    if (!columnResult.success) {
+      return { success: false, error: columnResult.error };
+    }
+    return { success: true, group: columnResult.column };
   }
 
   async reorderItems(_participantId: string, orderedIds: string[]): Promise<{ success: boolean; error?: string }> {
@@ -325,20 +429,8 @@ export class RetroRoom extends DurableObject<Env> {
     return { success: true };
   }
 
-  async reorderGroups(_participantId: string, orderedIds: string[]): Promise<{ success: boolean; error?: string }> {
-    const s = await this.loadState();
-
-    if (s.phase !== "organise") {
-      return { success: false, error: "Cannot reorder groups outside organise phase" };
-    }
-
-    s.groups = applyReorderGroups(s.groups, orderedIds);
-    await this.saveState();
-
-    const broadcast: ServerToClientMessage = { type: "groups-changed", groups: s.groups };
-    this.broadcast(broadcast);
-
-    return { success: true };
+  async reorderGroups(participantId: string, orderedIds: string[]): Promise<{ success: boolean; error?: string }> {
+    return this.reorderColumns(participantId, orderedIds);
   }
 
   async moveItemToGroup(_participantId: string, itemId: string, targetGroupId: string | null, targetIndex: number): Promise<{ success: boolean; error?: string }> {
@@ -353,11 +445,8 @@ export class RetroRoom extends DurableObject<Env> {
       return { success: false, error: "Item not found" };
     }
 
-    if (targetGroupId !== null) {
-      const groupExists = s.groups.some((g) => g.id === targetGroupId);
-      if (!groupExists) {
-        return { success: false, error: "Group not found" };
-      }
+    if (targetGroupId !== null && !s.groups.some((g) => g.id === targetGroupId)) {
+      return { success: false, error: "Column not found" };
     }
 
     s.items = applyMoveItemToGroup(s.items, itemId, targetGroupId, targetIndex);
@@ -449,6 +538,7 @@ export class RetroRoom extends DurableObject<Env> {
       phase: s.phase,
       participants: s.participants,
       items: s.items,
+      columns: s.columns ?? s.groups,
       groups: s.groups,
       votes: s.votes,
       timer,
@@ -555,7 +645,7 @@ export class RetroRoom extends DurableObject<Env> {
         break;
       }
       case "add-item": {
-        const result = await this.addItem(participantId, msg.text);
+        const result = await this.addItem(participantId, msg.text, msg.columnId ?? null);
         if (!result.success) {
           const ws = this.sessions.get(participantId);
           ws?.send(JSON.stringify({ type: "error", message: result.error }));
@@ -580,6 +670,30 @@ export class RetroRoom extends DurableObject<Env> {
       }
       case "create-group": {
         const result = await this.createGroup(participantId, msg.name);
+        if (!result.success) {
+          const ws = this.sessions.get(participantId);
+          ws?.send(JSON.stringify({ type: "error", message: result.error }));
+        }
+        break;
+      }
+      case "create-column": {
+        const result = await this.createColumn(participantId, msg.name);
+        if (!result.success) {
+          const ws = this.sessions.get(participantId);
+          ws?.send(JSON.stringify({ type: "error", message: result.error }));
+        }
+        break;
+      }
+      case "edit-column": {
+        const result = await this.editColumn(participantId, msg.columnId, msg.name);
+        if (!result.success) {
+          const ws = this.sessions.get(participantId);
+          ws?.send(JSON.stringify({ type: "error", message: result.error }));
+        }
+        break;
+      }
+      case "reorder-columns": {
+        const result = await this.reorderColumns(participantId, msg.columnIds);
         if (!result.success) {
           const ws = this.sessions.get(participantId);
           ws?.send(JSON.stringify({ type: "error", message: result.error }));
@@ -650,5 +764,23 @@ export class RetroRoom extends DurableObject<Env> {
     const s = await this.loadState();
     s.phase = phase;
     await this.saveState();
+  }
+
+  async seedStoredStateForTest(state: Partial<StoredState> & Pick<StoredState, "roomId">): Promise<void> {
+    const stored: StoredState = {
+      phase: "write",
+      participants: [],
+      items: [],
+      groups: [],
+      votes: [],
+      facilitatorId: null,
+      voteBudget: 5,
+      version: 0,
+      connectionTokens: {},
+      timer: { startedAt: null, durationSeconds: null, expired: false },
+      ...state,
+    };
+    await this.ctx.storage.put("room", stored);
+    this.state = null;
   }
 }
