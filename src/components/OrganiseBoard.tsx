@@ -16,6 +16,7 @@ export function OrganiseBoard({ roomState, send }: OrganiseBoardProps) {
 
   const sortedGroups = [...roomState.groups].sort((a, b) => a.order - b.order);
   const ungrouped = getUngroupedItems(roomState.items);
+  const movingItem = movingItemId ? roomState.items.find((i) => i.id === movingItemId) : null;
 
   function handleCreateGroup(e: React.FormEvent) {
     e.preventDefault();
@@ -51,8 +52,8 @@ export function OrganiseBoard({ roomState, send }: OrganiseBoardProps) {
   );
 
   function handleMoveToGroup(itemId: string, targetGroupId: string | null, targetIndex: number) {
-    send({ type: "move-item-to-group", itemId, groupId: targetGroupId, index: targetIndex });
     setMovingItemId(null);
+    send({ type: "move-item-to-group", itemId, groupId: targetGroupId, index: targetIndex });
   }
 
   const allItemsEmpty = roomState.items.length === 0;
@@ -79,6 +80,7 @@ export function OrganiseBoard({ roomState, send }: OrganiseBoardProps) {
       {movingItemId && (
         <MoveTargetPicker
           groups={sortedGroups}
+          movingItemText={movingItem?.text ?? null}
           onCancel={() => setMovingItemId(null)}
           onSelect={(groupId, index) => handleMoveToGroup(movingItemId, groupId, index)}
         />
@@ -236,18 +238,24 @@ function GroupSection({ group, items, groupIndex, totalGroups, isOrganise, onReo
 
 interface MoveTargetPickerProps {
   groups: Group[];
+  movingItemText: string | null;
   onCancel: () => void;
   onSelect: (groupId: string | null, index: number) => void;
 }
 
-function MoveTargetPicker({ groups, onCancel, onSelect }: MoveTargetPickerProps) {
+function MoveTargetPicker({ groups, movingItemText, onCancel, onSelect }: MoveTargetPickerProps) {
   return (
-    <div className="move-picker" role="dialog" aria-label="Move item to group">
+    <div className="move-picker" role="dialog" aria-label="Move item to group" aria-describedby={movingItemText ? "move-item-preview" : undefined}>
       <p className="move-picker__title">Move item to:</p>
-      <div className="move-picker__options">
-        <button className="btn btn--secondary btn--sm" onClick={() => onSelect(null, 0)}>Ungrouped</button>
+      {movingItemText && (
+        <p id="move-item-preview" style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", marginBottom: "var(--space-2)" }}>
+          Moving: <em>"{movingItemText}"</em>
+        </p>
+      )}
+      <div className="move-picker__options" role="group" aria-label="Destination options">
+        <button className="btn btn--secondary btn--sm" onClick={() => onSelect(null, 0)} aria-label="Move to Ungrouped">Ungrouped</button>
         {groups.map((g) => (
-          <button key={g.id} className="btn btn--secondary btn--sm" onClick={() => onSelect(g.id, 0)}>
+          <button key={g.id} className="btn btn--secondary btn--sm" onClick={() => onSelect(g.id, 0)} aria-label={`Move to group ${g.name}`}>
             {g.name}
           </button>
         ))}
