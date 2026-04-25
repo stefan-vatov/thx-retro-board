@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useParams } from "react-router-dom";
 import { joinRoom, getRoomState, setVoteBudget, setPhase } from "../api";
 import { useRoom } from "../hooks";
@@ -28,7 +28,7 @@ function TimerDisplay({ timer }: { timer: RoomState["timer"] }) {
   }, [timer.startedAt, timer.durationSeconds]);
 
   if (timer.startedAt === null || timer.durationSeconds === null) {
-    return <span className="timer-display" style={{ marginLeft: "var(--space-3)" }}>No timer set</span>;
+    return <span className="timer-display">No timer set</span>;
   }
 
   const elapsed = (now - timer.startedAt) / 1000;
@@ -38,10 +38,7 @@ function TimerDisplay({ timer }: { timer: RoomState["timer"] }) {
   const secs = Math.floor(remaining % 60);
 
   return (
-    <span
-      className={`timer-display${expired ? " timer-display--expired" : " timer-display--running"}`}
-      style={{ marginLeft: "var(--space-3)" }}
-    >
+    <span className={`timer-display${expired ? " timer-display--expired" : " timer-display--running"}`}>
       {expired ? "⏰ Timer expired" : `⏱ ${mins}:${secs.toString().padStart(2, "0")} remaining`}
     </span>
   );
@@ -60,6 +57,100 @@ function getStoredIdentity(roomId: string): { participantId: string; displayName
   return { participantId, displayName, connectionToken };
 }
 
+function ConnectionStatus({ connected }: { connected: boolean }) {
+  return (
+    <span
+      className="connection-badge"
+      aria-live="polite"
+      aria-label={connected ? "Connected" : "Disconnected"}
+    >
+      <span
+        className={`connection-dot ${connected ? "connection-dot--connected" : "connection-dot--disconnected"}`}
+        aria-hidden="true"
+      />
+      <span className="connection-badge__text">{connected ? "Connected" : "Disconnected"}</span>
+    </span>
+  );
+}
+
+function InviteButton({ roomId }: { roomId: string }) {
+  const [copied, setCopied] = useState(false);
+  const [copySupported] = useState(() => typeof navigator !== "undefined" && typeof navigator.clipboard !== "undefined");
+  const buttonRef = useRef<HTMLButtonElement>(null);
+
+  function handleInvite() {
+    const inviteUrl = `${window.location.origin}/room/${roomId}`;
+    if (copySupported) {
+      navigator.clipboard.writeText(inviteUrl).then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }).catch(() => {
+        // fallback: select text for manual copy
+        if (buttonRef.current) {
+          buttonRef.current.setAttribute("data-copy-text", inviteUrl);
+          const input = document.createElement("input");
+          input.value = inviteUrl;
+          document.body.appendChild(input);
+          input.select();
+          document.execCommand("copy");
+          document.body.removeChild(input);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        }
+      });
+    } else {
+      // No clipboard API: expose URL in a selectable, focusable way
+      if (buttonRef.current) {
+        buttonRef.current.setAttribute("data-copy-text", inviteUrl);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 3000);
+    }
+  }
+
+  return (
+    <button
+      ref={buttonRef}
+      className={`btn btn--secondary btn--sm invite-btn${copied ? " invite-btn--copied" : ""}`}
+      onClick={handleInvite}
+      aria-label="Copy room invite link"
+      type="button"
+    >
+      {copied ? (
+        <>
+          <span aria-hidden="true">✓</span>
+          Copied!
+        </>
+      ) : (
+        <>
+          <span aria-hidden="true">🔗</span>
+          Invite
+        </>
+      )}
+    </button>
+  );
+}
+
+function ParticipantList({ participants, currentId }: { participants: RoomState["participants"]; currentId: string }) {
+  if (!participants || participants.length === 0) {
+    return <span className="text-muted">No participants yet</span>;
+  }
+  return (
+    <ul className="participant-list" aria-label="Participants">
+      {participants.map((p) => (
+        <li key={p.id} className={`participant-chip${p.id === currentId ? " participant-chip--self" : ""}`}>
+          <span className="participant-chip__name">{p.displayName}</span>
+          {p.isFacilitator && (
+            <span className="facilitator-badge facilitator-badge--sm" aria-label={`${p.displayName} is facilitator`}>
+              ⭐ Facilitator
+            </span>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export function RoomPage() {
   const { roomId } = useParams<{ roomId: string }>();
   const [pageState, setPageState] = useState<PageState>("loading");
@@ -67,6 +158,7 @@ export function RoomPage() {
   const [participantId] = useState(() => identity.participantId);
   const [displayName, setDisplayName] = useState(() => identity.displayName);
   const [joinError, setJoinError] = useState<string | null>(null);
+  const [joinLoading, setJoinLoading] = useState(false);
   const [localRoomState, setLocalRoomState] = useState<RoomState | null>(null);
   const [connectionToken, setConnectionToken] = useState<string | undefined>(() => identity.connectionToken);
   const [voteBudgetInput, setVoteBudgetInput] = useState("5");
@@ -130,10 +222,11 @@ export function RoomPage() {
       return;
     }
 
+    setJoinLoading(true);
     try {
       const result = await joinRoom(roomId, participantId, trimmed);
       if (!result.success) {
-        setJoinError(result.error ?? "Failed to join room.");
+        setJoinError(result.error ?? "Failed to join room. Please try again.");
         return;
       }
       localStorage.setItem(`retro-name-${roomId}`, trimmed);
@@ -144,7 +237,9 @@ export function RoomPage() {
       }
       setPageState("room");
     } catch {
-      setJoinError("Failed to join room. Please try again.");
+      setJoinError("Failed to join room. Please check your connection and try again.");
+    } finally {
+      setJoinLoading(false);
     }
   }
 
@@ -207,8 +302,9 @@ export function RoomPage() {
   if (pageState === "loading") {
     return (
       <div className="content-shell content-shell--narrow" style={{ minHeight: "100vh", display: "flex", flexDirection: "column", justifyContent: "center" }}>
-        <div className="glass-panel loading-state">
-          <p className="loading-state__text">Loading room…</p>
+        <div className="glass-panel loading-state" role="status" aria-label="Loading room">
+          <span className="loading-spinner" aria-hidden="true" />
+          <p className="loading-state__text" style={{ marginTop: "var(--space-3)" }}>Loading room…</p>
         </div>
       </div>
     );
@@ -217,10 +313,13 @@ export function RoomPage() {
   if (pageState === "not-found") {
     return (
       <div className="content-shell content-shell--narrow" style={{ minHeight: "100vh", display: "flex", flexDirection: "column", justifyContent: "center" }}>
-        <div className="glass-panel empty-state">
-          <div className="empty-state__icon">🔍</div>
-          <h1 className="page-title" style={{ marginBottom: "var(--space-3)" }}>Room Not Found</h1>
-          <p className="empty-state__text">This room does not exist or has been closed.</p>
+        <div className="glass-panel empty-state" style={{ textAlign: "center" }}>
+          <div className="empty-state__icon" role="img" aria-label="Room not found">🔍</div>
+          <h1 className="page-title" style={{ marginBottom: "var(--space-3)", marginTop: "var(--space-3)" }}>Room Not Found</h1>
+          <p className="empty-state__text" style={{ marginBottom: "var(--space-5)" }}>
+            This room does not exist, has been closed, or the link may be incorrect.
+          </p>
+          <a href="/" className="btn btn--primary">Return to Home</a>
         </div>
       </div>
     );
@@ -234,25 +333,44 @@ export function RoomPage() {
           <p style={{ color: "var(--text-secondary)", marginBottom: "var(--space-5)", lineHeight: "var(--leading-relaxed)" }}>
             Enter your display name to join this retrospective.
           </p>
-          <form onSubmit={handleJoin}>
+          <form onSubmit={handleJoin} noValidate>
             <div className="input-group" style={{ marginBottom: "var(--space-4)" }}>
-              <label className="input-label" htmlFor="displayName">Display Name</label>
+              <label className="input-label" htmlFor="displayName">
+                Display Name
+              </label>
               <input
                 id="displayName"
-                className="input"
+                className={`input${joinError ? " input--error" : ""}`}
                 type="text"
                 value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
+                onChange={(e) => {
+                  setDisplayName(e.target.value);
+                  if (joinError) setJoinError(null);
+                }}
                 maxLength={50}
                 placeholder="Your name"
                 autoComplete="nickname"
+                aria-required="true"
+                aria-describedby={joinError ? "join-error" : undefined}
+                aria-invalid={joinError ? "true" : undefined}
               />
             </div>
-            <button type="submit" className="btn btn--primary" style={{ width: "100%" }}>
-              Join
+            <button
+              type="submit"
+              className="btn btn--primary"
+              style={{ width: "100%" }}
+              disabled={joinLoading}
+              aria-busy={joinLoading}
+            >
+              {joinLoading ? (
+                <>
+                  <span className="loading-spinner" aria-hidden="true" />
+                  Joining…
+                </>
+              ) : "Join Room"}
             </button>
             {joinError && (
-              <div className="status-msg status-msg--error" style={{ marginTop: "var(--space-3)" }} role="alert">
+              <div id="join-error" className="status-msg status-msg--error" style={{ marginTop: "var(--space-3)" }} role="alert">
                 {joinError}
               </div>
             )}
@@ -267,31 +385,41 @@ export function RoomPage() {
 
   return (
     <div className="content-shell">
-      <div className="room-header">
-        <h1 className="room-header__title">Retro Board</h1>
-        <div className="room-header__meta">
-          <span className="connection-dot-wrapper" style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-            <span className={`connection-dot ${connected ? "connection-dot--connected" : "connection-dot--disconnected"}`} aria-hidden="true" />
-            <span className="sr-only">{connected ? "Connected" : "Disconnected"}</span>
-            <span aria-live="polite">{connected ? "Connected" : "Disconnected"}</span>
-          </span>
+      {/* Room Header */}
+      <header className="room-header" role="banner">
+        <div className="room-header__left">
+          <h1 className="room-header__title">Retro Board</h1>
+          <ConnectionStatus connected={connected} />
         </div>
-      </div>
+        <div className="room-header__right">
+          <InviteButton roomId={roomId!} />
+        </div>
+      </header>
 
+      {/* Phase Status Bar */}
       <div className="phase-status" role="region" aria-label="Room status">
-        <span className="phase-status__label">Phase</span>
-        <span className="phase-status__value badge badge--phase">{roomState?.phase?.toUpperCase() ?? "UNKNOWN"}</span>
-        <TimerDisplay timer={roomState?.timer ?? { startedAt: null, durationSeconds: null, expired: false }} />
-        <span style={{ marginLeft: "var(--space-2)", color: "var(--text-muted)", fontSize: "var(--text-sm)" }}>
-          Participants: {roomState?.participants.map((p) => p.displayName).join(", ") || "None"}
+        <span className="phase-status__label">Phase: </span>
+        <span
+          className="phase-status__value badge badge--phase"
+          data-phase={roomState?.phase?.toUpperCase() ?? "UNKNOWN"}
+        >
+          {roomState?.phase?.toUpperCase() ?? "UNKNOWN"}
         </span>
-        {isFacilitator && (
-          <span className="facilitator-badge">
-            ⭐ Facilitator
-          </span>
-        )}
+        <TimerDisplay timer={roomState?.timer ?? { startedAt: null, durationSeconds: null, expired: false }} />
       </div>
 
+      {/* Participants */}
+      <section
+        className="participants-bar"
+        role="region"
+        aria-label="Participants"
+        style={{ marginBottom: "var(--space-4)" }}
+      >
+        <h2 className="sr-only">Participants</h2>
+        <ParticipantList participants={roomState?.participants ?? []} currentId={participantId} />
+      </section>
+
+      {/* Facilitator Controls */}
       {isFacilitator && (
         <div className="facilitator-panel" role="region" aria-label="Facilitator controls">
           <p className="facilitator-panel__title">Facilitator Controls</p>
@@ -309,17 +437,26 @@ export function RoomPage() {
                 style={{ width: "5rem" }}
               />
               <button className="btn btn--secondary btn--sm" onClick={handleSetBudget}>Set</button>
-              {budgetMsg && <span className="status-msg status-msg--info" style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }}>{budgetMsg}</span>}
+              {budgetMsg && (
+                <span className="status-msg status-msg--info" style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }} role="status">
+                  {budgetMsg}
+                </span>
+              )}
             </div>
             <div className="facilitator-panel__row">
               <button
                 className="btn btn--primary"
                 onClick={handleAdvancePhase}
                 disabled={roomState?.phase === "review"}
+                aria-label="Advance to next phase"
               >
                 Advance to Next Phase
               </button>
-              {phaseMsg && <span className="status-msg status-msg--info" style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }}>{phaseMsg}</span>}
+              {phaseMsg && (
+                <span className="status-msg status-msg--info" style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }} role="status">
+                  {phaseMsg}
+                </span>
+              )}
             </div>
             <div className="facilitator-panel__row">
               <label className="input-label" htmlFor="timerMinutes">Timer (minutes)</label>
@@ -334,12 +471,17 @@ export function RoomPage() {
                 style={{ width: "5rem" }}
               />
               <button className="btn btn--secondary btn--sm" onClick={handleSetTimer}>Start Timer</button>
-              {timerMsg && <span className="status-msg status-msg--info" style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }}>{timerMsg}</span>}
+              {timerMsg && (
+                <span className="status-msg status-msg--info" style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }} role="status">
+                  {timerMsg}
+                </span>
+              )}
             </div>
           </div>
         </div>
       )}
 
+      {/* Board Area */}
       <div className="board-area glass-panel">
         <h2 className="section-title" style={{ marginBottom: "var(--space-4)" }}>Board</h2>
         {roomState?.phase === "write" && (
@@ -352,13 +494,27 @@ export function RoomPage() {
               maxLength={500}
               placeholder="Add a retro item…"
               style={{ flex: 1 }}
+              aria-label="Retro item text"
             />
-            <button type="submit" className="btn btn--primary">Add</button>
+            <button
+              type="submit"
+              className="btn btn--primary"
+              disabled={!connected}
+              title={!connected ? "Cannot add items while disconnected" : undefined}
+            >
+              Add
+            </button>
           </form>
         )}
         {itemError && (
           <div className="status-msg status-msg--error" style={{ marginBottom: "var(--space-3)" }} role="alert">
             {itemError}
+          </div>
+        )}
+
+        {!connected && (
+          <div className="status-msg status-msg--muted" style={{ marginBottom: "var(--space-3)" }} role="status">
+            <span>⏳ Your changes are queued. Reconnecting…</span>
           </div>
         )}
 
@@ -371,7 +527,7 @@ export function RoomPage() {
         ) : roomState?.phase === "write" ? (
           (roomState?.items?.length ?? 0) === 0 ? (
             <div className="empty-state">
-              <div className="empty-state__icon">📝</div>
+              <div className="empty-state__icon" role="img" aria-label="No items">📝</div>
               <p className="empty-state__text">No items yet. The board is ready for the write phase.</p>
             </div>
           ) : (
@@ -386,9 +542,13 @@ export function RoomPage() {
         ) : null}
       </div>
 
-      <div className="room-footer">
-        Room ID: {roomId}
-      </div>
+      {/* Room Footer — safe room code only, no tokens */}
+      <footer className="room-footer" role="contentinfo">
+        <span className="room-footer__label">Room</span>
+        <span className="room-footer__code truncate" aria-label="Room code">
+          {roomId}
+        </span>
+      </footer>
     </div>
   );
 }
