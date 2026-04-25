@@ -195,14 +195,28 @@ export function applyMoveItemToGroup(
   const moved: RetroItem = { ...items[itemIndex]!, columnId: targetGroupId, groupId: targetGroupId };
   const otherItems = items.filter((i) => i.id !== itemId);
 
-  const sameGroup = otherItems.filter((i) => (i.columnId ?? i.groupId) === targetGroupId);
+  const sameGroup = otherItems
+    .filter((i) => (i.columnId ?? i.groupId) === targetGroupId)
+    .sort((a, b) => a.order - b.order);
   const before = sameGroup.slice(0, targetIndex);
   const after = sameGroup.slice(targetIndex);
 
   const updatedSameGroup: RetroItem[] = [...before, moved, ...after].map((i, idx) => ({ ...i, order: idx }));
+  const affectedSourceGroupId = items[itemIndex]!.columnId ?? items[itemIndex]!.groupId;
   const differentGroup = otherItems.filter((i) => (i.columnId ?? i.groupId) !== targetGroupId);
+  const compactedDifferentGroup = differentGroup.map((item) => {
+    const itemGroupId = item.columnId ?? item.groupId;
+    if (itemGroupId !== affectedSourceGroupId || affectedSourceGroupId === targetGroupId) {
+      return item;
+    }
+    const sourceIndex = differentGroup
+      .filter((candidate) => (candidate.columnId ?? candidate.groupId) === affectedSourceGroupId)
+      .sort((a, b) => a.order - b.order)
+      .findIndex((candidate) => candidate.id === item.id);
+    return { ...item, order: sourceIndex };
+  });
 
-  return [...differentGroup, ...updatedSameGroup];
+  return [...compactedDifferentGroup, ...updatedSameGroup];
 }
 
 export function applyCastVote(

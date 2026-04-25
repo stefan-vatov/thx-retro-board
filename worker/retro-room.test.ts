@@ -906,6 +906,55 @@ describe("RetroRoom Durable Object", () => {
       expect(await stub.getRoomState()).toEqual(before);
     });
 
+    it("moveItemToGroup inserts by target-list order, compacts source order, and preserves non-layout data", async () => {
+      const stub = await setupOrganiseRoom("test-move-item-target-list-order");
+      const startColumnId = (await stub.getRoomState()).columns.find((column) => column.name === "Start")!.id;
+      const stopColumnId = (await stub.getRoomState()).columns.find((column) => column.name === "Stop")!.id;
+      let state = await stub.getRoomState();
+      const [itemA, itemB, itemC] = state.items;
+
+      await stub.moveItemToGroup("fac1", itemA!.id, startColumnId, 0);
+      await stub.moveItemToGroup("fac1", itemB!.id, stopColumnId, 0);
+      await stub.moveItemToGroup("fac1", itemC!.id, startColumnId, 1);
+      state = await stub.getRoomState();
+      const versionBeforeMove = state.version;
+      const itemCBeforeMove = state.items.find((item) => item.id === itemC!.id)!;
+
+      const result = await stub.moveItemToGroup("p2", itemC!.id, stopColumnId, 1);
+      expect(result.success).toBe(true);
+
+      const after = await stub.getRoomState();
+      expect(after.version).toBe(versionBeforeMove + 1);
+      expect(after.items.filter((item) => item.columnId === stopColumnId).sort((a, b) => a.order - b.order).map((item) => item.id)).toEqual([itemB!.id, itemC!.id]);
+      expect(after.items.filter((item) => item.columnId === startColumnId).sort((a, b) => a.order - b.order).map((item) => [item.id, item.order])).toEqual([[itemA!.id, 0]]);
+
+      const itemCAfterMove = after.items.find((item) => item.id === itemC!.id)!;
+      expect(itemCAfterMove.text).toBe(itemCBeforeMove.text);
+      expect(itemCAfterMove.authorId).toBe(itemCBeforeMove.authorId);
+      expect(itemCAfterMove.columnId).toBe(stopColumnId);
+      expect(itemCAfterMove.groupId).toBe(stopColumnId);
+    });
+
+    it("sequential concurrent drag/drop requests converge without duplicate or missing items", async () => {
+      const stub = await setupOrganiseRoom("test-move-item-convergence");
+      const state0 = await stub.getRoomState();
+      const startColumnId = state0.columns.find((column) => column.name === "Start")!.id;
+      const stopColumnId = state0.columns.find((column) => column.name === "Stop")!.id;
+      const itemIds = state0.items.map((item) => item.id);
+      const draggedItemId = itemIds[0]!;
+
+      const first = await stub.moveItemToGroup("fac1", draggedItemId, startColumnId, 0);
+      const second = await stub.moveItemToGroup("p2", draggedItemId, stopColumnId, 0);
+      expect(first.success).toBe(true);
+      expect(second.success).toBe(true);
+
+      const finalState = await stub.getRoomState();
+      expect(finalState.version).toBe(state0.version + 2);
+      expect(finalState.items.map((item) => item.id).sort()).toEqual([...itemIds].sort());
+      expect(finalState.items.filter((item) => item.id === draggedItemId)).toHaveLength(1);
+      expect(finalState.items.find((item) => item.id === draggedItemId)?.columnId).toBe(stopColumnId);
+    });
+
     it("duplicate text items remain distinct through organisation", async () => {
       const id = env.RETRO_ROOM.idFromName("test-dup-organise");
       const stub = env.RETRO_ROOM.get(id);

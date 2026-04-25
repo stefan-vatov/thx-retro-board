@@ -776,6 +776,22 @@ body {
   background: rgba(255, 255, 255, 0.025);
 }
 
+.item-row--draggable {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.item-row--draggable:active {
+  cursor: grabbing;
+}
+
+.item-row--dragging {
+  opacity: 0.45;
+  outline: 1px solid rgba(98, 132, 241, 0.45);
+  background: rgba(98, 132, 241, 0.08);
+}
+
 .item-row__text {
   flex: 1;
   font-size: var(--text-base);
@@ -789,6 +805,61 @@ body {
   align-items: center;
   gap: var(--space-1);
   flex-shrink: 0;
+}
+
+.drag-handle {
+  border: 0;
+  background: transparent;
+  padding: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  letter-spacing: -0.2em;
+  line-height: 1;
+  cursor: grab;
+}
+
+.drag-status {
+  margin-bottom: var(--space-4);
+}
+
+.drag-list {
+  min-height: 2.75rem;
+}
+
+.drag-list--active {
+  border-color: rgba(98, 132, 241, 0.45) !important;
+  box-shadow: 0 0 0 1px rgba(98, 132, 241, 0.16), 0 0 24px rgba(98, 132, 241, 0.08);
+}
+
+.drag-drop-zone {
+  display: block;
+  height: 0;
+  opacity: 0;
+  transition: height var(--transition-fast), opacity var(--transition-fast);
+}
+
+.drag-drop-zone[aria-hidden="true"] {
+  display: none;
+}
+
+.drag-drop-zone:not([aria-hidden="true"]) {
+  height: 0.85rem;
+  opacity: 1;
+}
+
+.drag-drop-zone__line {
+  display: block;
+  height: 2px;
+  margin: calc(var(--space-1) + 1px) var(--space-2) 0;
+  border-radius: var(--radius-full);
+  background: rgba(98, 132, 241, 0.28);
+}
+
+.drag-drop-zone--active .drag-drop-zone__line {
+  height: 4px;
+  margin-top: var(--space-1);
+  background: var(--accent-primary);
+  box-shadow: 0 0 18px rgba(98, 132, 241, 0.45);
 }
 
 /* --- Board Header --- */

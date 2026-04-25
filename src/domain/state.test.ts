@@ -471,6 +471,32 @@ describe("applyMoveItemToGroup", () => {
     expect(moved?.groupId).toBe("g1");
     expect(stayed?.groupId).toBeNull();
   });
+
+  it("inserts relative to the target list and compacts only affected list order", () => {
+    const interleaved: RetroItem[] = [
+      { id: "a1", text: "A1", authorId: "p1", columnId: "g1", groupId: "g1", order: 0 },
+      { id: "b1", text: "B1", authorId: "p2", columnId: "g2", groupId: "g2", order: 0 },
+      { id: "a2", text: "A2", authorId: "p1", columnId: "g1", groupId: "g1", order: 1 },
+      { id: "b2", text: "B2", authorId: "p2", columnId: "g2", groupId: "g2", order: 1 },
+      { id: "u1", text: "U1", authorId: "p3", columnId: null, groupId: null, order: 0 },
+    ];
+
+    const result = applyMoveItemToGroup(interleaved, "a2", "g2", 1);
+
+    expect(result.filter((item) => item.groupId === "g2").sort((a, b) => a.order - b.order).map((item) => item.id)).toEqual(["b1", "a2", "b2"]);
+    expect(result.filter((item) => item.groupId === "g1").sort((a, b) => a.order - b.order).map((item) => [item.id, item.order])).toEqual([["a1", 0]]);
+    expect(result.filter((item) => item.groupId === null).map((item) => [item.id, item.order])).toEqual([["u1", 0]]);
+  });
+
+  it("preserves non-layout item data while moving", () => {
+    const result = applyMoveItemToGroup(items, "a", "g1", 1);
+    const moved = result.find((item) => item.id === "a")!;
+
+    expect(moved.text).toBe("A");
+    expect(moved.authorId).toBe("p1");
+    expect(moved.columnId).toBe("g1");
+    expect(moved.groupId).toBe("g1");
+  });
 });
 
 describe("applyCastVote", () => {

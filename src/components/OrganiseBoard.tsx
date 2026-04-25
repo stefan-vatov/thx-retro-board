@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import type { RoomState, RetroItem, Group } from "../domain";
 import {
   getUngroupedItems,
@@ -20,13 +20,13 @@ interface OrganiseBoardProps {
 export function OrganiseBoard({ roomState, isFacilitator, send, serverError = null, clearServerError }: OrganiseBoardProps) {
   const [newGroupName, setNewGroupName] = useState("");
   const [groupError, setGroupError] = useState<string | null>(null);
-  const [movingItemId, setMovingItemId] = useState<string | null>(null);
+  const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
+  const [activeDrop, setActiveDrop] = useState<DropTarget | null>(null);
 
   const isOrganise = roomState.phase === "organise";
 
   const sortedGroups = [...roomState.groups].sort((a, b) => a.order - b.order);
   const ungrouped = getUngroupedItems(roomState.items);
-  const movingItem = movingItemId ? roomState.items.find((i) => i.id === movingItemId) : null;
   const isAtMaxColumns = sortedGroups.length >= MAX_COLUMNS;
   const maxColumnsMessage = `Rooms can have at most ${MAX_COLUMNS} columns.`;
   const serverColumnError = serverError && /column/i.test(serverError) ? serverError : null;
@@ -52,17 +52,6 @@ export function OrganiseBoard({ roomState, isFacilitator, send, serverError = nu
     setNewGroupName("");
   }
 
-  const handleReorderItems = useCallback(
-    (items: RetroItem[], fromIdx: number, toIdx: number) => {
-      const reordered = [...items];
-      const [moved] = reordered.splice(fromIdx, 1);
-      if (!moved) return;
-      reordered.splice(toIdx, 0, moved);
-      send({ type: "reorder-items", itemIds: reordered.map((i) => i.id) });
-    },
-    [send],
-  );
-
   const handleReorderGroups = useCallback(
     (fromIdx: number, toIdx: number) => {
       const reordered = [...sortedGroups];
@@ -74,10 +63,90 @@ export function OrganiseBoard({ roomState, isFacilitator, send, serverError = nu
     [send, sortedGroups],
   );
 
-  function handleMoveToGroup(itemId: string, targetGroupId: string | null, targetIndex: number) {
-    setMovingItemId(null);
-    send({ type: "move-item-to-group", itemId, groupId: targetGroupId, index: targetIndex });
+  const cancelDrag = useCallback(() => {
+    setDraggingItemId(null);
+    setActiveDrop(null);
+  }, []);
+
+  useEffect(() => {
+    if (!draggingItemId) return;
+
+    function updateActiveDrop(event: PointerEvent) {
+      const eventTarget = (event.target as Element | null)?.closest<HTMLElement>("[data-drop-zone='true']");
+      const target = eventTarget ?? document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-drop-zone='true']");
+      if (!target) {
+        setActiveDrop(null);
+        return;
+      }
+      const groupId = target.dataset.groupId === "__ungrouped__" ? null : target.dataset.groupId ?? null;
+      const index = Number(target.dataset.index);
+      if (!Number.isInteger(index)) {
+        setActiveDrop(null);
+        return;
+      }
+      setActiveDrop({ groupId, index });
+    }
+
+    function onPointerMove(event: PointerEvent) {
+      updateActiveDrop(event);
+    }
+
+    function onPointerUp(event: PointerEvent) {
+      updateActiveDrop(event);
+      const target = (event.target as Element | null)?.closest<HTMLElement>("[data-drop-zone='true']")
+        ?? document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-drop-zone='true']");
+      if (target) {
+        const groupId = target.dataset.groupId === "__ungrouped__" ? null : target.dataset.groupId ?? null;
+        const index = Number(target.dataset.index);
+        if (Number.isInteger(index)) {
+          send({ type: "move-item-to-group", itemId: draggingItemId, groupId, index });
+        }
+      }
+      cancelDrag();
+    }
+
+    function onPointerCancel() {
+      cancelDrag();
+    }
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        cancelDrag();
+      }
+    }
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerCancel);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerCancel);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [cancelDrag, draggingItemId, send]);
+
+  function startDrag(itemId: string) {
+    clearServerError?.();
+    setDraggingItemId(itemId);
+    setActiveDrop(null);
   }
+
+  useEffect(() => {
+    function onNativePointerDown(event: PointerEvent) {
+      if (event.button !== 0) return;
+      const row = (event.target as Element | null)?.closest<HTMLElement>("[data-drag-item-id]");
+      const itemId = row?.dataset.dragItemId;
+      if (itemId) {
+        event.preventDefault();
+        startDrag(itemId);
+      }
+    }
+
+    document.addEventListener("pointerdown", onNativePointerDown);
+    return () => document.removeEventListener("pointerdown", onNativePointerDown);
+  });
 
   const allItemsEmpty = roomState.items.length === 0;
 
@@ -115,13 +184,10 @@ export function OrganiseBoard({ roomState, isFacilitator, send, serverError = nu
         </div>
       )}
 
-      {movingItemId && (
-        <MoveTargetPicker
-          groups={sortedGroups}
-          movingItemText={movingItem?.text ?? null}
-          onCancel={() => setMovingItemId(null)}
-          onSelect={(groupId, index) => handleMoveToGroup(movingItemId, groupId, index)}
-        />
+      {draggingItemId && (
+        <div className="status-msg status-msg--info drag-status" role="status" aria-live="polite">
+          Dragging item. Drop on an insertion line, or press Escape to cancel.
+        </div>
       )}
 
       {allItemsEmpty ? (
@@ -143,57 +209,35 @@ export function OrganiseBoard({ roomState, isFacilitator, send, serverError = nu
                 totalGroups={sortedGroups.length}
                 isOrganise={isOrganise}
                 isFacilitator={isFacilitator}
-                onReorderItems={handleReorderItems}
                 onReorderGroups={handleReorderGroups}
-                onMoveItem={(itemId) => setMovingItemId(itemId)}
+                draggingItemId={draggingItemId}
+                activeDrop={activeDrop}
+                onDragStart={startDrag}
               />
             );
           })}
 
           {/* Ungrouped items */}
-          {ungrouped.length > 0 && (
-            <div className="ungrouped-section">
-              <div className="section-header">
-                <span className="section-title">Ungrouped</span>
-              </div>
-              <ul className="item-list">
-                {ungrouped.map((item, idx) => (
-                  <li key={item.id} className="item-row">
-                    <span className="item-row__text">{item.text}</span>
-                    {isOrganise && (
-                      <span className="item-row__actions">
-                        <button
-                          className="reorder-btn"
-                          disabled={idx === 0}
-                          onClick={() => handleReorderItems(ungrouped, idx, idx - 1)}
-                          title="Move up"
-                          aria-label="Move up"
-                        >
-                          ↑
-                        </button>
-                        <button
-                          className="reorder-btn"
-                          disabled={idx === ungrouped.length - 1}
-                          onClick={() => handleReorderItems(ungrouped, idx, idx + 1)}
-                          title="Move down"
-                          aria-label="Move down"
-                        >
-                          ↓
-                        </button>
-                        <button className="btn btn--secondary btn--sm" onClick={() => setMovingItemId(item.id)} title="Move to group">
-                          →
-                        </button>
-                      </span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+          <DragList
+            title="Ungrouped"
+            groupId={null}
+            items={ungrouped}
+            emptyText="No ungrouped items."
+            isOrganise={isOrganise}
+            draggingItemId={draggingItemId}
+            activeDrop={activeDrop}
+            onDragStart={startDrag}
+            className="ungrouped-section"
+          />
         </>
       )}
     </div>
   );
+}
+
+interface DropTarget {
+  groupId: string | null;
+  index: number;
 }
 
 interface GroupSectionProps {
@@ -203,12 +247,13 @@ interface GroupSectionProps {
   totalGroups: number;
   isOrganise: boolean;
   isFacilitator: boolean;
-  onReorderItems: (items: RetroItem[], fromIdx: number, toIdx: number) => void;
   onReorderGroups: (fromIdx: number, toIdx: number) => void;
-  onMoveItem: (itemId: string) => void;
+  draggingItemId: string | null;
+  activeDrop: DropTarget | null;
+  onDragStart: (itemId: string) => void;
 }
 
-function GroupSection({ group, items, groupIndex, totalGroups, isOrganise, isFacilitator, onReorderItems, onReorderGroups, onMoveItem }: GroupSectionProps) {
+function GroupSection({ group, items, groupIndex, totalGroups, isOrganise, isFacilitator, onReorderGroups, draggingItemId, activeDrop, onDragStart }: GroupSectionProps) {
   return (
     <div className="group-panel">
       <div className="group-panel__header">
@@ -236,71 +281,109 @@ function GroupSection({ group, items, groupIndex, totalGroups, isOrganise, isFac
           </span>
         )}
       </div>
-      {items.length === 0 ? (
-        <p className="text-muted" style={{ fontSize: "var(--text-sm)", margin: 0 }}>No items in this group.</p>
-      ) : (
-        <ul className="item-list">
-          {items.map((item, idx) => (
-            <li key={item.id} className="item-row">
-              <span className="item-row__text">{item.text}</span>
-              {isOrganise && (
-                <span className="item-row__actions">
-                  <button
-                    className="reorder-btn"
-                    disabled={idx === 0}
-                    onClick={() => onReorderItems(items, idx, idx - 1)}
-                    title="Move up"
-                    aria-label="Move up"
-                  >
-                    ↑
-                  </button>
-                  <button
-                    className="reorder-btn"
-                    disabled={idx === items.length - 1}
-                    onClick={() => onReorderItems(items, idx, idx + 1)}
-                    title="Move down"
-                    aria-label="Move down"
-                  >
-                    ↓
-                  </button>
-                  <button className="btn btn--secondary btn--sm" onClick={() => onMoveItem(item.id)} title="Move to group">
-                    →
-                  </button>
-                </span>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
+      <DragList
+        title={group.name}
+        groupId={group.id}
+        items={items}
+        emptyText="No items in this group."
+        isOrganise={isOrganise}
+        draggingItemId={draggingItemId}
+        activeDrop={activeDrop}
+        onDragStart={onDragStart}
+      />
     </div>
   );
 }
 
-interface MoveTargetPickerProps {
-  groups: Group[];
-  movingItemText: string | null;
-  onCancel: () => void;
-  onSelect: (groupId: string | null, index: number) => void;
+interface DragListProps {
+  title: string;
+  groupId: string | null;
+  items: RetroItem[];
+  emptyText: string;
+  isOrganise: boolean;
+  draggingItemId: string | null;
+  activeDrop: DropTarget | null;
+  onDragStart: (itemId: string) => void;
+  className?: string;
 }
 
-function MoveTargetPicker({ groups, movingItemText, onCancel, onSelect }: MoveTargetPickerProps) {
+function DragList({ title, groupId, items, emptyText, isOrganise, draggingItemId, activeDrop, onDragStart, className }: DragListProps) {
+  const visibleItems = items.filter((item) => item.id !== draggingItemId);
+  const groupKey = groupId ?? "__ungrouped__";
+  const isActiveList = draggingItemId !== null && activeDrop?.groupId === groupId;
+  const dropZone = (index: number) => {
+    const isActive = isActiveList && activeDrop?.index === index;
+    return (
+      <li
+        key={`drop-${groupKey}-${index}`}
+        className={`drag-drop-zone${isActive ? " drag-drop-zone--active" : ""}`}
+        data-drop-zone="true"
+        data-group-id={groupKey}
+        data-index={index}
+        data-active={isActive ? "true" : "false"}
+        aria-hidden={draggingItemId ? undefined : "true"}
+      >
+        <span className="drag-drop-zone__line" />
+      </li>
+    );
+  };
+
   return (
-    <div className="move-picker" role="dialog" aria-label="Move item to group" aria-describedby={movingItemText ? "move-item-preview" : undefined}>
-      <p className="move-picker__title">Move item to:</p>
-      {movingItemText && (
-        <p id="move-item-preview" style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", marginBottom: "var(--space-2)" }}>
-          Moving: <em>"{movingItemText}"</em>
-        </p>
+    <div className={`${className ?? ""}${isActiveList ? " drag-list--active" : ""}`} data-drop-list={groupKey} data-drop-list-active={isActiveList ? "true" : "false"} aria-label={`${title} drop target`}>
+      {className && (
+        <div className="section-header">
+          <span className="section-title">{title}</span>
+        </div>
       )}
-      <div className="move-picker__options" role="group" aria-label="Destination options">
-        <button className="btn btn--secondary btn--sm" onClick={() => onSelect(null, 0)} aria-label="Move to Ungrouped">Ungrouped</button>
-        {groups.map((g) => (
-          <button key={g.id} className="btn btn--secondary btn--sm" onClick={() => onSelect(g.id, 0)} aria-label={`Move to group ${g.name}`}>
-            {g.name}
-          </button>
+      {visibleItems.length === 0 && <p className="text-muted" style={{ fontSize: "var(--text-sm)", margin: 0 }}>{emptyText}</p>}
+      <ul className="item-list drag-list">
+        {isOrganise && dropZone(0)}
+        {visibleItems.map((item, idx) => (
+          <Fragment key={`item-and-drop-${item.id}`}>
+            <li
+              className={`item-row item-row--draggable${draggingItemId === item.id ? " item-row--dragging" : ""}`}
+              data-drag-item-id={item.id}
+              aria-grabbed={draggingItemId === item.id}
+              onPointerDown={(event) => {
+                if (event.button !== 0) return;
+                event.preventDefault();
+                event.currentTarget.setPointerCapture?.(event.pointerId);
+                onDragStart(item.id);
+              }}
+              onMouseDown={(event) => {
+                if (event.button !== 0) return;
+                event.preventDefault();
+                onDragStart(item.id);
+              }}
+              onTouchStart={() => onDragStart(item.id)}
+              onClick={() => onDragStart(item.id)}
+            >
+              <button
+                type="button"
+                className="drag-handle"
+                aria-label={`Drag ${item.text}`}
+                onPointerDown={(event) => {
+                  if (event.button !== 0) return;
+                  event.preventDefault();
+                  event.currentTarget.setPointerCapture?.(event.pointerId);
+                  onDragStart(item.id);
+                }}
+                onMouseDown={(event) => {
+                  if (event.button !== 0) return;
+                  event.preventDefault();
+                  onDragStart(item.id);
+                }}
+                onTouchStart={() => onDragStart(item.id)}
+                onClick={() => onDragStart(item.id)}
+              >
+                ⋮⋮
+              </button>
+              <span className="item-row__text">{item.text}</span>
+            </li>
+            {isOrganise && dropZone(idx + 1)}
+          </Fragment>
         ))}
-        <button className="btn btn--danger btn--sm" onClick={onCancel}>Cancel</button>
-      </div>
+      </ul>
     </div>
   );
 }

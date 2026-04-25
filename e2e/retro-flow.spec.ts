@@ -1,5 +1,47 @@
 import { test, expect, type Page } from "@playwright/test";
 
+async function dragItemToDropZone(page: Page, itemText: string, groupId: string | null, index: number) {
+  const item = page.locator("[data-drag-item-id]", { hasText: itemText }).first();
+  await expect(item).toBeVisible();
+  const handle = item.getByRole("button", { name: new RegExp(`drag ${itemText}`, "i") });
+  const handleBox = await handle.boundingBox();
+  expect(handleBox).not.toBeNull();
+  await handle.dispatchEvent("pointerdown", {
+    pointerId: 3,
+    pointerType: "mouse",
+    button: 0,
+    clientX: handleBox!.x + handleBox!.width / 2,
+    clientY: handleBox!.y + handleBox!.height / 2,
+  });
+  const groupKey = groupId ?? "__ungrouped__";
+  const dropZone = page.locator(`[data-drop-zone="true"][data-group-id="${groupKey}"][data-index="${index}"]`).first();
+  await expect(dropZone).toBeVisible();
+  const dropBox = await dropZone.boundingBox();
+  expect(dropBox).not.toBeNull();
+  const x = dropBox!.x + dropBox!.width / 2;
+  const y = dropBox!.y + dropBox!.height / 2;
+  await dropZone.dispatchEvent("pointermove", { pointerId: 3, pointerType: "mouse", button: 0, clientX: x, clientY: y });
+  await expect(dropZone).toHaveAttribute("data-active", "true");
+  await dropZone.dispatchEvent("pointerup", { pointerId: 3, pointerType: "mouse", button: 0, clientX: x, clientY: y });
+}
+
+async function touchDragItemToDropZone(page: Page, itemText: string, groupId: string | null, index: number) {
+  const item = page.locator("[data-drag-item-id]", { hasText: itemText }).first();
+  await expect(item).toBeVisible();
+  const groupKey = groupId ?? "__ungrouped__";
+  const handle = item.getByRole("button", { name: new RegExp(`drag ${itemText}`, "i") });
+  await handle.dispatchEvent("pointerdown", { pointerId: 7, pointerType: "touch", button: 0, clientX: 20, clientY: 20 });
+  const dropZone = page.locator(`[data-drop-zone="true"][data-group-id="${groupKey}"][data-index="${index}"]`).first();
+  await expect(dropZone).toBeVisible();
+  const dropBox = await dropZone.boundingBox();
+  expect(dropBox).not.toBeNull();
+  const x = dropBox!.x + dropBox!.width / 2;
+  const y = dropBox!.y + dropBox!.height / 2;
+  await dropZone.dispatchEvent("pointermove", { pointerId: 7, pointerType: "touch", button: 0, clientX: x, clientY: y });
+  await expect(dropZone).toHaveAttribute("data-active", "true");
+  await dropZone.dispatchEvent("pointerup", { pointerId: 7, pointerType: "touch", button: 0, clientX: x, clientY: y });
+}
+
 test.describe("Retro Board E2E", () => {
   test.describe("Foundation", () => {
     test("root page shows create room control", async ({ page }) => {
@@ -165,6 +207,124 @@ test.describe("Retro Board E2E", () => {
       await expect(board.getByText(/Rooms can have at most 8 columns\./i)).toBeVisible();
       await expect(board.getByLabel(/new column name/i)).toBeDisabled();
       await expect(board.getByRole("button", { name: /create group \/ column/i })).toBeDisabled();
+    });
+
+    test("organise drag/drop moves, reorders, cancels, and syncs across participants", async ({ browser }) => {
+      const ctx1 = await browser.newContext();
+      const alice = await ctx1.newPage();
+      await alice.goto("/");
+      await alice.getByRole("button", { name: /create room/i }).click();
+      await alice.waitForURL(/\/room\//);
+      const roomUrl = alice.url();
+      const roomId = new URL(roomUrl).pathname.split("/").pop()!;
+
+      await alice.getByLabel(/display name/i).fill("Alice");
+      await alice.getByRole("button", { name: /join/i }).click();
+      await expect(alice.getByText(/Phase: WRITE/i)).toBeVisible();
+
+      for (const text of ["Drag A", "Drag B", "Drag C"]) {
+        await alice.getByPlaceholder(/add a retro item/i).fill(text);
+        await alice.getByRole("button", { name: /add item/i }).click();
+        await expect(alice.getByText(text)).toBeVisible();
+      }
+
+      const ctx2 = await browser.newContext();
+      const bob = await ctx2.newPage();
+      await bob.goto(roomUrl);
+      await bob.getByLabel(/display name/i).fill("Bob");
+      await bob.getByRole("button", { name: /join/i }).click();
+      await expect(bob.getByText(/Phase: WRITE/i)).toBeVisible();
+
+      await alice.getByRole("button", { name: /advance to next phase/i }).click();
+      await expect(alice.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
+      await expect(bob.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
+
+      await expect(alice.getByRole("dialog", { name: /move item/i })).toHaveCount(0);
+      const stateBefore = await alice.evaluate(async (id) => {
+        const response = await fetch(`/api/rooms/${id}`);
+        return response.json();
+      }, roomId) as { columns: { id: string; name: string }[]; items: { id: string; text: string; columnId: string | null; order: number }[]; version: number };
+      const stopColumnId = stateBefore.columns.find((column) => column.name === "Stop")!.id;
+
+      await dragItemToDropZone(alice, "Drag A", stopColumnId, 0);
+      await expect(bob.locator(`[data-drop-list="${stopColumnId}"]`, { hasText: "Drag A" })).toBeVisible({ timeout: 5000 });
+
+      await dragItemToDropZone(alice, "Drag B", stopColumnId, 0);
+      await expect(bob.locator(`[data-drop-list="${stopColumnId}"] [data-drag-item-id]`).first()).toContainText("Drag B", { timeout: 5000 });
+
+      const stateAfterMoves = await alice.evaluate(async (id) => {
+        const response = await fetch(`/api/rooms/${id}`);
+        return response.json();
+      }, roomId) as { items: { id: string; text: string; columnId: string | null; order: number }[]; version: number };
+      expect(stateAfterMoves.version).toBeGreaterThan(stateBefore.version);
+      expect(stateAfterMoves.items.filter((item) => item.columnId === stopColumnId).sort((a, b) => a.order - b.order).map((item) => item.text)).toEqual(["Drag B", "Drag A"]);
+      expect(stateAfterMoves.items.find((item) => item.text === "Drag A")?.id).toBe(stateBefore.items.find((item) => item.text === "Drag A")?.id);
+
+      const itemC = alice.locator("[data-drag-item-id]", { hasText: "Drag C" }).first();
+      const itemCHandle = itemC.getByRole("button", { name: /drag Drag C/i });
+      const itemCBox = await itemCHandle.boundingBox();
+      expect(itemCBox).not.toBeNull();
+      await itemCHandle.dispatchEvent("pointerdown", {
+        pointerId: 5,
+        pointerType: "mouse",
+        button: 0,
+        clientX: itemCBox!.x + itemCBox!.width / 2,
+        clientY: itemCBox!.y + itemCBox!.height / 2,
+      });
+      await expect(alice.locator("[data-drop-zone='true']").first()).toBeVisible();
+      await alice.keyboard.press("Escape");
+      await expect(alice.locator("[data-drop-zone='true']").first()).not.toBeVisible();
+
+      const stateAfterCancel = await alice.evaluate(async (id) => {
+        const response = await fetch(`/api/rooms/${id}`);
+        return response.json();
+      }, roomId) as { items: { text: string; columnId: string | null; order: number }[]; version: number };
+      expect(stateAfterCancel).toEqual(stateAfterMoves);
+
+      await ctx1.close();
+      await ctx2.close();
+    });
+
+    test("touch drag works in a scrollable organise container", async ({ browser }) => {
+      const ctx = await browser.newContext({
+        hasTouch: true,
+        isMobile: true,
+        viewport: { width: 390, height: 844 },
+      });
+      const page = await ctx.newPage();
+      await page.goto("/");
+      await page.getByRole("button", { name: /create room/i }).click();
+      await page.waitForURL(/\/room\//);
+      const roomId = new URL(page.url()).pathname.split("/").pop()!;
+      await page.getByLabel(/display name/i).fill("Alice");
+      await page.getByRole("button", { name: /join/i }).click();
+      await expect(page.getByText(/Phase: WRITE/i)).toBeVisible();
+
+      for (const text of ["Touch A", "Touch B", "Touch C", "Touch D", "Touch E"]) {
+        await page.getByPlaceholder(/add a retro item/i).fill(text);
+        await page.getByRole("button", { name: /add item/i }).click();
+        await expect(page.getByText(text)).toBeVisible();
+      }
+
+      await page.getByRole("button", { name: /advance to next phase/i }).click();
+      await expect(page.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
+      const stateBefore = await page.evaluate(async (id) => {
+        const response = await fetch(`/api/rooms/${id}`);
+        return response.json();
+      }, roomId) as { columns: { id: string; name: string }[]; version: number };
+      const continueColumnId = stateBefore.columns.find((column) => column.name === "Continue")!.id;
+
+      await page.locator(`[data-drop-list="${continueColumnId}"]`).scrollIntoViewIfNeeded();
+      await touchDragItemToDropZone(page, "Touch E", continueColumnId, 0);
+
+      const stateAfter = await page.evaluate(async (id) => {
+        const response = await fetch(`/api/rooms/${id}`);
+        return response.json();
+      }, roomId) as { items: { text: string; columnId: string | null; order: number }[]; version: number };
+      expect(stateAfter.version).toBeGreaterThan(stateBefore.version);
+      expect(stateAfter.items.find((item) => item.text === "Touch E")?.columnId).toBe(continueColumnId);
+
+      await ctx.close();
     });
 
     test("full two-user retro flow through all phases", async ({ browser }) => {
