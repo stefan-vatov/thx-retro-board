@@ -1,14 +1,23 @@
 import { useState, useCallback } from "react";
 import type { RoomState, RetroItem, Group } from "../domain";
-import { getUngroupedItems, getGroupedItems, sanitizeGroupName, isValidGroupName } from "../domain";
+import {
+  getUngroupedItems,
+  getGroupedItems,
+  sanitizeColumnName,
+  isValidColumnName,
+  MAX_COLUMN_NAME_LENGTH,
+  MAX_COLUMNS,
+} from "../domain";
 
 interface OrganiseBoardProps {
   roomState: RoomState;
   isFacilitator: boolean;
   send: (message: unknown) => void;
+  serverError?: string | null;
+  clearServerError?: () => void;
 }
 
-export function OrganiseBoard({ roomState, isFacilitator, send }: OrganiseBoardProps) {
+export function OrganiseBoard({ roomState, isFacilitator, send, serverError = null, clearServerError }: OrganiseBoardProps) {
   const [newGroupName, setNewGroupName] = useState("");
   const [groupError, setGroupError] = useState<string | null>(null);
   const [movingItemId, setMovingItemId] = useState<string | null>(null);
@@ -18,15 +27,28 @@ export function OrganiseBoard({ roomState, isFacilitator, send }: OrganiseBoardP
   const sortedGroups = [...roomState.groups].sort((a, b) => a.order - b.order);
   const ungrouped = getUngroupedItems(roomState.items);
   const movingItem = movingItemId ? roomState.items.find((i) => i.id === movingItemId) : null;
+  const isAtMaxColumns = sortedGroups.length >= MAX_COLUMNS;
+  const maxColumnsMessage = `Rooms can have at most ${MAX_COLUMNS} columns.`;
+  const serverColumnError = serverError && /column/i.test(serverError) ? serverError : null;
+  const feedbackMessages = [
+    groupError,
+    isAtMaxColumns ? maxColumnsMessage : null,
+    serverColumnError,
+  ].filter((message, index, messages): message is string => typeof message === "string" && messages.indexOf(message) === index);
 
   function handleCreateColumn(e: React.FormEvent) {
     e.preventDefault();
     setGroupError(null);
-    if (!isValidGroupName(newGroupName)) {
+    if (isAtMaxColumns) {
+      setGroupError(maxColumnsMessage);
+      return;
+    }
+    if (!isValidColumnName(newGroupName)) {
       setGroupError("Column name cannot be empty.");
       return;
     }
-    send({ type: "create-column", name: sanitizeGroupName(newGroupName) });
+    clearServerError?.();
+    send({ type: "create-column", name: sanitizeColumnName(newGroupName) });
     setNewGroupName("");
   }
 
@@ -68,14 +90,28 @@ export function OrganiseBoard({ roomState, isFacilitator, send }: OrganiseBoardP
               type="text"
               className="input"
               value={newGroupName}
-              onChange={(e) => setNewGroupName(e.target.value)}
-              maxLength={100}
+              onChange={(e) => {
+                setNewGroupName(e.target.value);
+                if (groupError) setGroupError(null);
+              }}
+              maxLength={MAX_COLUMN_NAME_LENGTH}
               placeholder="New group name / column name…"
               aria-label="New column name"
+              disabled={isAtMaxColumns}
+              aria-describedby={feedbackMessages.length > 0 ? "organise-column-feedback" : undefined}
+              aria-invalid={groupError || serverColumnError ? "true" : undefined}
             />
-            <button type="submit" className="btn btn--secondary btn--sm" aria-label="Create group / column">Create Column</button>
+            <button type="submit" className="btn btn--secondary btn--sm" aria-label="Create group / column" disabled={isAtMaxColumns}>Create Column</button>
           </form>
-          {groupError && <span className="status-msg status-msg--error" style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }}>{groupError}</span>}
+          {feedbackMessages.length > 0 && (
+            <div id="organise-column-feedback" style={{ display: "grid", gap: "var(--space-1)" }}>
+              {feedbackMessages.map((message) => (
+                <span key={message} className="status-msg status-msg--error" style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }} role="alert">
+                  {message}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

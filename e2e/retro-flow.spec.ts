@@ -141,6 +141,32 @@ test.describe("Retro Board E2E", () => {
       await ctx3.close();
     });
 
+    test("organise create-column form blocks maximum columns with visible feedback", async ({ page }) => {
+      await page.goto("/");
+      await page.getByRole("button", { name: /create room/i }).click();
+      await page.waitForURL(/\/room\//);
+
+      await page.getByLabel(/display name/i).fill("Alice");
+      await page.getByRole("button", { name: /join/i }).click();
+      await expect(page.getByText(/Phase: WRITE/i)).toBeVisible();
+
+      await page.getByRole("button", { name: /configure columns/i }).click();
+      for (const name of ["One", "Two", "Three", "Four", "Five"]) {
+        await page.locator(".column-config__form").getByLabel(/new column name/i).fill(name);
+        await page.getByRole("button", { name: /add column/i }).click();
+        await expect(page.getByRole("heading", { name })).toBeVisible({ timeout: 5000 });
+      }
+
+      await page.getByRole("button", { name: /configure columns/i }).click();
+      await page.getByRole("button", { name: /advance to next phase/i }).click();
+      await expect(page.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
+
+      const board = page.locator(".board-area");
+      await expect(board.getByText(/Rooms can have at most 8 columns\./i)).toBeVisible();
+      await expect(board.getByLabel(/new column name/i)).toBeDisabled();
+      await expect(board.getByRole("button", { name: /create group \/ column/i })).toBeDisabled();
+    });
+
     test("full two-user retro flow through all phases", async ({ browser }) => {
       // Create room as Alice (facilitator)
       const ctx1 = await browser.newContext();

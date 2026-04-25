@@ -897,7 +897,13 @@ export function RoomPage() {
         )}
 
         {roomState?.phase === "organise" ? (
-          <OrganiseBoard roomState={roomState} isFacilitator={isFacilitator} send={send} />
+          <OrganiseBoard
+            roomState={roomState}
+            isFacilitator={isFacilitator}
+            send={send}
+            serverError={lastError}
+            clearServerError={clearError}
+          />
         ) : roomState?.phase === "vote" ? (
           <VoteBoard roomState={roomState} participantId={participantId} send={send} />
         ) : roomState?.phase === "review" ? (
