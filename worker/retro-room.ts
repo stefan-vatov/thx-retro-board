@@ -437,20 +437,36 @@ export class RetroRoom extends DurableObject<Env> {
     return this.reorderColumns(participantId, orderedIds);
   }
 
-  async moveItemToGroup(_participantId: string, itemId: string, targetGroupId: string | null, targetIndex: number): Promise<{ success: boolean; error?: string }> {
+  async moveItemToGroup(participantId: string, itemId: string, targetGroupId: string | null, targetIndex: number): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
 
     if (s.phase !== "organise") {
       return { success: false, error: "Cannot move items outside organise phase" };
     }
 
-    const itemExists = s.items.some((i) => i.id === itemId);
-    if (!itemExists) {
+    const participantExists = s.participants.some((participant) => participant.id === participantId);
+    if (!participantExists) {
+      return { success: false, error: "Participant not found" };
+    }
+
+    const item = s.items.find((i) => i.id === itemId);
+    if (!item) {
       return { success: false, error: "Item not found" };
     }
 
     if (targetGroupId !== null && !s.groups.some((g) => g.id === targetGroupId)) {
       return { success: false, error: "Column not found" };
+    }
+
+    if (!Number.isFinite(targetIndex) || !Number.isInteger(targetIndex)) {
+      return { success: false, error: "Target index must be a finite integer" };
+    }
+
+    const targetListLength = s.items.filter(
+      (i) => i.id !== item.id && (i.columnId ?? i.groupId) === targetGroupId,
+    ).length;
+    if (targetIndex < 0 || targetIndex > targetListLength) {
+      return { success: false, error: "Target index out of bounds" };
     }
 
     s.items = applyMoveItemToGroup(s.items, itemId, targetGroupId, targetIndex);

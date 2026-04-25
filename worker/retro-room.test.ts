@@ -810,6 +810,7 @@ describe("RetroRoom Durable Object", () => {
       expect(result.success).toBe(true);
 
       const state = await stub.getRoomState();
+      expect(state.version).toBe(state0.version + 1);
       const moved = state.items.find((i) => i.id === itemId);
       expect(moved?.groupId).toBe(groupId);
     });
@@ -846,10 +847,12 @@ describe("RetroRoom Durable Object", () => {
     it("moveItemToGroup rejects unknown item", async () => {
       const stub = await setupOrganiseRoom("test-move-item-unknown");
       await stub.createGroup("fac1", "Process");
+      const before = await stub.getRoomState();
 
       const result = await stub.moveItemToGroup("fac1", "nonexistent", null, 0);
       expect(result.success).toBe(false);
       expect(result.error).toContain("Item not found");
+      expect(await stub.getRoomState()).toEqual(before);
     });
 
     it("moveItemToGroup rejects unknown group", async () => {
@@ -860,6 +863,47 @@ describe("RetroRoom Durable Object", () => {
       const result = await stub.moveItemToGroup("fac1", itemId, "nonexistent-group", 0);
       expect(result.success).toBe(false);
       expect(result.error).toContain("Column not found");
+      expect(await stub.getRoomState()).toEqual(state0);
+    });
+
+    it("moveItemToGroup rejects unknown participants without mutating state", async () => {
+      const stub = await setupOrganiseRoom("test-move-item-unknown-participant");
+      const groupResult = await stub.createGroup("fac1", "Process");
+      const before = await stub.getRoomState();
+      const itemId = before.items[0]!.id;
+
+      const result = await stub.moveItemToGroup("missing-participant", itemId, groupResult.group!.id, 0);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Participant not found");
+      expect(await stub.getRoomState()).toEqual(before);
+    });
+
+    it("moveItemToGroup rejects malformed target indices without mutating state", async () => {
+      const stub = await setupOrganiseRoom("test-move-item-malformed-index");
+      const groupResult = await stub.createGroup("fac1", "Process");
+      const targetGroupId = groupResult.group!.id;
+      const before = await stub.getRoomState();
+      const itemId = before.items[0]!.id;
+
+      for (const targetIndex of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+        const result = await stub.moveItemToGroup("fac1", itemId, targetGroupId, targetIndex);
+        expect(result.success).toBe(false);
+        expect(result.error).toMatch(/Target index/);
+        expect(await stub.getRoomState()).toEqual(before);
+      }
+    });
+
+    it("moveItemToGroup rejects out-of-range target indices without mutating state", async () => {
+      const stub = await setupOrganiseRoom("test-move-item-out-of-range-index");
+      const groupResult = await stub.createGroup("fac1", "Process");
+      const targetGroupId = groupResult.group!.id;
+      const before = await stub.getRoomState();
+      const itemId = before.items[0]!.id;
+
+      const result = await stub.moveItemToGroup("fac1", itemId, targetGroupId, 1);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Target index out of bounds");
+      expect(await stub.getRoomState()).toEqual(before);
     });
 
     it("duplicate text items remain distinct through organisation", async () => {
