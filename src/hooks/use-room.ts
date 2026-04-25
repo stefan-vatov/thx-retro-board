@@ -4,12 +4,15 @@ import type { RoomState, ServerToClientMessage } from "../domain";
 interface UseRoomResult {
   state: RoomState | null;
   connected: boolean;
+  lastError: string | null;
+  clearError: () => void;
   send: (message: unknown) => void;
 }
 
 export function useRoom(roomId: string, participantId: string, connectionToken?: string): UseRoomResult {
   const [state, setState] = useState<RoomState | null>(null);
   const [connected, setConnected] = useState(false);
+  const [lastError, setLastError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -58,6 +61,8 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
           // since the snapshot will carry the full authoritative votes array.
         } else if (msg.type === "timer-updated") {
           setState((prev) => prev ? { ...prev, timer: msg.timer } : prev);
+        } else if (msg.type === "error") {
+          setLastError(msg.message);
         }
       } catch {
         // ignore parse errors
@@ -80,9 +85,12 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
 
   const send = useCallback((message: unknown) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      setLastError(null);
       wsRef.current.send(JSON.stringify(message));
     }
   }, []);
 
-  return { state, connected, send };
+  const clearError = useCallback(() => setLastError(null), []);
+
+  return { state, connected, lastError, clearError, send };
 }

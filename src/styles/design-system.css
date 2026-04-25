@@ -836,6 +836,12 @@ body {
   align-items: stretch;
 }
 
+.write-composer__column-select {
+  max-width: 11rem;
+  min-width: 8rem;
+  text-overflow: ellipsis;
+}
+
 .write-composer__input-wrapper {
   position: relative;
   flex: 1;
@@ -964,6 +970,148 @@ body {
   font-size: var(--text-xs);
   color: var(--text-muted);
   font-family: var(--font-mono);
+}
+
+/* ---------------------------------------------------------------------
+   9c. Configurable Columns
+   --------------------------------------------------------------------- */
+.column-config {
+  width: 100%;
+}
+
+.column-config__panel {
+  margin-top: var(--space-3);
+  padding: var(--space-4);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.column-config__header,
+.column-config__item,
+.column-board__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.column-config__title {
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.column-config__hint {
+  margin: var(--space-1) 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+}
+
+.column-config__count,
+.column-board__count {
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  background: var(--accent-muted);
+  border: 1px solid rgba(98, 132, 241, 0.24);
+  border-radius: var(--radius-full);
+  padding: var(--space-1) var(--space-2);
+}
+
+.column-config__form {
+  display: flex;
+  gap: var(--space-2);
+  align-items: stretch;
+}
+
+.column-config__list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.column-config__item {
+  padding: var(--space-2);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  background: var(--glass-bg);
+}
+
+.column-config__order {
+  width: 1.75rem;
+  height: 1.75rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-full);
+  background: var(--glass-bg-hover);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+}
+
+.column-config__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.column-config__edit-input {
+  flex: 1;
+  min-width: 8rem;
+}
+
+.column-config__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.column-board {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-4);
+  align-items: stretch;
+}
+
+.column-board__column {
+  min-width: 0;
+  padding: var(--space-4);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+}
+
+.column-board__column--secondary {
+  border-style: dashed;
+  opacity: 0.88;
+}
+
+.column-board__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+
+.column-board__empty {
+  margin-top: var(--space-3);
+  font-size: var(--text-sm);
 }
 
 /* Write phase empty state */

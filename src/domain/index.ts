@@ -9,6 +9,7 @@ export {
   DEFAULT_COLUMNS,
   getDefaultColumns,
   MAX_COLUMN_NAME_LENGTH,
+  MAX_COLUMNS,
   PHASE_ORDER,
   canTransition,
   isPhaseAllowed,

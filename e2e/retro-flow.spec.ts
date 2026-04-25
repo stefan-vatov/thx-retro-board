@@ -62,6 +62,85 @@ test.describe("Retro Board E2E", () => {
   });
 
   test.describe("Two-user flow", () => {
+    test("facilitator configures columns, write placement syncs, and custom labels persist through review", async ({ browser }) => {
+      const ctx1 = await browser.newContext();
+      const alice = await ctx1.newPage();
+      await alice.goto("/");
+      await alice.getByRole("button", { name: /create room/i }).click();
+      await alice.waitForURL(/\/room\//);
+      const roomUrl = alice.url();
+      const roomId = new URL(roomUrl).pathname.split("/").pop()!;
+
+      await alice.getByLabel(/display name/i).fill("Alice");
+      await alice.getByRole("button", { name: /join/i }).click();
+      await expect(alice.getByText(/Phase: WRITE/i)).toBeVisible();
+      await expect(alice.getByRole("button", { name: /configure columns/i })).toBeVisible();
+
+      const ctx2 = await browser.newContext();
+      const bob = await ctx2.newPage();
+      await bob.goto(roomUrl);
+      await bob.getByLabel(/display name/i).fill("Bob");
+      await bob.getByRole("button", { name: /join/i }).click();
+      await expect(bob.getByText(/Phase: WRITE/i)).toBeVisible();
+      await expect(bob.getByRole("button", { name: /configure columns/i })).toHaveCount(0);
+
+      await alice.getByRole("button", { name: /configure columns/i }).click();
+      await alice.getByLabel(/new column name/i).fill("  Learn  ");
+      await alice.getByRole("button", { name: /add column/i }).click();
+      await expect(alice.getByRole("heading", { name: "Learn" })).toBeVisible({ timeout: 5000 });
+      await expect(bob.getByRole("heading", { name: "Learn" })).toBeVisible({ timeout: 5000 });
+
+      await alice.locator(".column-config__item", { hasText: "Learn" }).getByRole("button", { name: "Edit" }).click();
+      await alice.getByLabel(/edit Learn column name/i).fill("Team Wins");
+      await alice.getByRole("button", { name: "Save" }).click();
+      await expect(bob.getByRole("heading", { name: "Team Wins" })).toBeVisible({ timeout: 5000 });
+
+      const ctx3 = await browser.newContext();
+      const carol = await ctx3.newPage();
+      await carol.goto(roomUrl);
+      await carol.getByLabel(/display name/i).fill("Carol");
+      await carol.getByRole("button", { name: /join/i }).click();
+      await expect(carol.getByRole("heading", { name: "Team Wins" })).toBeVisible({ timeout: 5000 });
+
+      await alice.getByLabel(/column for new item/i).selectOption({ label: "Team Wins" });
+      await alice.getByPlaceholder(/add a retro item/i).fill("Column-specific item");
+      await alice.getByRole("button", { name: /add item/i }).click();
+      await expect(bob.locator(".column-board__column", { hasText: "Team Wins" }).getByText("Column-specific item")).toBeVisible({ timeout: 5000 });
+
+      const stateAfterItem = await alice.evaluate(async (id) => {
+        const response = await fetch(`/api/rooms/${id}`);
+        return response.json();
+      }, roomId) as { columns: { id: string; name: string; order: number }[]; items: { text: string; columnId: string | null }[] };
+      const teamWins = stateAfterItem.columns.find((column) => column.name === "Team Wins")!;
+      expect(stateAfterItem.items.find((item) => item.text === "Column-specific item")?.columnId).toBe(teamWins.id);
+
+      await alice.locator(".column-config__item", { hasText: "Team Wins" }).getByRole("button", { name: /move Team Wins column left/i }).click();
+      const stateAfterReorder = await alice.evaluate(async (id) => {
+        const response = await fetch(`/api/rooms/${id}`);
+        return response.json();
+      }, roomId) as { columns: { id: string; name: string; order: number }[] };
+      expect(stateAfterReorder.columns.map((column) => column.order)).toEqual([0, 1, 2, 3]);
+      expect(stateAfterReorder.columns.findIndex((column) => column.name === "Team Wins")).toBeLessThan(3);
+
+      await alice.getByRole("button", { name: /advance to next phase/i }).click();
+      await expect(alice.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
+      await expect(bob.getByRole("button", { name: /create group/i })).toHaveCount(0);
+      await expect(alice.getByRole("heading", { name: "Team Wins" })).toBeVisible();
+
+      await alice.getByRole("button", { name: /advance to next phase/i }).click();
+      await expect(alice.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
+      await expect(alice.getByRole("heading", { name: "Team Wins" })).toBeVisible();
+
+      await alice.getByRole("button", { name: /advance to next phase/i }).click();
+      await expect(alice.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
+      await expect(alice.getByRole("heading", { name: "Team Wins" })).toBeVisible();
+      await expect(alice.getByText("Column-specific item")).toBeVisible();
+
+      await ctx1.close();
+      await ctx2.close();
+      await ctx3.close();
+    });
+
     test("full two-user retro flow through all phases", async ({ browser }) => {
       // Create room as Alice (facilitator)
       const ctx1 = await browser.newContext();

@@ -18,6 +18,7 @@ import {
   PHASE_ORDER,
   sanitizeColumnName,
   isValidColumnName,
+  MAX_COLUMNS,
   getDefaultColumns,
   applyReorderColumns,
   applyEditColumn,
@@ -355,6 +356,9 @@ export class RetroRoom extends DurableObject<Env> {
     const sanitized = sanitizeColumnName(rawName);
     if (!isValidColumnName(rawName)) {
       return { success: false, error: "Column name cannot be empty" };
+    }
+    if (s.groups.length >= MAX_COLUMNS) {
+      return { success: false, error: `Rooms can have at most ${MAX_COLUMNS} columns` };
     }
 
     const column: Column = {

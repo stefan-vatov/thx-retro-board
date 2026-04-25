@@ -1,9 +1,9 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams } from "react-router-dom";
 import { joinRoom, getRoomState, setVoteBudget, setPhase } from "../api";
 import { useRoom } from "../hooks";
-import type { RoomState, Phase } from "../domain";
-import { sanitizeItemText, isValidItemText, PHASE_ORDER } from "../domain";
+import type { RoomState, Phase, Column, RetroItem } from "../domain";
+import { sanitizeItemText, isValidItemText, PHASE_ORDER, sanitizeColumnName, isValidColumnName, MAX_COLUMN_NAME_LENGTH, MAX_COLUMNS, getGroupedItems } from "../domain";
 import { OrganiseBoard } from "./OrganiseBoard";
 import { VoteBoard } from "./VoteBoard";
 import { ReviewBoard } from "./ReviewBoard";
@@ -177,6 +177,256 @@ function ParticipantList({ participants, currentId }: { participants: RoomState[
   );
 }
 
+function getSortedColumns(roomState: RoomState): Column[] {
+  return [...(roomState.columns ?? roomState.groups)].sort((a, b) => a.order - b.order);
+}
+
+function ColumnConfiguration({
+  roomState,
+  send,
+  serverError,
+  clearServerError,
+}: {
+  roomState: RoomState;
+  send: (message: unknown) => void;
+  serverError: string | null;
+  clearServerError: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [newColumnName, setNewColumnName] = useState("");
+  const [editingColumnId, setEditingColumnId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState("");
+  const [columnMsg, setColumnMsg] = useState<string | null>(null);
+  const [columnError, setColumnError] = useState<string | null>(null);
+  const canMutate = roomState.phase === "write" || roomState.phase === "organise";
+  const columns = getSortedColumns(roomState);
+  const isAtMax = columns.length >= MAX_COLUMNS;
+  const displayedError = columnError ?? (serverError && /column/i.test(serverError) ? serverError : null);
+
+  function clearFeedback() {
+    setColumnMsg(null);
+    setColumnError(null);
+    clearServerError();
+  }
+
+  function validateName(raw: string): string | null {
+    if (!isValidColumnName(raw)) return "Column name cannot be empty.";
+    if (raw.trim().length > MAX_COLUMN_NAME_LENGTH) return `Column names must be ${MAX_COLUMN_NAME_LENGTH} characters or fewer.`;
+    return null;
+  }
+
+  function handleCreateColumn(e: React.FormEvent) {
+    e.preventDefault();
+    clearFeedback();
+    if (!canMutate) {
+      setColumnError("Columns can be configured during write and organise phases.");
+      return;
+    }
+    if (isAtMax) {
+      setColumnError(`Rooms can have at most ${MAX_COLUMNS} columns.`);
+      return;
+    }
+    const validationError = validateName(newColumnName);
+    if (validationError) {
+      setColumnError(validationError);
+      return;
+    }
+    send({ type: "create-column", name: sanitizeColumnName(newColumnName) });
+    setNewColumnName("");
+    setColumnMsg("Column creation sent.");
+  }
+
+  function startEdit(column: Column) {
+    clearFeedback();
+    setEditingColumnId(column.id);
+    setEditingName(column.name);
+  }
+
+  function submitEdit(columnId: string) {
+    clearFeedback();
+    const validationError = validateName(editingName);
+    if (validationError) {
+      setColumnError(validationError);
+      return;
+    }
+    send({ type: "edit-column", columnId, name: sanitizeColumnName(editingName) });
+    setEditingColumnId(null);
+    setEditingName("");
+    setColumnMsg("Column rename sent.");
+  }
+
+  function moveColumn(fromIdx: number, toIdx: number) {
+    clearFeedback();
+    const reordered = [...columns];
+    const [moved] = reordered.splice(fromIdx, 1);
+    if (!moved) return;
+    reordered.splice(toIdx, 0, moved);
+    send({ type: "reorder-columns", columnIds: reordered.map((column) => column.id) });
+    setColumnMsg("Column reorder sent.");
+  }
+
+  return (
+    <section className="column-config" aria-label="Column configuration">
+      <button
+        type="button"
+        className="btn btn--secondary btn--sm"
+        onClick={() => {
+          clearFeedback();
+          setOpen((value) => !value);
+        }}
+        aria-expanded={open}
+      >
+        Configure columns
+      </button>
+
+      {open && (
+        <div className="column-config__panel">
+          <div className="column-config__header">
+            <div>
+              <h3 className="column-config__title">Columns</h3>
+              <p className="column-config__hint">
+                Facilitators can configure columns during write and organise. Participants see changes live.
+              </p>
+            </div>
+            <span className="column-config__count">{columns.length}/{MAX_COLUMNS}</span>
+          </div>
+
+          {!canMutate && (
+            <div className="status-msg status-msg--muted" role="status">
+              Column configuration is locked in {roomState.phase} phase.
+            </div>
+          )}
+
+          <form className="column-config__form" onSubmit={handleCreateColumn}>
+            <input
+              className={`input${displayedError ? " input--error" : ""}`}
+              type="text"
+              value={newColumnName}
+              onChange={(event) => {
+                setNewColumnName(event.target.value);
+                if (columnError) setColumnError(null);
+              }}
+              maxLength={MAX_COLUMN_NAME_LENGTH}
+              placeholder="New column name…"
+              aria-label="New column name"
+              disabled={!canMutate || isAtMax}
+            />
+            <button className="btn btn--secondary btn--sm" type="submit" disabled={!canMutate || isAtMax}>
+              Add column
+            </button>
+          </form>
+
+          {displayedError && (
+            <div className="status-msg status-msg--error" role="alert">
+              {displayedError}
+            </div>
+          )}
+          {columnMsg && !displayedError && (
+            <div className="status-msg status-msg--info" role="status">
+              {columnMsg}
+            </div>
+          )}
+
+          <ol className="column-config__list" aria-label="Configured columns">
+            {columns.map((column, index) => (
+              <li key={column.id} className="column-config__item">
+                <span className="column-config__order" aria-label={`Column order ${index + 1}`}>{index + 1}</span>
+                {editingColumnId === column.id ? (
+                  <input
+                    className="input column-config__edit-input"
+                    value={editingName}
+                    onChange={(event) => setEditingName(event.target.value)}
+                    maxLength={MAX_COLUMN_NAME_LENGTH}
+                    aria-label={`Edit ${column.name} column name`}
+                    autoFocus
+                  />
+                ) : (
+                  <span className="column-config__name" title={column.name}>{column.name}</span>
+                )}
+                <span className="column-config__actions">
+                  {editingColumnId === column.id ? (
+                    <>
+                      <button type="button" className="btn btn--secondary btn--sm" onClick={() => submitEdit(column.id)}>Save</button>
+                      <button type="button" className="reorder-btn" onClick={() => setEditingColumnId(null)} aria-label="Cancel column edit">×</button>
+                    </>
+                  ) : (
+                    <button type="button" className="btn btn--secondary btn--sm" onClick={() => startEdit(column)} disabled={!canMutate}>
+                      Edit
+                    </button>
+                  )}
+                  <button type="button" className="reorder-btn" onClick={() => moveColumn(index, index - 1)} disabled={!canMutate || index === 0} aria-label={`Move ${column.name} column left`}>↑</button>
+                  <button type="button" className="reorder-btn" onClick={() => moveColumn(index, index + 1)} disabled={!canMutate || index === columns.length - 1} aria-label={`Move ${column.name} column right`}>↓</button>
+                </span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function WriteColumnBoard({ roomState }: { roomState: RoomState }) {
+  const columns = getSortedColumns(roomState);
+  const unassigned = roomState.items.filter((item) => (item.columnId ?? item.groupId) === null).sort((a, b) => a.order - b.order);
+
+  function renderItem(item: RetroItem, index: number) {
+    const isLong = item.text.length > 400;
+    const author = roomState.participants.find((p) => p.id === item.authorId);
+    return (
+      <li key={item.id} className={`item-card${isLong ? " item-card--long" : ""}`}>
+        <div className="item-card__content">
+          <span className="item-card__text">{item.text}</span>
+          {isLong && (
+            <span className="item-card__length-indicator" aria-label={`${item.text.length} characters`}>
+              {item.text.length}/500
+            </span>
+          )}
+        </div>
+        <div className="item-card__meta">
+          <span className="item-card__author">{author?.displayName ?? "Unknown"}</span>
+          <span className="item-card__index" aria-label={`Item ${index + 1}`}>#{index + 1}</span>
+        </div>
+      </li>
+    );
+  }
+
+  return (
+    <div className="column-board" aria-label="Write phase columns">
+      {columns.map((column) => {
+        const items = getGroupedItems(roomState.items, column.id);
+        return (
+          <section key={column.id} className="column-board__column" aria-labelledby={`write-column-${column.id}`}>
+            <div className="column-board__header">
+              <h3 id={`write-column-${column.id}`} className="column-board__title" title={column.name}>{column.name}</h3>
+              <span className="column-board__count">{items.length}</span>
+            </div>
+            {items.length === 0 ? (
+              <p className="text-muted column-board__empty">No items in this column yet.</p>
+            ) : (
+              <ul className="item-list">
+                {items.map((item, index) => renderItem(item, index))}
+              </ul>
+            )}
+          </section>
+        );
+      })}
+
+      {unassigned.length > 0 && (
+        <section className="column-board__column column-board__column--secondary" aria-labelledby="write-column-unassigned">
+          <div className="column-board__header">
+            <h3 id="write-column-unassigned" className="column-board__title">Unassigned</h3>
+            <span className="column-board__count">{unassigned.length}</span>
+          </div>
+          <ul className="item-list">
+            {unassigned.map((item, index) => renderItem(item, index))}
+          </ul>
+        </section>
+      )}
+    </div>
+  );
+}
+
 export function RoomPage() {
   const { roomId } = useParams<{ roomId: string }>();
   const [pageState, setPageState] = useState<PageState>("loading");
@@ -194,16 +444,21 @@ export function RoomPage() {
   const [timerInputError, setTimerInputError] = useState<string | null>(null);
   const [phaseMsg, setPhaseMsg] = useState<string | null>(null);
 
-  const { state: wsState, connected, send } = useRoom(roomId ?? "", participantId, connectionToken);
+  const { state: wsState, connected, lastError, clearError, send } = useRoom(roomId ?? "", participantId, connectionToken);
 
   const roomState = mergeRoomState(localRoomState, wsState);
 
   const [itemInput, setItemInput] = useState("");
   const [itemError, setItemError] = useState<string | null>(null);
+  const [selectedColumnId, setSelectedColumnId] = useState<string | null>(null);
 
   const isNearCharLimit = itemInput.length > 400;
   const charCountId = "item-char-count";
   const itemErrorId = "item-error";
+  const sortedRoomColumns = roomState ? getSortedColumns(roomState) : [];
+  const effectiveSelectedColumnId = selectedColumnId && sortedRoomColumns.some((column) => column.id === selectedColumnId)
+    ? selectedColumnId
+    : sortedRoomColumns[0]?.id ?? null;
 
   useEffect(() => {
     if (!roomId) return;
@@ -237,10 +492,7 @@ export function RoomPage() {
     })();
   }, [roomId, participantId, identity.displayName]);
 
-  const displayBudget = useMemo(() => {
-    if (roomState) return String(roomState.voteBudget);
-    return voteBudgetInput;
-  }, [roomState, voteBudgetInput]);
+  const displayBudget = roomState ? String(roomState.voteBudget) : voteBudgetInput;
 
   async function handleJoin(e: React.FormEvent) {
     e.preventDefault();
@@ -348,7 +600,7 @@ export function RoomPage() {
       setItemError("Item text cannot be blank.");
       return;
     }
-    send({ type: "add-item", text: sanitizeItemText(itemInput) });
+    send({ type: "add-item", text: sanitizeItemText(itemInput), columnId: effectiveSelectedColumnId });
     setItemInput("");
   }
 
@@ -549,6 +801,14 @@ export function RoomPage() {
                 </span>
               )}
             </div>
+            {roomState && (
+              <ColumnConfiguration
+                roomState={roomState}
+                send={send}
+                serverError={lastError}
+                clearServerError={clearError}
+              />
+            )}
           </div>
         </div>
       )}
@@ -571,6 +831,19 @@ export function RoomPage() {
               aria-label="Add retro item"
             >
               <div className="write-composer__input-row">
+                <label className="sr-only" htmlFor="itemColumn">Column</label>
+                <select
+                  id="itemColumn"
+                  className="input write-composer__column-select"
+                  value={effectiveSelectedColumnId ?? ""}
+                  onChange={(event) => setSelectedColumnId(event.target.value)}
+                  disabled={!connected}
+                  aria-label="Column for new item"
+                >
+                  {sortedRoomColumns.map((column) => (
+                    <option key={column.id} value={column.id}>{column.name}</option>
+                  ))}
+                </select>
                 <div className="write-composer__input-wrapper">
                   <input
                     type="text"
@@ -624,46 +897,13 @@ export function RoomPage() {
         )}
 
         {roomState?.phase === "organise" ? (
-          <OrganiseBoard roomState={roomState} send={send} />
+          <OrganiseBoard roomState={roomState} isFacilitator={isFacilitator} send={send} />
         ) : roomState?.phase === "vote" ? (
           <VoteBoard roomState={roomState} participantId={participantId} send={send} />
         ) : roomState?.phase === "review" ? (
           <ReviewBoard roomState={roomState} />
         ) : roomState?.phase === "write" ? (
-          (roomState?.items?.length ?? 0) === 0 ? (
-            <div className="empty-state write-empty-state">
-              <div className="empty-state__icon" aria-hidden="true">✍️</div>
-              <p className="empty-state__text">No items yet. Add your first retro item above.</p>
-            </div>
-          ) : (
-            <div className="item-list-container">
-              <div className="item-list-header">
-                <span className="item-list-count">{roomState!.items.length} item{roomState!.items.length !== 1 ? "s" : ""}</span>
-              </div>
-              <ul className="item-list" aria-label="Retro items">
-                {roomState?.items?.map((item, index) => {
-                  const isLong = item.text.length > 400;
-                  const author = roomState?.participants.find((p) => p.id === item.authorId);
-                  return (
-                    <li key={item.id} className={`item-card${isLong ? " item-card--long" : ""}`}>
-                      <div className="item-card__content">
-                        <span className="item-card__text">{item.text}</span>
-                        {isLong && (
-                          <span className="item-card__length-indicator" aria-label={`${item.text.length} characters`}>
-                            {item.text.length}/500
-                          </span>
-                        )}
-                      </div>
-                      <div className="item-card__meta">
-                        <span className="item-card__author">{author?.displayName ?? "Unknown"}</span>
-                        <span className="item-card__index" aria-label={`Item ${index + 1}`}>#{index + 1}</span>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          )
+          <WriteColumnBoard roomState={roomState} />
         ) : null}
       </div>
 

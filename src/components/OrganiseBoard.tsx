@@ -4,10 +4,11 @@ import { getUngroupedItems, getGroupedItems, sanitizeGroupName, isValidGroupName
 
 interface OrganiseBoardProps {
   roomState: RoomState;
+  isFacilitator: boolean;
   send: (message: unknown) => void;
 }
 
-export function OrganiseBoard({ roomState, send }: OrganiseBoardProps) {
+export function OrganiseBoard({ roomState, isFacilitator, send }: OrganiseBoardProps) {
   const [newGroupName, setNewGroupName] = useState("");
   const [groupError, setGroupError] = useState<string | null>(null);
   const [movingItemId, setMovingItemId] = useState<string | null>(null);
@@ -18,14 +19,14 @@ export function OrganiseBoard({ roomState, send }: OrganiseBoardProps) {
   const ungrouped = getUngroupedItems(roomState.items);
   const movingItem = movingItemId ? roomState.items.find((i) => i.id === movingItemId) : null;
 
-  function handleCreateGroup(e: React.FormEvent) {
+  function handleCreateColumn(e: React.FormEvent) {
     e.preventDefault();
     setGroupError(null);
     if (!isValidGroupName(newGroupName)) {
-      setGroupError("Group name cannot be empty.");
+      setGroupError("Column name cannot be empty.");
       return;
     }
-    send({ type: "create-group", name: sanitizeGroupName(newGroupName) });
+    send({ type: "create-column", name: sanitizeGroupName(newGroupName) });
     setNewGroupName("");
   }
 
@@ -60,18 +61,19 @@ export function OrganiseBoard({ roomState, send }: OrganiseBoardProps) {
 
   return (
     <div>
-      {isOrganise && (
+      {isOrganise && isFacilitator && (
         <div style={{ marginBottom: "var(--space-4)", display: "flex", gap: "var(--space-3)", alignItems: "flex-start" }}>
-          <form onSubmit={handleCreateGroup} className="input-row" style={{ flex: 1 }}>
+          <form onSubmit={handleCreateColumn} className="input-row" style={{ flex: 1 }}>
             <input
               type="text"
               className="input"
               value={newGroupName}
               onChange={(e) => setNewGroupName(e.target.value)}
               maxLength={100}
-              placeholder="New group name…"
+              placeholder="New group name / column name…"
+              aria-label="New column name"
             />
-            <button type="submit" className="btn btn--secondary btn--sm">Create Group</button>
+            <button type="submit" className="btn btn--secondary btn--sm" aria-label="Create group / column">Create Column</button>
           </form>
           {groupError && <span className="status-msg status-msg--error" style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }}>{groupError}</span>}
         </div>
@@ -104,6 +106,7 @@ export function OrganiseBoard({ roomState, send }: OrganiseBoardProps) {
                 groupIndex={groupIdx}
                 totalGroups={sortedGroups.length}
                 isOrganise={isOrganise}
+                isFacilitator={isFacilitator}
                 onReorderItems={handleReorderItems}
                 onReorderGroups={handleReorderGroups}
                 onMoveItem={(itemId) => setMovingItemId(itemId)}
@@ -163,17 +166,18 @@ interface GroupSectionProps {
   groupIndex: number;
   totalGroups: number;
   isOrganise: boolean;
+  isFacilitator: boolean;
   onReorderItems: (items: RetroItem[], fromIdx: number, toIdx: number) => void;
   onReorderGroups: (fromIdx: number, toIdx: number) => void;
   onMoveItem: (itemId: string) => void;
 }
 
-function GroupSection({ group, items, groupIndex, totalGroups, isOrganise, onReorderItems, onReorderGroups, onMoveItem }: GroupSectionProps) {
+function GroupSection({ group, items, groupIndex, totalGroups, isOrganise, isFacilitator, onReorderItems, onReorderGroups, onMoveItem }: GroupSectionProps) {
   return (
     <div className="group-panel">
       <div className="group-panel__header">
         <h4 className="group-panel__title">{group.name}</h4>
-        {isOrganise && (
+        {isOrganise && isFacilitator && (
           <span className="group-panel__controls">
             <button
               className="reorder-btn"

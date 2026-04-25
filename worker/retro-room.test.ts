@@ -225,6 +225,22 @@ describe("RetroRoom Durable Object", () => {
       expect(await stub.getRoomState()).toEqual(before);
     });
 
+    it("enforces the maximum configured column count without mutating state", async () => {
+      const stub = await setupColumnRoom("test-columns-max-count");
+      for (const name of ["One", "Two", "Three", "Four", "Five"]) {
+        const result = await stub.createColumn("fac1", name);
+        expect(result.success).toBe(true);
+      }
+
+      const before = await stub.getRoomState();
+      expect(before.columns).toHaveLength(8);
+      const result = await stub.createColumn("fac1", "Overflow");
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("at most 8 columns");
+      expect(await stub.getRoomState()).toEqual(before);
+    });
+
     it("validates item column associations on create and move", async () => {
       const stub = await setupColumnRoom("test-columns-item-associations");
       const addInvalid = await stub.addItem("fac1", "Invalid", "missing-column");

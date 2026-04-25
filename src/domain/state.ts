@@ -7,6 +7,7 @@ export const DEFAULT_COLUMNS: readonly Column[] = [
 ] as const;
 
 export const MAX_COLUMN_NAME_LENGTH = 100;
+export const MAX_COLUMNS = 8;
 
 export function getDefaultColumns(): Column[] {
   return DEFAULT_COLUMNS.map((column) => ({ ...column }));
