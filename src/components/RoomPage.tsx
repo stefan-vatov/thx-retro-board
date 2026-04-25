@@ -201,6 +201,10 @@ export function RoomPage() {
   const [itemInput, setItemInput] = useState("");
   const [itemError, setItemError] = useState<string | null>(null);
 
+  const isNearCharLimit = itemInput.length > 400;
+  const charCountId = "item-char-count";
+  const itemErrorId = "item-error";
+
   useEffect(() => {
     if (!roomId) return;
     (async () => {
@@ -329,7 +333,7 @@ export function RoomPage() {
     e.preventDefault();
     setItemError(null);
     if (!isValidItemText(itemInput)) {
-      setItemError("Item text cannot be empty.");
+      setItemError("Item text cannot be blank.");
       return;
     }
     send({ type: "add-item", text: sanitizeItemText(itemInput) });
@@ -539,38 +543,71 @@ export function RoomPage() {
 
       {/* Board Area */}
       <div className="board-area glass-panel">
-        <h2 className="section-title" style={{ marginBottom: "var(--space-4)" }}>Board</h2>
-        {roomState?.phase === "write" && (
-          <form onSubmit={handleAddItem} style={{ marginBottom: "var(--space-5)", display: "flex", gap: "var(--space-2)" }}>
-            <input
-              type="text"
-              className="input"
-              value={itemInput}
-              onChange={(e) => setItemInput(e.target.value)}
-              maxLength={500}
-              placeholder="Add a retro item…"
-              style={{ flex: 1 }}
-              aria-label="Retro item text"
-            />
-            <button
-              type="submit"
-              className="btn btn--primary"
-              disabled={!connected}
-              title={!connected ? "Cannot add items while disconnected" : undefined}
-            >
-              Add
-            </button>
-          </form>
-        )}
-        {itemError && (
-          <div className="status-msg status-msg--error" style={{ marginBottom: "var(--space-3)" }} role="alert">
-            {itemError}
-          </div>
-        )}
+        <div className="board-header">
+          <h2 className="section-title">Board</h2>
+          {roomState?.phase === "write" && (
+            <span className="phase-hint" aria-hidden="true">Add your retro items</span>
+          )}
+        </div>
 
-        {!connected && (
-          <div className="status-msg status-msg--muted" style={{ marginBottom: "var(--space-3)" }} role="status">
-            <span>⏳ Your changes are queued. Reconnecting…</span>
+        {/* Write Phase Composer */}
+        {roomState?.phase === "write" && (
+          <div className="write-composer">
+            <form
+              onSubmit={handleAddItem}
+              className="write-composer__form"
+              aria-label="Add retro item"
+            >
+              <div className="write-composer__input-row">
+                <div className="write-composer__input-wrapper">
+                  <input
+                    type="text"
+                    id="itemText"
+                    className={`input write-composer__input${itemError ? " input--error" : ""}`}
+                    value={itemInput}
+                    onChange={(e) => {
+                      setItemInput(e.target.value);
+                      if (itemError) setItemError(null);
+                    }}
+                    maxLength={500}
+                    placeholder="Add a retro item…"
+                    aria-required="true"
+                    aria-describedby={[itemError ? itemErrorId : "", isNearCharLimit ? charCountId : ""].filter(Boolean).join(" ") || undefined}
+                    aria-invalid={itemError ? "true" : undefined}
+                    disabled={!connected}
+                  />
+                  {isNearCharLimit && (
+                    <span
+                      id={charCountId}
+                      className="write-composer__char-count"
+                      aria-live="polite"
+                      aria-atomic="true"
+                    >
+                      {itemInput.length}/500
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="submit"
+                  className="btn btn--primary write-composer__submit"
+                  disabled={!connected || !itemInput.trim()}
+                  aria-label="Add item"
+                >
+                  <span aria-hidden="true">+</span>
+                  Add
+                </button>
+              </div>
+              {itemError && (
+                <div id={itemErrorId} className="status-msg status-msg--error write-composer__error" role="alert">
+                  {itemError}
+                </div>
+              )}
+              {!connected && (
+                <div className="status-msg status-msg--muted write-composer__offline" role="status" aria-live="polite">
+                  <span aria-hidden="true">⏳</span> Your changes are queued. Reconnecting…
+                </div>
+              )}
+            </form>
           </div>
         )}
 
@@ -582,18 +619,38 @@ export function RoomPage() {
           <ReviewBoard roomState={roomState} />
         ) : roomState?.phase === "write" ? (
           (roomState?.items?.length ?? 0) === 0 ? (
-            <div className="empty-state">
-              <div className="empty-state__icon" role="img" aria-label="No items">📝</div>
-              <p className="empty-state__text">No items yet. The board is ready for the write phase.</p>
+            <div className="empty-state write-empty-state">
+              <div className="empty-state__icon" aria-hidden="true">✍️</div>
+              <p className="empty-state__text">No items yet. Add your first retro item above.</p>
             </div>
           ) : (
-            <ul className="item-list">
-              {roomState?.items?.map((item) => (
-                <li key={item.id} className="item-row">
-                  <span className="item-row__text">{item.text}</span>
-                </li>
-              ))}
-            </ul>
+            <div className="item-list-container">
+              <div className="item-list-header">
+                <span className="item-list-count">{roomState!.items.length} item{roomState!.items.length !== 1 ? "s" : ""}</span>
+              </div>
+              <ul className="item-list" aria-label="Retro items">
+                {roomState?.items?.map((item, index) => {
+                  const isLong = item.text.length > 400;
+                  const author = roomState?.participants.find((p) => p.id === item.authorId);
+                  return (
+                    <li key={item.id} className={`item-card${isLong ? " item-card--long" : ""}`}>
+                      <div className="item-card__content">
+                        <span className="item-card__text">{item.text}</span>
+                        {isLong && (
+                          <span className="item-card__length-indicator" aria-label={`${item.text.length} characters`}>
+                            {item.text.length}/500
+                          </span>
+                        )}
+                      </div>
+                      <div className="item-card__meta">
+                        <span className="item-card__author">{author?.displayName ?? "Unknown"}</span>
+                        <span className="item-card__index" aria-label={`Item ${index + 1}`}>#{index + 1}</span>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
           )
         ) : null}
       </div>

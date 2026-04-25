@@ -791,6 +791,200 @@ body {
   flex-shrink: 0;
 }
 
+/* --- Board Header --- */
+.board-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-4);
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.board-header .section-title {
+  margin-bottom: 0;
+}
+
+.phase-hint {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+/* ---------------------------------------------------------------------
+   9a. Write Phase Composer
+   --------------------------------------------------------------------- */
+.write-composer {
+  margin-bottom: var(--space-5);
+  padding: var(--space-4);
+  background: var(--glass-bg-strong);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.write-composer__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.write-composer__input-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: stretch;
+}
+
+.write-composer__input-wrapper {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
+
+.write-composer__input {
+  flex: 1;
+  padding-right: var(--space-10);
+}
+
+.write-composer__char-count {
+  position: absolute;
+  right: var(--space-3);
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.write-composer__submit {
+  flex-shrink: 0;
+}
+
+.write-composer__error {
+  margin-top: var(--space-1);
+}
+
+.write-composer__offline {
+  margin-top: var(--space-1);
+}
+
+/* ---------------------------------------------------------------------
+   9b. Write Phase Item Cards
+   --------------------------------------------------------------------- */
+.item-list-container {
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.item-list-header {
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--space-2) var(--space-3);
+  background: var(--glass-bg-strong);
+  border-bottom: 1px solid var(--glass-border);
+}
+
+.item-list-count {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  font-weight: var(--weight-medium);
+}
+
+.item-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  transition: background-color var(--transition-fast);
+  position: relative;
+}
+
+.item-card:last-child {
+  border-bottom: none;
+}
+
+.item-card:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.item-card--long {
+  background: rgba(245, 185, 58, 0.04);
+}
+
+.item-card--long:hover {
+  background: rgba(245, 185, 58, 0.07);
+}
+
+.item-card__content {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.item-card__text {
+  flex: 1;
+  font-size: var(--text-base);
+  color: var(--text-primary);
+  word-break: break-word;
+  line-height: var(--leading-relaxed);
+}
+
+.item-card__length-indicator {
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+  color: var(--status-warning);
+  font-weight: var(--weight-medium);
+  padding: var(--space-1) var(--space-2);
+  background: rgba(245, 185, 58, 0.12);
+  border: 1px solid rgba(245, 185, 58, 0.25);
+  border-radius: var(--radius-full);
+}
+
+.item-card__meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.item-card__author {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  font-weight: var(--weight-medium);
+}
+
+.item-card__index {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+/* Write phase empty state */
+.write-empty-state {
+  padding: var(--space-10) var(--space-4);
+  background: var(--glass-bg);
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-lg);
+}
+
+.write-empty-state .empty-state__icon {
+  font-size: 3rem;
+  opacity: 0.35;
+  margin-bottom: var(--space-3);
+}
+
+.write-empty-state .empty-state__text {
+  color: var(--text-secondary);
+  font-size: var(--text-base);
+}
+
 /* --- Section / Group Header --- */
 .section-header {
   display: flex;
