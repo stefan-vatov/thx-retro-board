@@ -75,7 +75,9 @@ function ConnectionStatus({ connected }: { connected: boolean }) {
 
 function InviteButton({ roomId }: { roomId: string }) {
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
   const [copySupported] = useState(() => typeof navigator !== "undefined" && typeof navigator.clipboard !== "undefined");
+  const [manualUrl, setManualUrl] = useState<string | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
   function handleInvite() {
@@ -83,51 +85,75 @@ function InviteButton({ roomId }: { roomId: string }) {
     if (copySupported) {
       navigator.clipboard.writeText(inviteUrl).then(() => {
         setCopied(true);
+        setCopyFailed(false);
+        setManualUrl(null);
         setTimeout(() => setCopied(false), 2000);
       }).catch(() => {
-        // fallback: select text for manual copy
-        if (buttonRef.current) {
-          buttonRef.current.setAttribute("data-copy-text", inviteUrl);
-          const input = document.createElement("input");
-          input.value = inviteUrl;
-          document.body.appendChild(input);
-          input.select();
-          document.execCommand("copy");
-          document.body.removeChild(input);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 2000);
-        }
+        // fallback: show manual URL for selection
+        setCopied(false);
+        setCopyFailed(true);
+        setManualUrl(inviteUrl);
       });
     } else {
-      // No clipboard API: expose URL in a selectable, focusable way
-      if (buttonRef.current) {
-        buttonRef.current.setAttribute("data-copy-text", inviteUrl);
-      }
-      setCopied(true);
-      setTimeout(() => setCopied(false), 3000);
+      // No clipboard API: expose URL for manual selection
+      setCopied(false);
+      setCopyFailed(true);
+      setManualUrl(inviteUrl);
     }
   }
 
+  const accessibleLabel = copied
+    ? "Room invite link copied!"
+    : copyFailed
+    ? "Copy failed — select the URL below"
+    : "Copy room invite link";
+
   return (
-    <button
-      ref={buttonRef}
-      className={`btn btn--secondary btn--sm invite-btn${copied ? " invite-btn--copied" : ""}`}
-      onClick={handleInvite}
-      aria-label="Copy room invite link"
-      type="button"
-    >
-      {copied ? (
-        <>
-          <span aria-hidden="true">✓</span>
-          Copied!
-        </>
-      ) : (
-        <>
-          <span aria-hidden="true">🔗</span>
-          Invite
-        </>
+    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-1)", alignItems: "flex-end" }}>
+      <button
+        ref={buttonRef}
+        className={`btn btn--secondary btn--sm invite-btn${copied ? " invite-btn--copied" : ""}`}
+        onClick={handleInvite}
+        aria-label={accessibleLabel}
+        type="button"
+      >
+        {copied ? (
+          <>
+            <span aria-hidden="true">✓</span>
+            Copied!
+          </>
+        ) : copyFailed ? (
+          <>
+            <span aria-hidden="true">!</span>
+            Error
+          </>
+        ) : (
+          <>
+            <span aria-hidden="true">🔗</span>
+            Invite
+          </>
+        )}
+      </button>
+      {manualUrl && (
+        <input
+          type="text"
+          readOnly
+          value={manualUrl}
+          aria-label="Room invite URL — select and copy manually"
+          style={{
+            fontSize: "var(--text-xs)",
+            padding: "var(--space-1) var(--space-2)",
+            borderRadius: "var(--radius-md)",
+            background: "var(--glass-bg)",
+            border: "1px solid var(--glass-border)",
+            color: "var(--text-secondary)",
+            width: "220px",
+            cursor: "text",
+          }}
+          onClick={(e) => (e.target as HTMLInputElement).select()}
+        />
       )}
-    </button>
+    </div>
   );
 }
 
@@ -439,20 +465,29 @@ export function RoomPage() {
               <label className="input-label" htmlFor="voteBudget">Vote Budget</label>
               <input
                 id="voteBudget"
-                className="input"
+                className={`input${budgetMsg && budgetMsg.includes("must be") ? " input--error" : ""}`}
                 type="number"
                 min={1}
                 max={100}
                 value={displayBudget}
-                onChange={(e) => setVoteBudgetInput(e.target.value)}
+                onChange={(e) => {
+                  setVoteBudgetInput(e.target.value);
+                  if (budgetMsg) setBudgetMsg(null);
+                }}
                 style={{ width: "5rem" }}
+                aria-describedby={budgetMsg && budgetMsg.includes("must be") ? "budget-error" : undefined}
+                aria-invalid={budgetMsg && budgetMsg.includes("must be") ? "true" : undefined}
               />
               <button className="btn btn--secondary btn--sm" onClick={handleSetBudget}>Set</button>
-              {budgetMsg && (
+              {budgetMsg && budgetMsg.includes("must be") ? (
+                <span id="budget-error" className="status-msg status-msg--error" style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }} role="alert">
+                  {budgetMsg}
+                </span>
+              ) : budgetMsg ? (
                 <span className="status-msg status-msg--info" style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }} role="status">
                   {budgetMsg}
                 </span>
-              )}
+              ) : null}
             </div>
             <div className="facilitator-panel__row">
               <button
