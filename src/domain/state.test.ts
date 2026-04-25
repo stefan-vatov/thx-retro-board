@@ -532,3 +532,49 @@ describe("applyRemoveVote", () => {
     expect(result).toEqual(votes);
   });
 });
+
+describe("duplicate item vote identity", () => {
+  it("votes attach to item IDs so duplicate text items remain independent", () => {
+    // Two items with identical text but different IDs
+    const votes = [
+      { participantId: "p1", itemId: "i1", count: 3 },
+      { participantId: "p1", itemId: "i2", count: 2 },
+    ];
+    // getVotesForItem returns different totals for different item IDs
+    expect(getVotesForItem(votes, "i1")).toBe(3);
+    expect(getVotesForItem(votes, "i2")).toBe(2);
+    expect(getVotesForItem(votes, "i3")).toBe(0);
+  });
+
+  it("adding votes to duplicate item only affects that item's ID", () => {
+    let result = applyCastVote([], "p1", "i1", 1, 5);
+    expect(result.error).toBeUndefined();
+    result = applyCastVote(result.votes, "p1", "i2", 1, 5);
+    expect(result.error).toBeUndefined();
+    expect(getVotesForItem(result.votes, "i1")).toBe(1);
+    expect(getVotesForItem(result.votes, "i2")).toBe(1);
+    // Removing from i1 does not affect i2
+    const afterRemove = applyRemoveVote(result.votes, "p1", "i1");
+    expect(getVotesForItem(afterRemove, "i1")).toBe(0);
+    expect(getVotesForItem(afterRemove, "i2")).toBe(1);
+  });
+
+  it("stacking votes on one duplicate does not affect the other", () => {
+    // p1 has 5 votes budget, puts 2 on i1, 2 on i2
+    let result = applyCastVote([], "p1", "i1", 2, 5);
+    expect(result.error).toBeUndefined();
+    result = applyCastVote(result.votes, "p1", "i2", 2, 5);
+    expect(result.error).toBeUndefined();
+    expect(getVotesForItem(result.votes, "i1")).toBe(2);
+    expect(getVotesForItem(result.votes, "i2")).toBe(2);
+    // removing from i1 does not affect i2
+    const afterRemove = applyRemoveVote(result.votes, "p1", "i1");
+    expect(getVotesForItem(afterRemove, "i1")).toBe(1); // decremented
+    expect(getVotesForItem(afterRemove, "i2")).toBe(2); // unchanged
+    // p1 now has 3 votes used, 2 remaining, can add 1 more to i2
+    const finalResult = applyCastVote(afterRemove, "p1", "i2", 1, 5);
+    expect(finalResult.error).toBeUndefined();
+    expect(getVotesForItem(finalResult.votes, "i1")).toBe(1);
+    expect(getVotesForItem(finalResult.votes, "i2")).toBe(3);
+  });
+});
