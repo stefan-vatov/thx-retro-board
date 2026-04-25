@@ -284,8 +284,12 @@ export function RoomPage() {
     const result = await setVoteBudget(roomId, participantId, budget);
     if (result.success) {
       setBudgetMsg("Vote budget updated.");
-      if (localRoomState) {
-        setLocalRoomState({ ...localRoomState, voteBudget: budget });
+      // Refetch authoritative state to handle any missed WebSocket broadcasts during reconnect
+      try {
+        const state = await getRoomState(roomId);
+        setLocalRoomState(state);
+      } catch {
+        // Refetch failed; local optimistic update stands and WebSocket will reconcile
       }
     } else {
       setBudgetMsg(result.error ?? "Failed to update budget.");
@@ -301,6 +305,14 @@ export function RoomPage() {
     const result = await setPhase(roomId, participantId, nextPhase);
     if (result.success) {
       setPhaseMsg(`Advanced to ${nextPhase}.`);
+      // Refetch authoritative state so the UI updates even if the WebSocket broadcast
+      // was missed during a post-reload reconnect window
+      try {
+        const state = await getRoomState(roomId);
+        setLocalRoomState(state);
+      } catch {
+        // Refetch failed; local optimistic update stands and WebSocket will reconcile
+      }
     } else {
       setPhaseMsg(result.error ?? "Failed to change phase.");
     }

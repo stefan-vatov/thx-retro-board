@@ -258,6 +258,40 @@ test.describe("Retro Board E2E", () => {
       await ctx.close();
     });
 
+    test("facilitator phase advance after reload updates UI without relying on WebSocket broadcast", async ({ browser }) => {
+      // This tests the fix for VAL-CROSS-002: after reload, a successful facilitator
+      // phase advance can leave the UI stuck on stale WRITE state if the WebSocket
+      // broadcast is missed during reconnect. The fix refetches authoritative room
+      // state after a successful HTTP phase mutation.
+      const ctx = await browser.newContext();
+      const page = await ctx.newPage();
+      await page.goto("/");
+      await page.getByRole("button", { name: /create room/i }).click();
+      await page.waitForURL(/\/room\//);
+      await page.getByLabel(/display name/i).fill("Alice");
+      await page.getByRole("button", { name: /join/i }).click();
+      await expect(page.getByText(/Phase: WRITE/i)).toBeVisible();
+
+      // Add an item so there's something to see
+      await page.getByPlaceholder(/add a retro item/i).fill("Item before reload");
+      await page.getByRole("button", { name: /add/i }).click();
+      await expect(page.getByText("Item before reload")).toBeVisible();
+
+      // Reload as the facilitator to simulate post-reload state
+      await page.reload();
+      await expect(page.getByText(/Phase: WRITE/i)).toBeVisible({ timeout: 5000 });
+      await expect(page.getByText("Item before reload")).toBeVisible({ timeout: 5000 });
+
+      // Advance phase — should update UI even if WebSocket broadcast is missed
+      await page.getByRole("button", { name: /advance to next phase/i }).click();
+      await expect(page.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
+
+      // Verify we are actually in organise (group creation is visible)
+      await expect(page.getByPlaceholder(/new group name/i)).toBeVisible({ timeout: 3000 });
+
+      await ctx.close();
+    });
+
     test("late join reconstructs state in each phase", async ({ browser }) => {
       // Alice creates room and advances through phases
       const ctx1 = await browser.newContext();
