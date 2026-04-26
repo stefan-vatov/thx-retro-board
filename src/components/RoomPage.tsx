@@ -607,6 +607,7 @@ export function RoomPage() {
   const [localRoomState, setLocalRoomState] = useState<RoomState | null>(null);
   const [connectionToken, setConnectionToken] = useState<string | undefined>(() => identity.connectionToken);
   const [voteBudgetInput, setVoteBudgetInput] = useState("5");
+  const [voteBudgetDirty, setVoteBudgetDirty] = useState(false);
   const [budgetMsg, setBudgetMsg] = useState<string | null>(null);
   const [timerMinutesInput, setTimerMinutesInput] = useState("5");
   const [timerMsg, setTimerMsg] = useState<string | null>(null);
@@ -618,6 +619,7 @@ export function RoomPage() {
   const phaseStatusRef = useRef<HTMLDivElement>(null);
   const previousRoomUpdateRef = useRef<{ phase: Phase; version: number } | null>(null);
   const initialLoadStartedRef = useRef(false);
+  const lastAuthoritativeVoteBudgetRef = useRef<number | null>(null);
 
   const { state: wsState, connected, lastError, clearError, send } = useRoom(roomId ?? "", participantId, connectionToken);
 
@@ -644,10 +646,27 @@ export function RoomPage() {
   useEffect(() => {
     const timeout = window.setTimeout(() => {
       setPhaseMsg(null);
-      setBudgetMsg(null);
     }, 0);
     return () => window.clearTimeout(timeout);
-  }, [roomState?.phase, roomState?.voteBudget]);
+  }, [roomState?.phase]);
+
+  useEffect(() => {
+    if (!roomState) return undefined;
+    const nextBudget = roomState.voteBudget;
+    const previousBudget = lastAuthoritativeVoteBudgetRef.current;
+    if (previousBudget === nextBudget) return undefined;
+
+    lastAuthoritativeVoteBudgetRef.current = nextBudget;
+    const nextBudgetInput = String(nextBudget);
+    if (!voteBudgetDirty || voteBudgetInput === nextBudgetInput || budgetPending) {
+      const timeout = window.setTimeout(() => {
+        setVoteBudgetInput(nextBudgetInput);
+        setVoteBudgetDirty(false);
+      }, 0);
+      return () => window.clearTimeout(timeout);
+    }
+    return undefined;
+  }, [budgetPending, roomState, roomState?.voteBudget, voteBudgetDirty, voteBudgetInput]);
 
   useEffect(() => {
     if (pageState !== "room" || !roomState) return;
@@ -710,8 +729,6 @@ export function RoomPage() {
     return () => window.clearTimeout(timeout);
   }, [loadInitialRoom]);
 
-  const displayBudget = roomState ? String(roomState.voteBudget) : voteBudgetInput;
-
   async function handleJoin(e: React.FormEvent) {
     e.preventDefault();
     if (!roomId) return;
@@ -747,9 +764,10 @@ export function RoomPage() {
   async function handleSetBudget() {
     if (!roomId || budgetPending) return;
     setBudgetMsg(null);
-    const budget = parseInt(voteBudgetInput, 10);
-    if (isNaN(budget) || budget < 1 || budget > 100) {
-      setBudgetMsg("Vote budget must be between 1 and 100.");
+    const rawBudget = voteBudgetInput.trim();
+    const budget = Number(rawBudget);
+    if (!/^\d+$/.test(rawBudget) || !Number.isInteger(budget) || budget < 1 || budget > 100) {
+      setBudgetMsg("Vote budget must be an integer between 1 and 100.");
       return;
     }
     setBudgetPending(true);
@@ -757,6 +775,8 @@ export function RoomPage() {
       const result = await setVoteBudget(roomId, participantId, budget);
       if (result.success) {
         setBudgetMsg("Vote budget updated.");
+        setVoteBudgetInput(String(budget));
+        setVoteBudgetDirty(false);
         // Refetch authoritative state to handle any missed WebSocket broadcasts during reconnect
         try {
           const state = await getRoomState(roomId);
@@ -1059,12 +1079,13 @@ export function RoomPage() {
               <Input
                 id="voteBudget"
                 className={`input${budgetMsg && budgetMsg.includes("must be") ? " input--error" : ""}`}
-                type="number"
-                min={1}
-                max={100}
-                value={displayBudget}
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={voteBudgetInput}
                 onChange={(e) => {
                   setVoteBudgetInput(e.target.value);
+                  setVoteBudgetDirty(true);
                   if (budgetMsg) setBudgetMsg(null);
                 }}
                 style={{ width: "5rem" }}

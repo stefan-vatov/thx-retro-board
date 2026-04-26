@@ -124,18 +124,27 @@ test.describe("Retro Board E2E", () => {
 
     test("creating a room exposes pending state and blocks duplicate submissions", async ({ page }) => {
       let createRequests = 0;
-      await page.route("**/api/rooms", async (route) => {
-        createRequests += 1;
-        await new Promise((resolve) => setTimeout(resolve, 300));
+      await page.route("**/api/rooms**", async (route) => {
+        if (route.request().method() === "POST" && /\/api\/rooms$/.test(new URL(route.request().url()).pathname)) {
+          createRequests += 1;
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+          await route.fulfill({ json: { roomId: `pending-${Date.now()}` } });
+          return;
+        }
         await route.continue();
       });
 
       await page.goto("/");
       const create = page.getByRole("button", { name: /^create room$/i });
-      await create.click();
-      await create.click({ force: true });
-      await expect(create).toBeDisabled();
-      await expect(create).toHaveAttribute("aria-busy", "true");
+      const createHandle = await create.elementHandle();
+      expect(createHandle).not.toBeNull();
+      await createHandle!.evaluate((button) => {
+        window.setTimeout(() => button.click(), 0);
+        window.setTimeout(() => button.click(), 0);
+      });
+      const pendingCreate = page.getByRole("button", { name: /creating room/i });
+      await expect(pendingCreate).toBeDisabled();
+      await expect(pendingCreate).toHaveAttribute("aria-busy", "true");
       await expect(page.getByRole("status")).toContainText(/creating a private room/i);
       await page.waitForURL(/\/room\//);
       expect(createRequests).toBe(1);
@@ -320,6 +329,49 @@ test.describe("Retro Board E2E", () => {
       await expect(advance).toHaveAttribute("aria-busy", "true");
       await expect(page.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
       expect(phaseRequests).toBe(1);
+    });
+
+    test("vote budget input shows typed value and submits the visible budget", async ({ page }) => {
+      await createJoinedRoom(page);
+      const budgetInput = page.getByLabel(/vote budget/i);
+      await expect(budgetInput).toHaveValue("5");
+
+      await budgetInput.fill("8");
+      await expect(budgetInput).toHaveValue("8");
+      await page.getByRole("button", { name: /^set$/i }).click();
+      await expect(page.getByRole("status").filter({ hasText: /vote budget updated/i })).toBeVisible({ timeout: 5000 });
+      await expect(budgetInput).toHaveValue("8");
+
+      const roomId = new URL(page.url()).pathname.split("/").pop()!;
+      const state = await page.evaluate(async (id) => {
+        const response = await fetch(`/api/rooms/${id}`);
+        return response.json();
+      }, roomId) as { voteBudget: number };
+      expect(state.voteBudget).toBe(8);
+
+      await page.reload();
+      await expect(page.getByText(/Phase: WRITE/i)).toBeVisible({ timeout: 5000 });
+      await expect(page.getByLabel(/vote budget/i)).toHaveValue("8");
+    });
+
+    test("vote budget rejects blank, non-numeric, non-integer, and out-of-range visible values without submitting", async ({ page }) => {
+      await createJoinedRoom(page);
+      const budgetInput = page.getByLabel(/vote budget/i);
+      const setBudget = page.getByRole("button", { name: /^set$/i });
+
+      for (const invalidValue of ["", "abc", "2.5", "0", "101"] as const) {
+        await budgetInput.fill(invalidValue);
+        await expect(budgetInput).toHaveValue(invalidValue);
+        await setBudget.click();
+        await expect(page.getByRole("alert").filter({ hasText: /vote budget must be an integer between 1 and 100/i })).toBeVisible();
+      }
+
+      const roomId = new URL(page.url()).pathname.split("/").pop()!;
+      const state = await page.evaluate(async (id) => {
+        const response = await fetch(`/api/rooms/${id}`);
+        return response.json();
+      }, roomId) as { voteBudget: number };
+      expect(state.voteBudget).toBe(5);
     });
 
     test.skip("vote send failures show feedback without applying pending optimistic state", async ({ page }) => {
