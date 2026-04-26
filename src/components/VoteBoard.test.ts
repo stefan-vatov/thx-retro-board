@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { RoomState, Column, Group, RetroItem } from "../domain";
+import { groupVoteTarget, itemVoteTarget } from "../domain";
 import { VoteBoard } from "./VoteBoard";
 
 function makeRoomState(groups: Group[] = [], items: RetroItem[] = [], votes: RoomState["votes"] = []): RoomState {
@@ -27,18 +28,20 @@ function makeRoomState(groups: Group[] = [], items: RetroItem[] = [], votes: Roo
   };
 }
 
-describe("VoteBoard group voting", () => {
-  it("renders vote controls on group cards and no item row vote controls", () => {
+describe("VoteBoard mixed target voting", () => {
+  it("renders group cards and ungrouped item cards with no controls on grouped item rows", () => {
     const groups: Group[] = [{ id: "group-1", name: "Release wins", columnId: "column-1", order: 0 }];
     const items: RetroItem[] = [
       { id: "item-1", text: "Shipped faster", authorId: "fac1", columnId: "column-1", groupId: "group-1", order: 0 },
+      { id: "item-2", text: "Needs follow-up", authorId: "p2", columnId: "column-1", groupId: null, order: 1 },
     ];
 
     const markup = renderToStaticMarkup(
       createElement(VoteBoard, {
         roomState: makeRoomState(groups, items, [
-          { participantId: "fac1", groupId: "group-1", count: 2 },
-          { participantId: "p2", groupId: "group-1", count: 1 },
+          { participantId: "fac1", target: groupVoteTarget("group-1"), count: 2 },
+          { participantId: "p2", target: groupVoteTarget("group-1"), count: 1 },
+          { participantId: "fac1", target: itemVoteTarget("item-2"), count: 1 },
         ]),
         participantId: "fac1",
         send: () => true,
@@ -50,11 +53,15 @@ describe("VoteBoard group voting", () => {
     expect(markup).toContain("3 votes");
     expect(markup).toContain("(you: 2)");
     expect(markup).toContain("Add a vote to Release wins");
+    expect(markup).toContain("Needs follow-up");
+    expect(markup).toContain("Add a vote to Needs follow-up");
+    expect(markup).toContain("Remove one of your votes from Needs follow-up");
+    expect(markup).toContain("data-vote-item-id=\"item-2\"");
     expect(markup).not.toContain("Add a vote to Shipped faster");
     expect(markup).not.toContain("Remove one of your votes from Shipped faster");
   });
 
-  it("shows a stable no-groups empty state without vote controls", () => {
+  it("renders ungrouped items as votable targets when no groups exist", () => {
     const items: RetroItem[] = [
       { id: "item-1", text: "Ungrouped topic", authorId: "fac1", columnId: "column-1", groupId: null, order: 0 },
     ];
@@ -67,8 +74,22 @@ describe("VoteBoard group voting", () => {
       }),
     );
 
-    expect(markup).toContain("No groups to vote on.");
-    expect(markup).toContain("Create groups during organise before voting, or advance when there is nothing to vote on.");
+    expect(markup).toContain("Ungrouped topic");
+    expect(markup).toContain("Add a vote to Ungrouped topic");
+    expect(markup).toContain("data-vote-item-id=\"item-1\"");
+    expect(markup).not.toContain("No vote targets yet.");
+  });
+
+  it("shows a stable empty state only when no groups or ungrouped items exist", () => {
+    const markup = renderToStaticMarkup(
+      createElement(VoteBoard, {
+        roomState: makeRoomState([], []),
+        participantId: "fac1",
+        send: () => true,
+      }),
+    );
+
+    expect(markup).toContain("No vote targets yet.");
     expect(markup).not.toContain("Add a vote");
     expect(markup).not.toContain("Remove one of your votes");
   });

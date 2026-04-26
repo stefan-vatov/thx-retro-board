@@ -804,12 +804,12 @@ test.describe("Retro Board E2E", () => {
       const voteState = await alice.evaluate(async (id) => {
         const response = await fetch(`/api/rooms/${id}`);
         return response.json();
-      }, roomId) as { votes: { participantId: string; groupId: string; itemId?: string; count: number }[] };
+      }, roomId) as { votes: { participantId: string; target?: { type: "group" | "item"; id: string }; groupId?: string; itemId?: string; count: number }[] };
       expect(voteState.votes).toEqual(expect.arrayContaining([
-        { participantId: expect.any(String), groupId: launchWins.id, count: 2 },
-        { participantId: expect.any(String), groupId: launchWins.id, count: 1 },
+        { participantId: expect.any(String), target: { type: "group", id: launchWins.id }, count: 2 },
+        { participantId: expect.any(String), target: { type: "group", id: launchWins.id }, count: 1 },
       ]));
-      expect(voteState.votes.every((vote) => vote.groupId === launchWins.id && vote.itemId === undefined)).toBe(true);
+      expect(voteState.votes.every((vote) => vote.target?.type === "group" && vote.target.id === launchWins.id && vote.itemId === undefined)).toBe(true);
 
       await bob.reload();
       await expect(bob.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
@@ -837,8 +837,9 @@ test.describe("Retro Board E2E", () => {
       await emptyPage.getByPlaceholder(/add a retro item/i).fill("Ungrouped only");
       await emptyPage.getByRole("button", { name: /add item/i }).click();
       await advanceToPhase(emptyPage, "vote");
-      await expect(emptyPage.getByText("No groups to vote on.")).toBeVisible({ timeout: 5000 });
-      await expect(emptyPage.getByRole("button", { name: /add a vote/i })).toHaveCount(0);
+      await expect(emptyPage.locator("[data-vote-item-id]", { hasText: "Ungrouped only" })).toBeVisible({ timeout: 5000 });
+      await emptyPage.getByRole("button", { name: /add a vote to Ungrouped only/i }).click();
+      await expect(emptyPage.locator("[data-vote-item-id]", { hasText: "Ungrouped only" }).getByText(/1 vote/)).toBeVisible({ timeout: 5000 });
       await emptyPage.getByRole("button", { name: /advance to next phase/i }).click();
       await expect(emptyPage.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
       await expect(emptyPage.getByText("No groups to review.")).toBeVisible({ timeout: 5000 });
@@ -944,11 +945,11 @@ test.describe("Retro Board E2E", () => {
       const voteState = await alice.evaluate(async (id) => {
         const response = await fetch(`/api/rooms/${id}`);
         return response.json();
-      }, roomId) as { items: { id: string; text: string; authorId: string; columnId: string; groupId: string | null }[]; votes: { participantId: string; groupId: string; count: number }[] };
+      }, roomId) as { items: { id: string; text: string; authorId: string; columnId: string; groupId: string | null }[]; votes: { participantId: string; target?: { type: "group" | "item"; id: string }; groupId?: string; count: number }[] };
       expect(voteState.items.find((item) => item.id === primaryItems[0]!.id)).toMatchObject({ columnId: sameColumnId, groupId: primaryGroup.id, text: "Duplicate item" });
       expect(voteState.items.find((item) => item.id === primaryItems[1]!.id)).toMatchObject({ columnId: sameColumnId, groupId: null, text: "Duplicate item" });
       expect(voteState.items.find((item) => item.id === otherItem.id)).toMatchObject({ columnId: otherColumnId, groupId: otherGroup.id, text: "Duplicate item" });
-      expect(voteState.votes.map((vote) => ({ groupId: vote.groupId, count: vote.count })).sort((a, b) => a.groupId.localeCompare(b.groupId))).toEqual([
+      expect(voteState.votes.map((vote) => ({ groupId: vote.target?.type === "group" ? vote.target.id : vote.groupId, count: vote.count })).sort((a, b) => a.groupId!.localeCompare(b.groupId!))).toEqual([
         { groupId: otherGroup.id, count: 1 },
         { groupId: primaryGroup.id, count: 2 },
       ].sort((a, b) => a.groupId.localeCompare(b.groupId)));
@@ -1209,12 +1210,12 @@ test.describe("Retro Board E2E", () => {
       await expect(bob.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
 
       // Both can vote
-      const aliceVoteButtons = alice.locator("li button[title='Add a vote']");
+      const aliceVoteButtons = alice.getByRole("button", { name: /add a vote/i });
       await expect(aliceVoteButtons.first()).toBeVisible({ timeout: 5000 });
       await aliceVoteButtons.first().click();
-      await alice.locator("li button[title='Add a vote']").first().click();
+      await alice.getByRole("button", { name: /add a vote/i }).first().click();
 
-      const bobVoteButtons = bob.locator("li button[title='Add a vote']");
+      const bobVoteButtons = bob.getByRole("button", { name: /add a vote/i });
       await expect(bobVoteButtons.first()).toBeVisible({ timeout: 5000 });
       await bobVoteButtons.first().click();
 
@@ -1222,7 +1223,7 @@ test.describe("Retro Board E2E", () => {
       await alice.waitForTimeout(2000);
 
       // Check vote totals are present (the first item should have votes)
-      await expect(alice.locator("li", { hasText: /3 votes?/ })).toBeVisible({ timeout: 5000 });
+      await expect(alice.getByText(/3 votes?/).first()).toBeVisible({ timeout: 5000 });
 
       // === ADVANCE TO REVIEW ===
       await alice.getByRole("button", { name: /advance to next phase/i }).click();
@@ -1338,7 +1339,7 @@ test.describe("Retro Board E2E", () => {
       for (const page of [roomA, roomB]) {
         await page.getByRole("button", { name: /advance to next phase/i }).click();
         await expect(page.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
-        await page.locator("li button[title='Add a vote']").first().click();
+        await page.getByRole("button", { name: /add a vote/i }).first().click();
         await page.getByRole("button", { name: /advance to next phase/i }).click();
         await expect(page.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
         await page.reload();
