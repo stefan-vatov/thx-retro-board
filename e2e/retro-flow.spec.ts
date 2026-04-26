@@ -266,6 +266,59 @@ test.describe("Retro Board E2E", () => {
       await expect(page.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
       await expect(page.getByRole("region", { name: /room status/i })).toBeFocused();
     });
+
+    test("offline column create recovers after network restore without refresh", async ({ page }) => {
+      await createJoinedRoom(page);
+      await page.getByRole("button", { name: /configure columns/i }).click();
+      const columnInput = page.locator(".column-config__form").getByLabel(/new column name/i);
+      await columnInput.fill("Recovery");
+
+      await page.context().setOffline(true);
+      await expect(page.getByLabel("Disconnected", { exact: true })).toBeVisible({ timeout: 5000 });
+      await page.getByRole("button", { name: /add column/i }).click();
+
+      await expect(page.getByRole("alert").filter({ hasText: /reconnecting/i })).toBeVisible();
+      await expect(columnInput).toHaveValue("Recovery");
+
+      await page.context().setOffline(false);
+      await expect(page.getByLabel("Connected", { exact: true })).toBeVisible({ timeout: 10000 });
+      await expect(page.getByRole("button", { name: /add column/i })).toBeEnabled();
+
+      await page.getByRole("button", { name: /add column/i }).click();
+      await expect(page.getByRole("heading", { name: "Recovery" })).toBeVisible({ timeout: 5000 });
+    });
+
+    test("remote phase snapshots restore focus when the active element is lost", async ({ browser }) => {
+      const ctx1 = await browser.newContext();
+      const alice = await ctx1.newPage();
+      await alice.goto("/");
+      await alice.getByRole("button", { name: /create room/i }).click();
+      await alice.waitForURL(/\/room\//);
+      const roomUrl = alice.url();
+
+      await alice.getByLabel(/display name/i).fill("Alice");
+      await alice.getByRole("button", { name: /join/i }).click();
+      await expect(alice.getByText(/Phase: WRITE/i)).toBeVisible();
+
+      const ctx2 = await browser.newContext();
+      const bob = await ctx2.newPage();
+      await bob.goto(roomUrl);
+      await bob.getByLabel(/display name/i).fill("Bob");
+      await bob.getByRole("button", { name: /join/i }).click();
+      await expect(bob.getByText(/Phase: WRITE/i)).toBeVisible();
+
+      await bob.evaluate(() => {
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+      });
+      await expect(bob.locator("body")).toBeFocused();
+
+      await alice.getByRole("button", { name: /advance to next phase/i }).click();
+      await expect(bob.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
+      await expect(bob.getByRole("region", { name: /room status/i })).toBeFocused();
+
+      await ctx1.close();
+      await ctx2.close();
+    });
   });
 
   test.describe("Two-user flow", () => {

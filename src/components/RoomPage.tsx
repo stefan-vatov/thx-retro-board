@@ -505,6 +505,7 @@ export function RoomPage() {
   const [phasePending, setPhasePending] = useState(false);
   const [timerPending, setTimerPending] = useState(false);
   const phaseStatusRef = useRef<HTMLDivElement>(null);
+  const previousRoomUpdateRef = useRef<{ phase: Phase; version: number } | null>(null);
 
   const { state: wsState, connected, lastError, clearError, send } = useRoom(roomId ?? "", participantId, connectionToken);
 
@@ -534,6 +535,20 @@ export function RoomPage() {
     }, 0);
     return () => window.clearTimeout(timeout);
   }, [roomState?.phase, roomState?.voteBudget]);
+
+  useEffect(() => {
+    if (pageState !== "room" || !roomState) return;
+    const previous = previousRoomUpdateRef.current;
+    previousRoomUpdateRef.current = { phase: roomState.phase, version: roomState.version };
+    if (!previous) return;
+
+    const changed = previous.phase !== roomState.phase || previous.version !== roomState.version;
+    const activeElement = document.activeElement;
+    const focusLostToBody = activeElement === document.body || activeElement === document.documentElement || activeElement === null;
+    if (changed && focusLostToBody) {
+      window.setTimeout(() => phaseStatusRef.current?.focus(), 0);
+    }
+  }, [pageState, roomState?.phase, roomState?.version, roomState]);
 
   useEffect(() => {
     if (!roomId) return;
