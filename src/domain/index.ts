@@ -29,6 +29,7 @@ export {
   getUngroupedItems,
   getGroupedItems,
   applyReorderItems,
+  validateItemReorderPayload,
   applyReorderGroups,
   applyReorderColumns,
   applyEditColumn,

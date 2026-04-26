@@ -24,6 +24,7 @@ import {
   applyEditColumn,
   validateFullColumnPermutation,
   applyReorderItems,
+  validateItemReorderPayload,
   applyMoveItemToGroup,
   applyCastVote,
   applyRemoveVote,
@@ -458,14 +459,19 @@ export class RetroRoom extends DurableObject<Env> {
     return { success: true, group: columnResult.column };
   }
 
-  async reorderItems(_participantId: string, orderedIds: string[]): Promise<{ success: boolean; error?: string }> {
+  async reorderItems(_participantId: string, orderedIds: unknown): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
 
     if (s.phase !== "organise") {
       return { success: false, error: "Cannot reorder items outside organise phase" };
     }
 
-    s.items = applyReorderItems(s.items, orderedIds);
+    const validation = validateItemReorderPayload(s.items, orderedIds);
+    if (!validation.valid) {
+      return { success: false, error: validation.error };
+    }
+
+    s.items = applyReorderItems(s.items, validation.ids);
     await this.saveState();
 
     const broadcast: ServerToClientMessage = { type: "items-reordered", items: s.items };

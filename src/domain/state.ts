@@ -125,18 +125,78 @@ export function getGroupedItems(items: RetroItem[], groupId: string): RetroItem[
 }
 
 export function applyReorderItems(items: RetroItem[], orderedIds: string[]): RetroItem[] {
-  const idSet = new Set(orderedIds);
   const reordered = reorderList(items, orderedIds, (item) => item.id);
-  const untouched = items.filter((item) => !idSet.has(item.id));
+  if (reordered.length === 0) return items;
 
-  // Place reordered items first, then untouched items preserve their relative order
-  const result: RetroItem[] = [
-    ...reordered.map((item, idx) => ({ ...item, order: idx })),
-    ...untouched,
+  const targetColumnId = reordered[0]!.columnId ?? reordered[0]!.groupId;
+  const orderedIdSet = new Set(orderedIds);
+  const remainingTargetItems = items
+    .filter((item) => (item.columnId ?? item.groupId) === targetColumnId && !orderedIdSet.has(item.id))
+    .sort((a, b) => a.order - b.order);
+  const nextTargetItems = [...reordered, ...remainingTargetItems].map((item, order) => ({ ...item, order }));
+  const untouchedItems = items.filter((item) => (item.columnId ?? item.groupId) !== targetColumnId);
+
+  return [
+    ...nextTargetItems,
+    ...untouchedItems,
   ];
+}
 
-  // Reassign contiguous order indices
-  return result.map((item, idx) => ({ ...item, order: idx }));
+export function validateItemReorderPayload(
+  items: RetroItem[],
+  orderedIds: unknown,
+): { valid: true; ids: string[] } | { valid: false; error: string } {
+  if (!Array.isArray(orderedIds)) {
+    return { valid: false, error: "Item order must be an array" };
+  }
+  if (!orderedIds.every((id): id is string => typeof id === "string")) {
+    return { valid: false, error: "Item order must contain only item IDs" };
+  }
+  if (orderedIds.length === 0) {
+    return { valid: false, error: "Item reorder must include every item in one list exactly once" };
+  }
+
+  const itemsById = new Map(items.map((item) => [item.id, item]));
+  const seen = new Set<string>();
+  let targetColumnId: string | null | undefined;
+  let targetColumnIdSet = false;
+
+  for (const id of orderedIds) {
+    if (seen.has(id)) {
+      return { valid: false, error: "Item reorder contains a duplicate item" };
+    }
+    seen.add(id);
+
+    const item = itemsById.get(id);
+    if (!item) {
+      return { valid: false, error: "Item reorder contains an unknown item" };
+    }
+
+    const itemColumnId = item.columnId ?? item.groupId;
+    if (!targetColumnIdSet) {
+      targetColumnId = itemColumnId;
+      targetColumnIdSet = true;
+    }
+    if (itemColumnId !== targetColumnId) {
+      return { valid: false, error: "Item reorder must be scoped to a single column" };
+    }
+  }
+
+  const scopedItemIds = items
+    .filter((item) => (item.columnId ?? item.groupId) === targetColumnId)
+    .map((item) => item.id);
+
+  if (scopedItemIds.length !== orderedIds.length) {
+    return { valid: false, error: "Item reorder must include every item in one list exactly once" };
+  }
+
+  for (const id of scopedItemIds) {
+    if (!seen.has(id)) {
+      return { valid: false, error: "Item reorder is missing an item from the target column" };
+    }
+  }
+
+  return { valid: true, ids: orderedIds };
 }
 
 export function applyReorderGroups(groups: Group[], orderedIds: string[]): Group[] {

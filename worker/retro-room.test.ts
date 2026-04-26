@@ -795,6 +795,40 @@ describe("RetroRoom Durable Object", () => {
 
       const state = await stub.getRoomState();
       expect(state.items.map((i) => i.text)).toEqual(["Item C", "Item A", "Item B"]);
+      expect(state.version).toBe(state0.version + 1);
+    });
+
+    it("reorderItems rejects duplicate missing and unknown item IDs atomically", async () => {
+      const stub = await setupOrganiseRoom("test-reorder-items-invalid-ids");
+      const before = await stub.getRoomState();
+      const ids = before.items.map((i) => i.id);
+
+      for (const itemIds of [
+        [ids[2]!, ids[2]!, ids[0]!],
+        [ids[2]!, ids[0]!],
+        [ids[2]!, ids[0]!, "not-from-this-room"],
+      ]) {
+        const result = await stub.reorderItems("fac1", itemIds);
+        expect(result.success).toBe(false);
+        expect(await stub.getRoomState()).toEqual(before);
+      }
+    });
+
+    it("reorderItems rejects mixed-list payloads atomically", async () => {
+      const stub = await setupOrganiseRoom("test-reorder-items-mixed-list");
+      const groupResult = await stub.createGroup("fac1", "Process");
+      const groupId = groupResult.group!.id;
+      let state = await stub.getRoomState();
+      const movedItem = state.items[0]!;
+      const ungroupedItem = state.items[1]!;
+
+      await moveItemWithFreshPreconditions(stub, "fac1", movedItem.id, groupId, 0);
+      state = await stub.getRoomState();
+
+      const result = await stub.reorderItems("fac1", [movedItem.id, ungroupedItem.id]);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("single column");
+      expect(await stub.getRoomState()).toEqual(state);
     });
 
     it("reorderItems is rejected outside organise phase", async () => {

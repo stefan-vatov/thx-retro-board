@@ -24,6 +24,7 @@ import {
   getUngroupedItems,
   getGroupedItems,
   applyReorderItems,
+  validateItemReorderPayload,
   applyReorderGroups,
   applyMoveItemToGroup,
   applyCastVote,
@@ -403,20 +404,52 @@ describe("applyReorderItems", () => {
     expect(result.filter((i) => i.groupId === "g1").map((i) => i.id)).toEqual(["g1a"]);
   });
 
-  it("reorders items correctly with contiguous order indices", () => {
+  it("reorders items correctly with target-list contiguous order indices", () => {
     const multiGroupItems: RetroItem[] = [
       { id: "a1", text: "A1", authorId: "p1", groupId: "g1", order: 0 },
       { id: "a2", text: "A2", authorId: "p1", groupId: "g1", order: 1 },
       { id: "b1", text: "B1", authorId: "p1", groupId: "g2", order: 2 },
     ];
     const result = applyReorderItems(multiGroupItems, ["a2", "a1"]);
-    expect(result.map((i) => i.order)).toEqual([0, 1, 2]);
+    expect(result.filter((item) => item.groupId === "g1").map((i) => i.order)).toEqual([0, 1]);
+    expect(result.find((item) => item.id === "b1")!.order).toBe(2);
   });
 
   it("handles empty orderedIds preserving all items", () => {
     const result = applyReorderItems(items, []);
     expect(result).toHaveLength(3);
     expect(result.map((i) => i.id)).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("validateItemReorderPayload", () => {
+  const items: RetroItem[] = [
+    { id: "a1", text: "A1", authorId: "p1", columnId: "g1", groupId: "g1", order: 0 },
+    { id: "a2", text: "A2", authorId: "p1", columnId: "g1", groupId: "g1", order: 1 },
+    { id: "b1", text: "B1", authorId: "p1", columnId: "g2", groupId: "g2", order: 0 },
+    { id: "u1", text: "U1", authorId: "p1", columnId: null, groupId: null, order: 0 },
+  ];
+
+  it("accepts a complete single-list item permutation", () => {
+    expect(validateItemReorderPayload(items, ["a2", "a1"])).toEqual({ valid: true, ids: ["a2", "a1"] });
+  });
+
+  it("rejects duplicate item IDs", () => {
+    const result = validateItemReorderPayload(items, ["a1", "a1"]);
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain("duplicate");
+  });
+
+  it("rejects missing, extra, and unknown item IDs", () => {
+    expect(validateItemReorderPayload(items, ["a1"]).valid).toBe(false);
+    expect(validateItemReorderPayload(items, ["a2", "a1", "unknown"]).valid).toBe(false);
+    expect(validateItemReorderPayload(items, ["unknown"]).valid).toBe(false);
+  });
+
+  it("rejects mixed-list reorder payloads", () => {
+    const result = validateItemReorderPayload(items, ["a1", "b1"]);
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain("single column");
   });
 });
 
