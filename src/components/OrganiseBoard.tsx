@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
+import { AlertCircle, ArrowDown, ArrowUp, GripVertical, Pencil, Plus, Trash2 } from "lucide-react";
 import type { RoomState, RetroItem, Group, Column } from "../domain";
 import {
   getGroupedItems,
@@ -7,6 +8,11 @@ import {
   isValidGroupName,
   MAX_COLUMN_NAME_LENGTH,
 } from "../domain";
+import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
+import { Badge } from "./ui/badge";
+import { Button } from "./ui/button";
+import { Card, CardContent, CardDescription, CardHeader } from "./ui/card";
+import { Input } from "./ui/input";
 
 interface OrganiseBoardProps {
   roomState: RoomState;
@@ -234,22 +240,27 @@ export function OrganiseBoard({ roomState, send, serverError = null, clearServer
   return (
     <div>
       {draggingItemId && (
-        <div className="status-msg status-msg--info drag-status" role="status" aria-live="polite">
-          Dragging item. Drop on an insertion line, or press Escape to cancel.
-        </div>
+        <Alert className="status-msg status-msg--info drag-status" role="status" aria-live="polite">
+          <GripVertical aria-hidden="true" />
+          <AlertTitle>Dragging item</AlertTitle>
+          <AlertDescription>Drop on an insertion line in the same column, or press Escape to cancel.</AlertDescription>
+        </Alert>
       )}
 
       {(organiseActionError || serverOrganiseError) && (
-        <div className="status-msg status-msg--error" role="alert" style={{ marginBottom: "var(--space-3)" }}>
-          {organiseActionError ?? serverOrganiseError}
-        </div>
+        <Alert variant="destructive" className="status-msg status-msg--error" style={{ marginBottom: "var(--space-3)" }}>
+          <AlertCircle aria-hidden="true" />
+          <AlertTitle>Organise change was not applied</AlertTitle>
+          <AlertDescription>{organiseActionError ?? serverOrganiseError}</AlertDescription>
+        </Alert>
       )}
       {feedbackMessages.length > 0 && !organiseActionError && (
         <div id="organise-group-feedback" style={{ display: "grid", gap: "var(--space-1)", marginBottom: "var(--space-3)" }}>
           {feedbackMessages.map((message) => (
-            <span key={message} className="status-msg status-msg--error" style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }} role="alert">
-              {message}
-            </span>
+            <Alert key={message} variant="destructive" className="status-msg status-msg--error organise-feedback-alert">
+              <AlertCircle aria-hidden="true" />
+              <AlertDescription>{message}</AlertDescription>
+            </Alert>
           ))}
         </div>
       )}
@@ -268,14 +279,25 @@ export function OrganiseBoard({ roomState, send, serverError = null, clearServer
               .sort((a, b) => a.order - b.order);
             const itemCount = roomState.items.filter((item) => item.columnId === column.id).length;
             return (
-              <section key={column.id} className="column-board__column" aria-labelledby={`organise-column-${column.id}`} data-column-id={column.id}>
-                <div className="column-board__header">
-                  <h3 id={`organise-column-${column.id}`} className="column-board__title" title={column.name}>{column.name}</h3>
-                  <span className="column-board__count" aria-label={`${itemCount} items`}>{itemCount}</span>
+              <Card key={column.id} className="column-board__column" role="region" aria-labelledby={`organise-column-${column.id}`} data-column-id={column.id}>
+                <CardHeader className="column-board__header">
+                  <div className="column-board__title-wrap">
+                    <Badge variant="secondary" className="organise-lane-badge">Organise lane</Badge>
+                    <h3 id={`organise-column-${column.id}`} className="column-board__title" title={column.name}>{column.name}</h3>
+                    <CardDescription className="organise-lane-description">
+                      Create groups in this lane, then drag items only within {column.name}. Existing content remains readable while disconnected.
+                    </CardDescription>
+                  </div>
+                  <Badge variant="secondary" className="column-board__count" aria-label={`${itemCount} items`}>{itemCount}</Badge>
+                </CardHeader>
+                <CardContent className="organise-lane-content">
+                <div className="organise-lane-meta" role="status" aria-live="polite">
+                  <Badge variant="outline">Same-column grouping only</Badge>
+                  <span className="text-muted">{columnGroups.length} groups · {ungrouped.length} ungrouped</span>
                 </div>
                 {isOrganise && (
-                  <form className="input-row" style={{ marginBottom: "var(--space-3)" }} onSubmit={(event) => handleCreateGroup(event, column)}>
-                    <input
+                  <form className="input-row organise-group-form" onSubmit={(event) => handleCreateGroup(event, column)}>
+                    <Input
                       type="text"
                       className="input"
                       value={newGroupNames[column.id] ?? ""}
@@ -289,14 +311,19 @@ export function OrganiseBoard({ roomState, send, serverError = null, clearServer
                       aria-describedby={feedbackMessages.length > 0 ? "organise-group-feedback" : undefined}
                       disabled={pendingMutation}
                     />
-                    <button type="submit" className="btn btn--secondary btn--sm" disabled={pendingMutation} aria-busy={pendingMutation}>
+                    <Button type="submit" variant="secondary" size="sm" className="btn btn--secondary btn--sm" disabled={pendingMutation} aria-busy={pendingMutation}>
+                      <Plus aria-hidden="true" />
                       Create group
-                    </button>
+                    </Button>
                   </form>
                 )}
                 {columnGroups.length === 0 && ungrouped.length === 0 && (
-                  <p className="text-muted column-board__empty">No items or groups in this lane yet.</p>
+                  <Alert className="column-board__empty" role="status">
+                    <AlertTitle>No items or groups in this lane yet</AlertTitle>
+                    <AlertDescription>Items keep their original column context. Add write-phase items or create a group when feedback arrives.</AlertDescription>
+                  </Alert>
                 )}
+                <div className="organise-group-stack">
                 {columnGroups.map((group, groupIdx) => (
                   <GroupSection
                     key={group.id}
@@ -321,6 +348,7 @@ export function OrganiseBoard({ roomState, send, serverError = null, clearServer
                     onDelete={deleteGroup}
                   />
                 ))}
+                </div>
                 <DragList
                   title={`${column.name} ungrouped`}
                   columnId={column.id}
@@ -333,7 +361,8 @@ export function OrganiseBoard({ roomState, send, serverError = null, clearServer
                   onDragStart={beginPointerDrag}
                   className="ungrouped-section"
                 />
-              </section>
+                </CardContent>
+              </Card>
             );
           })}
         </div>
@@ -370,8 +399,8 @@ interface GroupSectionProps {
 function GroupSection({ group, items, groupIndex, totalGroups, isOrganise, onReorderGroups, draggingItemId, activeDrop, onDragStart, editingGroupId, editingGroupName, onEditNameChange, onStartEdit, onSubmitEdit, onCancelEdit, onDelete }: GroupSectionProps) {
   const isEditing = editingGroupId === group.id;
   return (
-    <div className="group-panel">
-      <div className="group-panel__header">
+    <Card className="group-panel" data-group-id={group.id}>
+      <CardHeader className="group-panel__header">
         {isEditing ? (
           <form
             className="input-row"
@@ -380,50 +409,60 @@ function GroupSection({ group, items, groupIndex, totalGroups, isOrganise, onReo
               onSubmitEdit(group);
             }}
           >
-            <input
+            <Input
               className="input"
               value={editingGroupName}
               onChange={(event) => onEditNameChange(event.target.value)}
               maxLength={MAX_COLUMN_NAME_LENGTH}
               aria-label={`Edit ${group.name} group name`}
             />
-            <button type="submit" className="btn btn--secondary btn--sm">Save</button>
-            <button type="button" className="btn btn--ghost btn--sm" onClick={onCancelEdit}>Cancel</button>
+            <Button type="submit" variant="secondary" size="sm" className="btn btn--secondary btn--sm">Save</Button>
+            <Button type="button" variant="ghost" size="sm" className="btn btn--ghost btn--sm" onClick={onCancelEdit}>Cancel</Button>
           </form>
         ) : (
-          <h4 className="group-panel__title">{group.name}</h4>
+          <div>
+            <h4 className="group-panel__title">{group.name}</h4>
+            <CardDescription>{items.length} grouped {items.length === 1 ? "item" : "items"}</CardDescription>
+          </div>
         )}
         {isOrganise && (
           <span className="group-panel__controls">
-            <button
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
               className="reorder-btn"
               disabled={groupIndex === 0}
               onClick={() => onReorderGroups(groupIndex, groupIndex - 1)}
               title="Move group up"
               aria-label="Move group up"
             >
-              ↑
-            </button>
-            <button
+              <ArrowUp aria-hidden="true" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
               className="reorder-btn"
               disabled={groupIndex === totalGroups - 1}
               onClick={() => onReorderGroups(groupIndex, groupIndex + 1)}
               title="Move group down"
               aria-label="Move group down"
             >
-              ↓
-            </button>
+              <ArrowDown aria-hidden="true" />
+            </Button>
             {!isEditing && (
-              <button className="reorder-btn" onClick={() => onStartEdit(group)} aria-label={`Rename ${group.name}`} title="Rename group">
-                ✎
-              </button>
+              <Button type="button" variant="ghost" size="icon" className="reorder-btn" onClick={() => onStartEdit(group)} aria-label={`Rename ${group.name}`} title="Rename group">
+                <Pencil aria-hidden="true" />
+              </Button>
             )}
-            <button className="reorder-btn" onClick={() => onDelete(group)} aria-label={`Delete ${group.name}`} title="Delete group">
-              ×
-            </button>
+            <Button type="button" variant="ghost" size="icon" className="reorder-btn reorder-btn--danger" onClick={() => onDelete(group)} aria-label={`Delete ${group.name}`} title="Delete group">
+              <Trash2 aria-hidden="true" />
+            </Button>
           </span>
         )}
-      </div>
+      </CardHeader>
+      <CardContent className="group-panel__content">
       <DragList
         title={group.name}
         columnId={group.columnId}
@@ -435,7 +474,8 @@ function GroupSection({ group, items, groupIndex, totalGroups, isOrganise, onReo
         activeDrop={activeDrop}
         onDragStart={onDragStart}
       />
-    </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -481,7 +521,7 @@ function DragList({ title, columnId, groupId, items, emptyText, isOrganise, drag
           <span className="section-title">{title}</span>
         </div>
       )}
-      {visibleItems.length === 0 && <p className="text-muted" style={{ fontSize: "var(--text-sm)", margin: 0 }}>{emptyText}</p>}
+      {visibleItems.length === 0 && <p className="text-muted drag-list__empty">{emptyText}</p>}
       <ul className="item-list drag-list">
         {isOrganise && dropZone(0)}
         {visibleItems.map((item, idx) => (
@@ -510,7 +550,7 @@ function DragList({ title, columnId, groupId, items, emptyText, isOrganise, drag
                   }
                 }}
               >
-                ⋮⋮
+                <GripVertical aria-hidden="true" />
               </button>
               <span className="item-row__text">{item.text}</span>
             </li>

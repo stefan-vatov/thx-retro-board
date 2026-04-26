@@ -78,6 +78,9 @@ describe("OrganiseBoard column-scoped group layout", () => {
     );
 
     expect(markup).toContain("Organise phase columns");
+    expect(markup).toContain("data-slot=\"card\"");
+    expect(markup).toContain("Organise lane");
+    expect(markup).toContain("Same-column grouping only");
     expect(markup).toContain("Column 1");
     expect(markup).toContain("Column 2");
     expect(markup).toContain("First group");
@@ -105,6 +108,8 @@ describe("OrganiseBoard column-scoped group layout", () => {
     expect(markup).toContain("Create group");
     expect(markup).toContain("Rename Editable group");
     expect(markup).toContain("Delete Editable group");
+    expect(markup).toContain("Move group up");
+    expect(markup).toContain("Move group down");
   });
 
   it("keeps item drag handles explicitly labelled for pointer-only drag lifecycle tests", () => {
@@ -121,5 +126,19 @@ describe("OrganiseBoard column-scoped group layout", () => {
     );
 
     expect(markup).toContain("<button type=\"button\" class=\"drag-handle\" aria-label=\"Drag Clickable item\"");
+  });
+
+  it("renders shadcn-style empty states and offline-safe guidance", () => {
+    const markup = renderToStaticMarkup(
+      createElement(OrganiseBoard, {
+        roomState: makeRoomState(makeColumns(1)),
+        isFacilitator: true,
+        send: () => false,
+      }),
+    );
+
+    expect(markup).toContain("Create groups in this lane, then drag items only within Column 1.");
+    expect(markup).toContain("Existing content remains readable while disconnected.");
+    expect(markup).toContain("No ungrouped items.");
   });
 });
