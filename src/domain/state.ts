@@ -1,9 +1,6 @@
 import type { Phase, Participant, RetroItem, Group, Column, VoteAllocation, TimerState, RoomState } from "./types";
 
 export const DEFAULT_COLUMNS: readonly Column[] = [
-  { id: "start", name: "Start", order: 0 },
-  { id: "stop", name: "Stop", order: 1 },
-  { id: "continue", name: "Continue", order: 2 },
 ] as const;
 
 export const MAX_COLUMN_NAME_LENGTH = 100;
@@ -16,11 +13,12 @@ export function getDefaultColumns(): Column[] {
 export function createRoomState(roomId: string, voteBudget: number = 5): RoomState {
   return {
     roomId,
+    schemaVersion: 2,
     phase: "write",
     participants: [],
     items: [],
     columns: getDefaultColumns(),
-    groups: getDefaultColumns(),
+    groups: [],
     votes: [],
     timer: { startedAt: null, durationSeconds: null, expired: false },
     voteBudget,
@@ -32,12 +30,15 @@ export function createParticipant(id: string, displayName: string, isFacilitator
   return { id, displayName, isFacilitator };
 }
 
-export function createItem(id: string, text: string, authorId: string, order: number, columnId: string | null = null): RetroItem {
-  return { id, text, authorId, columnId, groupId: columnId, order };
+export function createItem(id: string, text: string, authorId: string, order: number, columnId: string | null = null, groupId: string | null = null): RetroItem {
+  return { id, text, authorId, columnId, groupId, order };
 }
 
-export function createGroup(id: string, name: string, order: number): Group {
-  return { id, name, order };
+export function createGroup(id: string, name: string, columnId: string | number, order?: number): Group {
+  if (typeof columnId === "number") {
+    return { id, name, columnId: "", order: columnId };
+  }
+  return { id, name, columnId, order: order ?? 0 };
 }
 
 export function createColumn(id: string, name: string, order: number): Column {
@@ -58,9 +59,11 @@ export function isPhaseAllowed(actionPhase: Phase, currentPhase: Phase): boolean
 
 export function getVotesForItem(votes: VoteAllocation[], itemId: string): number {
   return votes
-    .filter((v) => v.itemId === itemId)
+    .filter((v) => v.groupId === itemId || v.itemId === itemId)
     .reduce((sum, v) => sum + v.count, 0);
 }
+
+export const getVotesForGroup = getVotesForItem;
 
 export function getVotesByParticipant(votes: VoteAllocation[], participantId: string): number {
   return votes
@@ -114,13 +117,13 @@ export const isValidColumnName = isValidGroupName;
 
 export function getUngroupedItems(items: RetroItem[]): RetroItem[] {
   return items
-    .filter((item) => (item.columnId ?? item.groupId) === null)
+    .filter((item) => item.groupId === null)
     .sort((a, b) => a.order - b.order);
 }
 
 export function getGroupedItems(items: RetroItem[], groupId: string): RetroItem[] {
   return items
-    .filter((item) => (item.columnId ?? item.groupId) === groupId)
+    .filter((item) => item.groupId === groupId)
     .sort((a, b) => a.order - b.order);
 }
 
@@ -128,13 +131,14 @@ export function applyReorderItems(items: RetroItem[], orderedIds: string[]): Ret
   const reordered = reorderList(items, orderedIds, (item) => item.id);
   if (reordered.length === 0) return items;
 
-  const targetColumnId = reordered[0]!.columnId ?? reordered[0]!.groupId;
+  const targetColumnId = reordered[0]!.columnId;
+  const targetGroupId = reordered[0]!.groupId;
   const orderedIdSet = new Set(orderedIds);
   const remainingTargetItems = items
-    .filter((item) => (item.columnId ?? item.groupId) === targetColumnId && !orderedIdSet.has(item.id))
+    .filter((item) => item.columnId === targetColumnId && item.groupId === targetGroupId && !orderedIdSet.has(item.id))
     .sort((a, b) => a.order - b.order);
   const nextTargetItems = [...reordered, ...remainingTargetItems].map((item, order) => ({ ...item, order }));
-  const untouchedItems = items.filter((item) => (item.columnId ?? item.groupId) !== targetColumnId);
+  const untouchedItems = items.filter((item) => item.columnId !== targetColumnId || item.groupId !== targetGroupId);
 
   return [
     ...nextTargetItems,
@@ -159,6 +163,7 @@ export function validateItemReorderPayload(
   const itemsById = new Map(items.map((item) => [item.id, item]));
   const seen = new Set<string>();
   let targetColumnId: string | null | undefined;
+  let targetGroupId: string | null | undefined;
   let targetColumnIdSet = false;
 
   for (const id of orderedIds) {
@@ -172,18 +177,19 @@ export function validateItemReorderPayload(
       return { valid: false, error: "Item reorder contains an unknown item" };
     }
 
-    const itemColumnId = item.columnId ?? item.groupId;
+    const itemColumnId = item.columnId;
     if (!targetColumnIdSet) {
       targetColumnId = itemColumnId;
+      targetGroupId = item.groupId;
       targetColumnIdSet = true;
     }
-    if (itemColumnId !== targetColumnId) {
-      return { valid: false, error: "Item reorder must be scoped to a single column" };
+    if (itemColumnId !== targetColumnId || item.groupId !== targetGroupId) {
+      return { valid: false, error: "Item reorder must be scoped to a single column group" };
     }
   }
 
   const scopedItemIds = items
-    .filter((item) => (item.columnId ?? item.groupId) === targetColumnId)
+    .filter((item) => item.columnId === targetColumnId && item.groupId === targetGroupId)
     .map((item) => item.id);
 
   if (scopedItemIds.length !== orderedIds.length) {
@@ -199,7 +205,7 @@ export function validateItemReorderPayload(
   return { valid: true, ids: orderedIds };
 }
 
-export function applyReorderGroups(groups: Group[], orderedIds: string[]): Group[] {
+export function applyReorderGroups<T extends { id: string; order: number }>(groups: T[], orderedIds: string[]): T[] {
   const reordered = reorderList(groups, orderedIds, (g) => g.id);
   return reordered.map((g, idx) => ({ ...g, order: idx }));
 }
@@ -252,25 +258,25 @@ export function applyMoveItemToGroup(
   const itemIndex = items.findIndex((i) => i.id === itemId);
   if (itemIndex === -1) return items;
 
-  const moved: RetroItem = { ...items[itemIndex]!, columnId: targetGroupId, groupId: targetGroupId };
+  const source = items[itemIndex]!;
+  const moved: RetroItem = { ...source, columnId: source.columnId ?? targetGroupId, groupId: targetGroupId };
   const otherItems = items.filter((i) => i.id !== itemId);
 
   const sameGroup = otherItems
-    .filter((i) => (i.columnId ?? i.groupId) === targetGroupId)
+    .filter((i) => i.columnId === moved.columnId && i.groupId === targetGroupId)
     .sort((a, b) => a.order - b.order);
   const before = sameGroup.slice(0, targetIndex);
   const after = sameGroup.slice(targetIndex);
 
   const updatedSameGroup: RetroItem[] = [...before, moved, ...after].map((i, idx) => ({ ...i, order: idx }));
-  const affectedSourceGroupId = items[itemIndex]!.columnId ?? items[itemIndex]!.groupId;
-  const differentGroup = otherItems.filter((i) => (i.columnId ?? i.groupId) !== targetGroupId);
+  const affectedSourceGroupId = items[itemIndex]!.groupId;
+  const differentGroup = otherItems.filter((i) => i.columnId !== moved.columnId || i.groupId !== targetGroupId);
   const compactedDifferentGroup = differentGroup.map((item) => {
-    const itemGroupId = item.columnId ?? item.groupId;
-    if (itemGroupId !== affectedSourceGroupId || affectedSourceGroupId === targetGroupId) {
+    if (item.columnId !== moved.columnId || item.groupId !== affectedSourceGroupId || affectedSourceGroupId === targetGroupId) {
       return item;
     }
     const sourceIndex = differentGroup
-      .filter((candidate) => (candidate.columnId ?? candidate.groupId) === affectedSourceGroupId)
+      .filter((candidate) => candidate.columnId === moved.columnId && candidate.groupId === affectedSourceGroupId)
       .sort((a, b) => a.order - b.order)
       .findIndex((candidate) => candidate.id === item.id);
     return { ...item, order: sourceIndex };
@@ -297,19 +303,19 @@ export function applyCastVote(
   }
 
   const existing = votes.find(
-    (v) => v.participantId === participantId && v.itemId === itemId,
+    (v) => v.participantId === participantId && (v.groupId === itemId || v.itemId === itemId),
   );
 
   if (existing) {
     const updated = votes.map((v) =>
-      v.participantId === participantId && v.itemId === itemId
+      v.participantId === participantId && (v.groupId === itemId || v.itemId === itemId)
         ? { ...v, count: v.count + count }
         : v,
     );
     return { votes: updated };
   }
 
-  return { votes: [...votes, { participantId, itemId, count }] };
+  return { votes: [...votes, { participantId, groupId: itemId, itemId, count }] };
 }
 
 export function applyRemoveVote(
@@ -318,18 +324,18 @@ export function applyRemoveVote(
   itemId: string,
 ): VoteAllocation[] {
   const existing = votes.find(
-    (v) => v.participantId === participantId && v.itemId === itemId,
+    (v) => v.participantId === participantId && (v.groupId === itemId || v.itemId === itemId),
   );
   if (!existing) return votes;
 
   if (existing.count <= 1) {
     return votes.filter(
-      (v) => !(v.participantId === participantId && v.itemId === itemId),
+      (v) => !(v.participantId === participantId && (v.groupId === itemId || v.itemId === itemId)),
     );
   }
 
   return votes.map((v) =>
-    v.participantId === participantId && v.itemId === itemId
+    v.participantId === participantId && (v.groupId === itemId || v.itemId === itemId)
       ? { ...v, count: v.count - 1 }
       : v,
   );

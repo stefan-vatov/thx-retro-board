@@ -19,7 +19,6 @@ import {
   sanitizeColumnName,
   isValidColumnName,
   MAX_COLUMNS,
-  getDefaultColumns,
   applyReorderColumns,
   applyEditColumn,
   validateFullColumnPermutation,
@@ -38,6 +37,7 @@ interface StoredTimer {
 }
 
 interface StoredState {
+  schemaVersion?: 2;
   roomId: string;
   phase: RoomState["phase"];
   participants: Participant[];
@@ -94,9 +94,9 @@ function validateMoveItemPreconditions(
 }
 
 function normalizeColumns(stored: Pick<StoredState, "columns" | "groups">): Column[] {
-  const source = stored.columns ?? stored.groups;
-  if (!Array.isArray(source) || source.length === 0) {
-    return getDefaultColumns();
+  const source = stored.columns;
+  if (!Array.isArray(source)) {
+    return [];
   }
   return source
     .filter((column): column is Column => Boolean(column) && typeof column.id === "string" && typeof column.name === "string")
@@ -109,16 +109,58 @@ function normalizeColumns(stored: Pick<StoredState, "columns" | "groups">): Colu
     .map((column, index) => ({ ...column, order: index }));
 }
 
-function normalizeItems(items: RetroItem[], columns: Column[]): RetroItem[] {
+function isV2StoredState(stored: Partial<StoredState>): boolean {
+  if (stored.schemaVersion !== 2) return false;
+  if (!Array.isArray(stored.columns) || !Array.isArray(stored.groups)) return false;
+  const columnIds = new Set(stored.columns.map((column) => column.id));
+  return stored.groups.every((group) => typeof group.columnId === "string" && columnIds.has(group.columnId));
+}
+
+function normalizeGroups(groups: Group[], columns: Column[]): Group[] {
   const validColumnIds = new Set(columns.map((column) => column.id));
-  return items.map((item, index) => {
-    const candidate = item.columnId ?? item.groupId ?? null;
-    const columnId = candidate !== null && validColumnIds.has(candidate) ? candidate : null;
+  return groups
+    .filter((group): group is Group =>
+      Boolean(group)
+      && typeof group.id === "string"
+      && typeof group.name === "string"
+      && typeof group.columnId === "string"
+      && validColumnIds.has(group.columnId),
+    )
+    .map((group, index) => ({
+      id: group.id,
+      name: sanitizeColumnName(group.name) || `Group ${index + 1}`,
+      columnId: group.columnId,
+      order: Number.isInteger(group.order) ? group.order : index,
+    }))
+    .sort((a, b) => a.order - b.order)
+    .map((group, index) => ({ ...group, order: index }));
+}
+
+function normalizeItems(items: RetroItem[], columns: Column[], groups: Group[]): RetroItem[] {
+  const validColumnIds = new Set(columns.map((column) => column.id));
+  const groupsById = new Map(groups.map((group) => [group.id, group]));
+  return items.flatMap((item, index) => {
+    const columnId = item.columnId;
+    if (columnId !== null && (typeof columnId !== "string" || !validColumnIds.has(columnId))) return [];
+    const groupId = typeof item.groupId === "string" && (columnId === null || groupsById.get(item.groupId)?.columnId === columnId) ? item.groupId : null;
     return {
       ...item,
       columnId,
-      groupId: columnId,
+      groupId,
       order: Number.isInteger(item.order) ? item.order : index,
+    };
+  });
+}
+
+function normalizeVotes(votes: VoteAllocation[], groups: Group[]): VoteAllocation[] {
+  const validGroupIds = new Set(groups.map((group) => group.id));
+  return votes.flatMap((vote) => {
+    const groupId = vote.groupId ?? vote.itemId;
+    if (typeof groupId !== "string" || !validGroupIds.has(groupId)) return [];
+    return {
+      participantId: vote.participantId,
+      groupId,
+      count: vote.count,
     };
   });
 }
@@ -167,12 +209,28 @@ export class RetroRoom extends DurableObject<Env> {
     if (this.state) return this.state;
     const stored = await this.ctx.storage.get<StoredState>("room");
     if (stored) {
+      if (!isV2StoredState(stored)) {
+        this.state = {
+          ...stored,
+          schemaVersion: 2,
+          phase: "write",
+          items: [],
+          columns: [],
+          groups: [],
+          votes: [],
+        };
+        await this.ctx.storage.put("room", this.state);
+        return this.state;
+      }
       const columns = normalizeColumns(stored);
+      const groups = normalizeGroups(stored.groups ?? [], columns);
       this.state = {
         ...stored,
+        schemaVersion: 2,
         columns,
-        groups: columns,
-        items: normalizeItems(stored.items ?? [], columns),
+        groups,
+        items: normalizeItems(stored.items ?? [], columns, groups),
+        votes: normalizeVotes(stored.votes ?? [], groups),
       };
       return this.state;
     }
@@ -181,7 +239,7 @@ export class RetroRoom extends DurableObject<Env> {
 
   private async saveState(): Promise<void> {
     if (this.state) {
-      this.state.groups = this.state.columns ?? this.state.groups;
+      this.state.schemaVersion = 2;
       this.state.version += 1;
       await this.ctx.storage.put("room", this.state);
     }
@@ -194,12 +252,13 @@ export class RetroRoom extends DurableObject<Env> {
       return;
     }
     this.state = {
+      schemaVersion: 2,
       roomId,
       phase: "write",
       participants: [],
       items: [],
-      columns: getDefaultColumns(),
-      groups: getDefaultColumns(),
+      columns: [],
+      groups: [],
       votes: [],
       facilitatorId: null,
       voteBudget: 5,
@@ -214,6 +273,7 @@ export class RetroRoom extends DurableObject<Env> {
     const s = await this.loadState();
     const timer = this.computeTimerStatus(s.timer);
     return {
+      schemaVersion: 2,
       roomId: s.roomId,
       phase: s.phase,
       participants: s.participants,
@@ -322,7 +382,7 @@ export class RetroRoom extends DurableObject<Env> {
     if (!s.participants.some((participant) => participant.id === participantId)) {
       return { success: false, error: "Participant not found" };
     }
-    if (columnId !== null && !s.groups.some((column) => column.id === columnId)) {
+    if (columnId !== null && !s.columns?.some((column) => column.id === columnId)) {
       return { success: false, error: "Column not found" };
     }
 
@@ -331,7 +391,7 @@ export class RetroRoom extends DurableObject<Env> {
       text: sanitized,
       authorId: participantId,
       columnId,
-      groupId: columnId,
+      groupId: null,
       order: s.items.length,
     };
     s.items.push(item);
@@ -433,17 +493,16 @@ export class RetroRoom extends DurableObject<Env> {
     if (!isValidColumnName(rawName)) {
       return { success: false, error: "Column name cannot be empty" };
     }
-    if (s.groups.length >= MAX_COLUMNS) {
+    if ((s.columns ?? []).length >= MAX_COLUMNS) {
       return { success: false, error: `Rooms can have at most ${MAX_COLUMNS} columns` };
     }
 
     const column: Column = {
       id: crypto.randomUUID(),
       name: sanitized,
-      order: s.groups.length,
+      order: (s.columns ?? []).length,
     };
-    s.groups.push(column);
-    s.columns = s.groups;
+    s.columns = [...(s.columns ?? []), column];
     await this.saveState();
     this.broadcastState(s);
 
@@ -458,15 +517,14 @@ export class RetroRoom extends DurableObject<Env> {
       return { success: false, error: "Column not found" };
     }
 
-    const result = applyEditColumn(s.groups, columnId, rawName);
+    const result = applyEditColumn(s.columns ?? [], columnId, rawName);
     if (result.error) {
       return { success: false, error: result.error };
     }
-    s.groups = result.columns;
     s.columns = result.columns;
     await this.saveState();
     this.broadcastState(s);
-    return { success: true, column: s.groups.find((column) => column.id === columnId) };
+    return { success: true, column: s.columns.find((column) => column.id === columnId) };
   }
 
   async reorderColumns(participantId: string, orderedIds: unknown): Promise<{ success: boolean; error?: string }> {
@@ -474,23 +532,49 @@ export class RetroRoom extends DurableObject<Env> {
     const allowed = this.canMutateColumns(s, participantId);
     if (!allowed.success) return allowed;
 
-    const validation = validateFullColumnPermutation(s.groups, orderedIds);
+    const validation = validateFullColumnPermutation(s.columns ?? [], orderedIds);
     if (!validation.valid) {
       return { success: false, error: validation.error };
     }
-    s.groups = applyReorderColumns(s.groups, validation.ids);
-    s.columns = s.groups;
+    s.columns = applyReorderColumns(s.columns ?? [], validation.ids);
     await this.saveState();
     this.broadcastState(s);
     return { success: true };
   }
 
-  async createGroup(participantId: string, rawName: string): Promise<{ success: boolean; error?: string; group?: Group }> {
-    const columnResult = await this.createColumn(participantId, rawName);
-    if (!columnResult.success) {
-      return { success: false, error: columnResult.error };
+  async createGroup(participantId: string, rawName: string, columnId?: string): Promise<{ success: boolean; error?: string; group?: Group }> {
+    if (columnId === undefined) {
+      const columnResult = await this.createColumn(participantId, rawName);
+      if (!columnResult.success) return { success: false, error: columnResult.error };
+      return { success: true, group: { ...columnResult.column!, columnId: columnResult.column!.id } };
     }
-    return { success: true, group: columnResult.column };
+    const s = await this.loadState();
+    if (s.phase !== "organise") {
+      return { success: false, error: "Cannot create groups outside organise phase" };
+    }
+    if (!this.hasParticipant(s, participantId)) {
+      return { success: false, error: "Participant not found" };
+    }
+    if (typeof columnId !== "string" || !s.columns?.some((column) => column.id === columnId)) {
+      return { success: false, error: "Column not found" };
+    }
+
+    const sanitized = sanitizeColumnName(rawName);
+    if (!isValidColumnName(rawName)) {
+      return { success: false, error: "Group name cannot be empty" };
+    }
+
+    const group: Group = {
+      id: crypto.randomUUID(),
+      name: sanitized,
+      columnId,
+      order: s.groups.filter((candidate) => candidate.columnId === columnId).length,
+    };
+    s.groups.push(group);
+    await this.saveState();
+    this.broadcastState(s);
+
+    return { success: true, group };
   }
 
   async reorderItems(participantId: string, orderedIds: unknown): Promise<{ success: boolean; error?: string }> {
@@ -554,7 +638,7 @@ export class RetroRoom extends DurableObject<Env> {
       return { success: false, error: "Stale item move rejected: room version changed" };
     }
 
-    const currentSourceGroupId = item.columnId ?? item.groupId;
+    const currentSourceGroupId = item.groupId;
     if (validatedPreconditions.preconditions.sourceGroupId !== currentSourceGroupId) {
       return { success: false, error: "Stale item move rejected: source column changed" };
     }
@@ -564,7 +648,11 @@ export class RetroRoom extends DurableObject<Env> {
     }
 
     if (targetGroupId !== null && !s.groups.some((g) => g.id === targetGroupId)) {
-      return { success: false, error: "Column not found" };
+      return { success: false, error: "Group not found" };
+    }
+
+    if (targetGroupId !== null && s.groups.find((g) => g.id === targetGroupId)?.columnId !== item.columnId) {
+      return { success: false, error: "Cannot move item to a group in another column" };
     }
 
     if (!Number.isFinite(targetIndex) || !Number.isInteger(targetIndex)) {
@@ -572,7 +660,7 @@ export class RetroRoom extends DurableObject<Env> {
     }
 
     const targetListLength = s.items.filter(
-      (i) => i.id !== item.id && (i.columnId ?? i.groupId) === targetGroupId,
+      (i) => i.id !== item.id && i.columnId === item.columnId && i.groupId === targetGroupId,
     ).length;
     if (targetIndex < 0 || targetIndex > targetListLength) {
       return { success: false, error: "Target index out of bounds" };
@@ -597,9 +685,9 @@ export class RetroRoom extends DurableObject<Env> {
       return { success: false, error: "Participant not found" };
     }
 
-    const itemExists = s.items.some((i) => i.id === itemId);
-    if (!itemExists) {
-      return { success: false, error: "Item not found" };
+    const groupExists = s.groups.some((group) => group.id === itemId);
+    if (!groupExists) {
+      return { success: false, error: "Group not found" };
     }
 
     const result = applyCastVote(s.votes, participantId, itemId, count, s.voteBudget);
@@ -613,6 +701,7 @@ export class RetroRoom extends DurableObject<Env> {
     const totalForItem = getVotesForItem(s.votes, itemId);
     const broadcast: ServerToClientMessage = {
       type: "vote-changed",
+        groupId: itemId,
       itemId,
       participantId,
       delta: count,
@@ -636,7 +725,7 @@ export class RetroRoom extends DurableObject<Env> {
     }
 
     const existing = s.votes.find(
-      (v) => v.participantId === participantId && v.itemId === itemId,
+      (v) => v.participantId === participantId && (v.groupId === itemId || v.itemId === itemId),
     );
     if (!existing) {
       return { success: false, error: "No votes to remove" };
@@ -648,6 +737,7 @@ export class RetroRoom extends DurableObject<Env> {
     const totalForItem = getVotesForItem(s.votes, itemId);
     const broadcast: ServerToClientMessage = {
       type: "vote-changed",
+        groupId: itemId,
       itemId,
       participantId,
       delta: -1,
@@ -671,6 +761,7 @@ export class RetroRoom extends DurableObject<Env> {
   private broadcastState(s: StoredState, excludeId?: string) {
     const timer = this.computeTimerStatus(s.timer);
     const state: RoomState = {
+      schemaVersion: 2,
       roomId: s.roomId,
       phase: s.phase,
       participants: s.participants,
@@ -809,7 +900,7 @@ export class RetroRoom extends DurableObject<Env> {
         break;
       }
       case "create-group": {
-        const result = await this.createGroup(participantId, msg.name);
+        const result = await this.createGroup(participantId, msg.name, msg.columnId);
         if (!result.success) {
           const ws = this.sessions.get(participantId);
           ws?.send(JSON.stringify({ type: "error", message: result.error }));
@@ -877,7 +968,10 @@ export class RetroRoom extends DurableObject<Env> {
         break;
       }
       case "cast-vote": {
-        const result = await this.castVote(participantId, msg.itemId, msg.count);
+        const targetGroupId = msg.groupId ?? msg.itemId;
+        const result = typeof targetGroupId === "string"
+          ? await this.castVote(participantId, targetGroupId, msg.count)
+          : { success: false, error: "Group not found" };
         if (!result.success) {
           const ws = this.sessions.get(participantId);
           ws?.send(JSON.stringify({ type: "error", message: result.error }));
@@ -885,7 +979,10 @@ export class RetroRoom extends DurableObject<Env> {
         break;
       }
       case "remove-vote": {
-        const result = await this.removeVote(participantId, msg.itemId);
+        const targetGroupId = msg.groupId ?? msg.itemId;
+        const result = typeof targetGroupId === "string"
+          ? await this.removeVote(participantId, targetGroupId)
+          : { success: false, error: "Group not found" };
         if (!result.success) {
           const ws = this.sessions.get(participantId);
           ws?.send(JSON.stringify({ type: "error", message: result.error }));
@@ -912,6 +1009,7 @@ export class RetroRoom extends DurableObject<Env> {
 
   async seedStoredStateForTest(state: Partial<StoredState> & Pick<StoredState, "roomId">): Promise<void> {
     const stored: StoredState = {
+      schemaVersion: 2,
       phase: "write",
       participants: [],
       items: [],

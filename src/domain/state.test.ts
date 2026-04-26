@@ -54,8 +54,9 @@ describe("createRoomState", () => {
     expect(state.phase).toBe("write");
     expect(state.participants).toEqual([]);
     expect(state.items).toEqual([]);
-    expect(state.columns.map((column) => column.name)).toEqual(["Start", "Stop", "Continue"]);
-    expect(state.groups).toEqual(state.columns);
+    expect(state.schemaVersion).toBe(2);
+    expect(state.columns).toEqual([]);
+    expect(state.groups).toEqual([]);
     expect(state.votes).toEqual([]);
     expect(state.timer).toEqual({ startedAt: null, durationSeconds: null, expired: false });
     expect(state.voteBudget).toBe(5);
@@ -84,8 +85,8 @@ describe("createItem", () => {
 
 describe("createGroup", () => {
   it("creates a group with correct fields", () => {
-    const g = createGroup("g1", "Process", 0);
-    expect(g).toEqual({ id: "g1", name: "Process", order: 0 });
+    const g = createGroup("g1", "Process", "col-1", 0);
+    expect(g).toEqual({ id: "g1", name: "Process", columnId: "col-1", order: 0 });
   });
 });
 
@@ -101,13 +102,18 @@ describe("column helpers", () => {
   });
 
   it("reorders columns with stable IDs and contiguous order", () => {
-    const result = applyReorderColumns(getDefaultColumns(), ["continue", "start", "stop"]);
+    const columns = [
+      { id: "start", name: "Start", order: 0 },
+      { id: "stop", name: "Stop", order: 1 },
+      { id: "continue", name: "Continue", order: 2 },
+    ];
+    const result = applyReorderColumns(columns, ["continue", "start", "stop"]);
     expect(result.map((column) => column.id)).toEqual(["continue", "start", "stop"]);
     expect(result.map((column) => column.order)).toEqual([0, 1, 2]);
   });
 
   it("edits column names without changing IDs", () => {
-    const columns = getDefaultColumns();
+    const columns = [{ id: "start", name: "Start", order: 0 }];
     const result = applyEditColumn(columns, "start", "  Begin  ");
     expect(result.error).toBeUndefined();
     expect(result.columns.find((column) => column.id === "start")?.name).toBe("Begin");
@@ -536,7 +542,7 @@ describe("applyCastVote", () => {
   it("adds a new vote allocation", () => {
     const result = applyCastVote([], "p1", "i1", 1, 5);
     expect(result.error).toBeUndefined();
-    expect(result.votes).toEqual([{ participantId: "p1", itemId: "i1", count: 1 }]);
+    expect(result.votes).toEqual([{ participantId: "p1", groupId: "i1", itemId: "i1", count: 1 }]);
   });
 
   it("stacks votes on the same item", () => {
@@ -575,8 +581,8 @@ describe("applyCastVote", () => {
     result = applyCastVote(result.votes, "p1", "i2", 3, 5);
     expect(result.error).toBeUndefined();
     expect(result.votes).toEqual([
-      { participantId: "p1", itemId: "i1", count: 2 },
-      { participantId: "p1", itemId: "i2", count: 3 },
+      { participantId: "p1", groupId: "i1", itemId: "i1", count: 2 },
+      { participantId: "p1", groupId: "i2", itemId: "i2", count: 3 },
     ]);
   });
 

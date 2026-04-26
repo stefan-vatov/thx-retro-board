@@ -10,9 +10,9 @@ export interface RetroItem {
   id: string;
   text: string;
   authorId: string;
-  /** Canonical configured column association. Null is accepted only for legacy/unassigned items. */
+  /** Original configured column association. */
   columnId: string | null;
-  /** @deprecated Compatibility alias for columnId while the UI migrates from groups to columns. */
+  /** Current nested group membership; null means ungrouped within the item's original column. */
   groupId: string | null;
   order: number;
 }
@@ -23,12 +23,19 @@ export interface Column {
   order: number;
 }
 
-/** @deprecated Product-facing columns are canonical; Group remains a compatibility alias. */
-export type Group = Column;
+export interface Group {
+  id: string;
+  name: string;
+  columnId: string;
+  order: number;
+}
 
 export interface VoteAllocation {
   participantId: string;
-  itemId: string;
+  /** Group targeted by this allocation. */
+  groupId: string;
+  /** @deprecated Compatibility alias for groupId while UI message names migrate. */
+  itemId?: string;
   count: number;
 }
 
@@ -39,6 +46,7 @@ export interface TimerState {
 }
 
 export interface RoomState {
+  schemaVersion: 2;
   roomId: string;
   phase: Phase;
   participants: Participant[];

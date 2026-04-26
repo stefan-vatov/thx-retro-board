@@ -7,7 +7,7 @@ export type ServerToClientMessage =
   | { type: "items-reordered"; items: import("./types").RetroItem[] }
   | { type: "groups-changed"; groups: import("./types").Group[] }
   | { type: "columns-changed"; columns: import("./types").Column[]; version: number }
-  | { type: "vote-changed"; itemId: string; participantId: string; delta: number; totalForItem: number }
+  | { type: "vote-changed"; groupId: string; itemId?: string; participantId: string; delta: number; totalForItem: number }
   // delta > 0 for cast-vote (always +count), delta < 0 for remove-vote (always -1).
   // The vote-changed message is informational; authoritative state arrives via snapshot broadcast.
   | { type: "timer-updated"; timer: import("./types").TimerState }
@@ -17,7 +17,7 @@ export type ClientToServerMessage =
   | { type: "join"; participantId: string; displayName: string }
   | { type: "add-item"; text: string; columnId?: string | null }
   | { type: "reorder-items"; itemIds: string[] }
-  | { type: "create-group"; name: string }
+  | { type: "create-group"; name: string; columnId: string }
   | { type: "create-column"; name: string }
   | { type: "edit-column"; columnId: string; name: string }
   | { type: "reorder-columns"; columnIds: string[] }
@@ -33,6 +33,6 @@ export type ClientToServerMessage =
     }
   | { type: "set-phase"; phase: import("./types").Phase }
   | { type: "set-vote-budget"; budget: number }
-  | { type: "cast-vote"; itemId: string; count: number }
-  | { type: "remove-vote"; itemId: string }
+  | { type: "cast-vote"; groupId?: string; itemId?: string; count: number }
+  | { type: "remove-vote"; groupId?: string; itemId?: string }
   | { type: "set-timer"; durationSeconds: number };
