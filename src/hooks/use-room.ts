@@ -16,6 +16,15 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
+    function handleOffline() {
+      setConnected(false);
+    }
+
+    window.addEventListener("offline", handleOffline);
+    return () => window.removeEventListener("offline", handleOffline);
+  }, []);
+
+  useEffect(() => {
     if (!connectionToken) return;
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${protocol}//${window.location.host}/api/rooms/${encodeURIComponent(roomId)}/ws?pid=${encodeURIComponent(participantId)}&token=${encodeURIComponent(connectionToken)}`;
@@ -84,6 +93,11 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
   }, [roomId, participantId, connectionToken]);
 
   const send = useCallback((message: unknown) => {
+    if (!navigator.onLine) {
+      setConnected(false);
+      setLastError("Reconnecting. Please try again once the room is connected.");
+      return false;
+    }
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       setLastError(null);
       wsRef.current.send(JSON.stringify(message));

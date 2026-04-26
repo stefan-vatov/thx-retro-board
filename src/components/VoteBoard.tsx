@@ -5,12 +5,15 @@ import { getUngroupedItems, getGroupedItems, getVotesForItem, getRemainingBudget
 interface VoteBoardProps {
   roomState: RoomState;
   participantId: string;
-  send: (message: unknown) => void;
+  send: (message: unknown) => boolean;
+  serverError?: string | null;
+  clearServerError?: () => void;
 }
 
-export function VoteBoard({ roomState, participantId, send }: VoteBoardProps) {
+export function VoteBoard({ roomState, participantId, send, serverError = null, clearServerError }: VoteBoardProps) {
   const [pendingCastCount, setPendingCastCount] = useState(0);
   const [pendingRemoves, setPendingRemoves] = useState<Set<string>>(new Set());
+  const [voteError, setVoteError] = useState<string | null>(null);
 
   const serverRemaining = getRemainingBudget(roomState.votes, participantId, roomState.voteBudget);
   const effectiveRemaining = serverRemaining - pendingCastCount;
@@ -20,19 +23,29 @@ export function VoteBoard({ roomState, participantId, send }: VoteBoardProps) {
   const handleVote = useCallback(
     (itemId: string) => {
       if (effectiveRemaining <= 0) return;
+      setVoteError(null);
+      clearServerError?.();
+      if (!send({ type: "cast-vote", itemId, count: 1 })) {
+        setVoteError("Vote not sent. Please try again once the room is connected.");
+        return;
+      }
       setPendingCastCount((c) => c + 1);
-      send({ type: "cast-vote", itemId, count: 1 });
     },
-    [effectiveRemaining, send],
+    [clearServerError, effectiveRemaining, send],
   );
 
   const handleRemoveVote = useCallback(
     (itemId: string) => {
       if (pendingRemoves.has(itemId)) return;
+      setVoteError(null);
+      clearServerError?.();
+      if (!send({ type: "remove-vote", itemId })) {
+        setVoteError("Vote not removed. Please try again once the room is connected.");
+        return;
+      }
       setPendingRemoves((prev) => new Set(prev).add(itemId));
-      send({ type: "remove-vote", itemId });
     },
-    [pendingRemoves, send],
+    [clearServerError, pendingRemoves, send],
   );
 
   const serverVersionRef = useRef(roomState.version);
@@ -42,6 +55,7 @@ export function VoteBoard({ roomState, participantId, send }: VoteBoardProps) {
       serverVersionRef.current = roomState.version;
       setPendingCastCount(0);
       setPendingRemoves(new Set());
+      setVoteError(null);
     }
   }, [roomState.version]);
 
@@ -99,6 +113,11 @@ export function VoteBoard({ roomState, participantId, send }: VoteBoardProps) {
           ({effectiveRemaining} remaining)
         </span>
       </div>
+      {(voteError || serverError) && (
+        <div className="status-msg status-msg--error" role="alert" style={{ marginBottom: "var(--space-3)" }}>
+          {voteError ?? serverError}
+        </div>
+      )}
 
       {sortedGroups.map((group) => {
         const groupItems = getGroupedItems(roomState.items, group.id);

@@ -1003,7 +1003,13 @@ export function RoomPage() {
             clearServerError={clearError}
           />
         ) : roomState?.phase === "vote" ? (
-          <VoteBoard roomState={roomState} participantId={participantId} send={send} />
+          <VoteBoard
+            roomState={roomState}
+            participantId={participantId}
+            send={send}
+            serverError={lastError}
+            clearServerError={clearError}
+          />
         ) : roomState?.phase === "review" ? (
           <ReviewBoard roomState={roomState} />
         ) : roomState?.phase === "write" ? (

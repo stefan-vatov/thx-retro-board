@@ -25,6 +25,25 @@ async function dragItemToDropZone(page: Page, itemText: string, groupId: string 
   await dropZone.dispatchEvent("pointerup", { pointerId: 3, pointerType: "mouse", button: 0, clientX: x, clientY: y });
 }
 
+async function createJoinedRoom(page: Page, displayName = "Alice") {
+  await page.goto("/");
+  await page.getByRole("button", { name: /create room/i }).click();
+  await page.waitForURL(/\/room\//);
+  await page.getByLabel(/display name/i).fill(displayName);
+  await page.getByRole("button", { name: /join/i }).click();
+  await expect(page.getByText(/Phase: WRITE/i)).toBeVisible();
+  return new URL(page.url()).pathname.split("/").pop()!;
+}
+
+async function advanceToPhase(page: Page, phase: "organise" | "vote" | "review") {
+  const order = ["write", "organise", "vote", "review"];
+  const targetIndex = order.indexOf(phase);
+  for (let index = 0; index < targetIndex; index += 1) {
+    await page.getByRole("button", { name: /advance to next phase/i }).click();
+    await expect(page.getByText(new RegExp(`Phase: ${order[index + 1].toUpperCase()}`, "i"))).toBeVisible({ timeout: 5000 });
+  }
+}
+
 async function touchDragItemToDropZone(page: Page, itemText: string, groupId: string | null, index: number) {
   const item = page.locator("[data-drag-item-id]", { hasText: itemText }).first();
   await expect(item).toBeVisible();
@@ -126,6 +145,53 @@ test.describe("Retro Board E2E", () => {
       await expect(advance).toHaveAttribute("aria-busy", "true");
       await expect(page.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
       expect(phaseRequests).toBe(1);
+    });
+
+    test("vote send failures show feedback without applying pending optimistic state", async ({ page }) => {
+      await createJoinedRoom(page);
+      await page.getByPlaceholder(/add a retro item/i).fill("Vote failure item");
+      await page.getByRole("button", { name: /add item/i }).click();
+      await expect(page.getByText("Vote failure item")).toBeVisible({ timeout: 5000 });
+      await advanceToPhase(page, "vote");
+
+      await page.context().setOffline(true);
+      await expect(page.getByLabel("Disconnected", { exact: true })).toBeVisible({ timeout: 5000 });
+
+      await expect(page.getByText(/0 used \/ 5 total/i)).toBeVisible();
+      await expect(page.getByText(/\(5 remaining\)/i)).toBeVisible();
+      await page.locator("li", { hasText: "Vote failure item" }).getByRole("button", { name: /add a vote/i }).click();
+
+      await expect(page.getByRole("alert").filter({ hasText: /vote not sent/i })).toBeVisible();
+      await expect(page.getByText(/0 used \/ 5 total/i)).toBeVisible();
+      await expect(page.getByText(/\(5 remaining\)/i)).toBeVisible();
+    });
+
+    test("organise send failures show recoverable feedback without applying local layout changes", async ({ page }) => {
+      await createJoinedRoom(page);
+      await page.getByPlaceholder(/add a retro item/i).fill("Disconnected drag item");
+      await page.getByRole("button", { name: /add item/i }).click();
+      await expect(page.getByText("Disconnected drag item")).toBeVisible({ timeout: 5000 });
+      await advanceToPhase(page, "organise");
+
+      const initialColumns = await page.locator(".group-panel__title").allTextContents();
+      expect(initialColumns.slice(0, 3)).toEqual(["Start", "Stop", "Continue"]);
+
+      await page.context().setOffline(true);
+      await expect(page.getByLabel("Disconnected", { exact: true })).toBeVisible({ timeout: 5000 });
+
+      await page.getByRole("button", { name: /move group down/i }).first().click();
+      await expect(page.getByRole("alert").filter({ hasText: /column order not sent/i })).toBeVisible();
+      await expect(page.locator(".group-panel__title")).toHaveText(initialColumns);
+
+      const stopColumnId = await page.evaluate(() => {
+        const panel = Array.from(document.querySelectorAll(".group-panel")).find((candidate) => candidate.textContent?.includes("Stop"));
+        return panel?.querySelector<HTMLElement>("[data-drop-list]")?.dataset.dropList ?? null;
+      });
+      expect(stopColumnId).not.toBeNull();
+      await dragItemToDropZone(page, "Disconnected drag item", stopColumnId, 0);
+      await expect(page.getByRole("alert").filter({ hasText: /item move not sent/i })).toBeVisible();
+      await expect(page.locator(".group-panel", { hasText: "Start" }).getByText("Disconnected drag item")).toBeVisible();
+      await expect(page.locator(".group-panel", { hasText: "Stop" }).getByText("Disconnected drag item")).toHaveCount(0);
     });
   });
 

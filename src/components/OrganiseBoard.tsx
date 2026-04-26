@@ -25,6 +25,7 @@ export function OrganiseBoard({ roomState, isFacilitator, send, serverError = nu
   const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
   const [dragStart, setDragStart] = useState<{ itemId: string; expectedVersion: number; sourceGroupId: string | null; sourceIndex: number } | null>(null);
   const [activeDrop, setActiveDrop] = useState<DropTarget | null>(null);
+  const [organiseActionError, setOrganiseActionError] = useState<string | null>(null);
 
   const isOrganise = roomState.phase === "organise";
 
@@ -33,6 +34,7 @@ export function OrganiseBoard({ roomState, isFacilitator, send, serverError = nu
   const isAtMaxColumns = sortedGroups.length >= MAX_COLUMNS;
   const maxColumnsMessage = `Rooms can have at most ${MAX_COLUMNS} columns.`;
   const serverColumnError = serverError && /column/i.test(serverError) ? serverError : null;
+  const serverOrganiseError = serverError && !/column/i.test(serverError) ? serverError : null;
   const feedbackMessages = [
     groupError,
     isAtMaxColumns ? maxColumnsMessage : null,
@@ -80,13 +82,17 @@ export function OrganiseBoard({ roomState, isFacilitator, send, serverError = nu
 
   const handleReorderGroups = useCallback(
     (fromIdx: number, toIdx: number) => {
+      setOrganiseActionError(null);
+      clearServerError?.();
       const reordered = [...sortedGroups];
       const [moved] = reordered.splice(fromIdx, 1);
       if (!moved) return;
       reordered.splice(toIdx, 0, moved);
-      send({ type: "reorder-groups", groupIds: reordered.map((g) => g.id) });
+      if (!send({ type: "reorder-groups", groupIds: reordered.map((g) => g.id) })) {
+        setOrganiseActionError("Column order not sent. Please try again once the room is connected.");
+      }
     },
-    [send, sortedGroups],
+    [clearServerError, send, sortedGroups],
   );
 
   const cancelDrag = useCallback(() => {
@@ -126,7 +132,9 @@ export function OrganiseBoard({ roomState, isFacilitator, send, serverError = nu
         const groupId = target.dataset.groupId === "__ungrouped__" ? null : target.dataset.groupId ?? null;
         const index = Number(target.dataset.index);
         if (Number.isInteger(index) && dragStart?.itemId === draggingItemId) {
-          send({
+          setOrganiseActionError(null);
+          clearServerError?.();
+          const sent = send({
             type: "move-item-to-group",
             itemId: draggingItemId,
             groupId,
@@ -135,6 +143,9 @@ export function OrganiseBoard({ roomState, isFacilitator, send, serverError = nu
             sourceGroupId: dragStart.sourceGroupId,
             sourceIndex: dragStart.sourceIndex,
           });
+          if (!sent) {
+            setOrganiseActionError("Item move not sent. Please try again once the room is connected.");
+          }
         }
       }
       cancelDrag();
@@ -160,9 +171,10 @@ export function OrganiseBoard({ roomState, isFacilitator, send, serverError = nu
       window.removeEventListener("pointercancel", onPointerCancel);
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [cancelDrag, dragStart, draggingItemId, send]);
+  }, [cancelDrag, clearServerError, dragStart, draggingItemId, send]);
 
   function startDrag(itemId: string) {
+    setOrganiseActionError(null);
     clearServerError?.();
     const item = roomState.items.find((candidate) => candidate.id === itemId);
     if (!item) return;
@@ -238,6 +250,12 @@ export function OrganiseBoard({ roomState, isFacilitator, send, serverError = nu
       {draggingItemId && (
         <div className="status-msg status-msg--info drag-status" role="status" aria-live="polite">
           Dragging item. Drop on an insertion line, or press Escape to cancel.
+        </div>
+      )}
+
+      {(organiseActionError || serverOrganiseError) && (
+        <div className="status-msg status-msg--error" role="alert" style={{ marginBottom: "var(--space-3)" }}>
+          {organiseActionError ?? serverOrganiseError}
         </div>
       )}
 
