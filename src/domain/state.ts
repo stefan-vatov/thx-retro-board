@@ -116,6 +116,20 @@ export function isValidGroupName(name: string): boolean {
 export const sanitizeColumnName = sanitizeGroupName;
 export const isValidColumnName = isValidGroupName;
 
+export function hasDuplicateGroupNameInColumn(
+  groups: Group[],
+  columnId: string,
+  rawName: string,
+  excludedGroupId?: string,
+): boolean {
+  const sanitized = sanitizeGroupName(rawName);
+  return groups.some((group) =>
+    group.columnId === columnId
+    && group.id !== excludedGroupId
+    && sanitizeGroupName(group.name) === sanitized,
+  );
+}
+
 export function validateExistingColumnId(
   columns: Column[],
   columnId: unknown,
@@ -292,8 +306,12 @@ export function applyEditGroup(groups: Group[], groupId: string, rawName: string
   if (!isValidGroupName(rawName)) {
     return { groups, error: "Group name cannot be empty" };
   }
-  if (!groups.some((group) => group.id === groupId)) {
+  const existingGroup = groups.find((group) => group.id === groupId);
+  if (!existingGroup) {
     return { groups, error: "Group not found" };
+  }
+  if (hasDuplicateGroupNameInColumn(groups, existingGroup.columnId, sanitized, groupId)) {
+    return { groups, error: "Group name already exists in this column" };
   }
   return { groups: groups.map((group) => group.id === groupId ? { ...group, name: sanitized } : group) };
 }

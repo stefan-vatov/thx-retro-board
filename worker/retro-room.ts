@@ -26,6 +26,7 @@ import {
   validateGroupReorderPayload,
   applyReorderColumnGroups,
   applyEditGroup,
+  hasDuplicateGroupNameInColumn,
   applyDeleteGroup,
   applyReorderItems,
   validateItemReorderPayload,
@@ -654,6 +655,9 @@ export class RetroRoom extends DurableObject<Env> {
     const sanitized = sanitizeColumnName(rawName);
     if (!isValidColumnName(rawName)) {
       return { success: false, error: "Group name cannot be empty" };
+    }
+    if (hasDuplicateGroupNameInColumn(s.groups, columnId, sanitized)) {
+      return { success: false, error: "Group name already exists in this column" };
     }
 
     const group: Group = {

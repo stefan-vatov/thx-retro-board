@@ -6,6 +6,7 @@ import {
   getGroupedItems,
   sanitizeGroupName,
   isValidGroupName,
+  hasDuplicateGroupNameInColumn,
   MAX_COLUMN_NAME_LENGTH,
 } from "../domain";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
@@ -58,6 +59,10 @@ export function OrganiseBoard({ roomState, send, serverError = null, clearServer
     const rawName = newGroupNames[column.id] ?? "";
     if (!isValidGroupName(rawName)) {
       setGroupError("Group name cannot be empty.");
+      return;
+    }
+    if (hasDuplicateGroupNameInColumn(roomState.groups, column.id, rawName)) {
+      setGroupError("Group name already exists in this column.");
       return;
     }
     clearServerError?.();
@@ -113,6 +118,10 @@ export function OrganiseBoard({ roomState, send, serverError = null, clearServer
     setGroupError(null);
     if (!isValidGroupName(editingGroupName)) {
       setGroupError("Group name cannot be empty.");
+      return;
+    }
+    if (hasDuplicateGroupNameInColumn(roomState.groups, group.columnId, editingGroupName, group.id)) {
+      setGroupError("Group name already exists in this column.");
       return;
     }
     clearServerError?.();
@@ -346,6 +355,7 @@ export function OrganiseBoard({ roomState, send, serverError = null, clearServer
                       setEditingGroupName("");
                     }}
                     onDelete={deleteGroup}
+                    feedbackId={feedbackMessages.length > 0 ? "organise-group-feedback" : undefined}
                   />
                 ))}
                 </div>
@@ -394,9 +404,10 @@ interface GroupSectionProps {
   onSubmitEdit: (group: Group) => void;
   onCancelEdit: () => void;
   onDelete: (group: Group) => void;
+  feedbackId?: string;
 }
 
-function GroupSection({ group, items, groupIndex, totalGroups, isOrganise, onReorderGroups, draggingItemId, activeDrop, onDragStart, editingGroupId, editingGroupName, onEditNameChange, onStartEdit, onSubmitEdit, onCancelEdit, onDelete }: GroupSectionProps) {
+function GroupSection({ group, items, groupIndex, totalGroups, isOrganise, onReorderGroups, draggingItemId, activeDrop, onDragStart, editingGroupId, editingGroupName, onEditNameChange, onStartEdit, onSubmitEdit, onCancelEdit, onDelete, feedbackId }: GroupSectionProps) {
   const isEditing = editingGroupId === group.id;
   return (
     <Card className="group-panel" data-group-id={group.id}>
@@ -415,6 +426,7 @@ function GroupSection({ group, items, groupIndex, totalGroups, isOrganise, onReo
               onChange={(event) => onEditNameChange(event.target.value)}
               maxLength={MAX_COLUMN_NAME_LENGTH}
               aria-label={`Edit ${group.name} group name`}
+              aria-describedby={feedbackId}
             />
             <Button type="submit" variant="secondary" size="sm" className="btn btn--secondary btn--sm">Save</Button>
             <Button type="button" variant="ghost" size="sm" className="btn btn--ghost btn--sm" onClick={onCancelEdit}>Cancel</Button>

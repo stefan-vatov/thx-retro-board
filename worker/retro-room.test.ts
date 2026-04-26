@@ -469,6 +469,53 @@ describe("RetroRoom Durable Object v2 schema", () => {
     expect(await stub.getRoomState()).toEqual(before);
   });
 
+  it("rejects duplicate sanitized group creates within the same column without changing state or version", async () => {
+    const stub = await init("test-v2-duplicate-group-create-reject");
+    await stub.join("fac1", "Facilitator");
+    const firstColumn = await stub.createColumn("fac1", "First");
+    const secondColumn = await stub.createColumn("fac1", "Second");
+    await stub.setPhase("fac1", "organise");
+
+    const firstGroup = await stub.createGroup("fac1", "Shared theme", firstColumn.column!.id);
+    expect(firstGroup.success).toBe(true);
+    const sameNameOtherColumn = await stub.createGroup("fac1", " Shared theme ", secondColumn.column!.id);
+    expect(sameNameOtherColumn.success).toBe(true);
+
+    const beforeDuplicate = await stub.getRoomState();
+    const duplicate = await stub.createGroup("fac1", " Shared theme ", firstColumn.column!.id);
+
+    expect(duplicate).toMatchObject({ success: false, error: "Group name already exists in this column" });
+    expect(await stub.getRoomState()).toEqual(beforeDuplicate);
+  });
+
+  it("rejects duplicate sanitized group renames within the same column without changing groups, items, votes, or version", async () => {
+    const stub = await init("test-v2-duplicate-group-rename-reject");
+    await stub.join("fac1", "Facilitator");
+    const firstColumn = await stub.createColumn("fac1", "First");
+    const secondColumn = await stub.createColumn("fac1", "Second");
+    const item = await stub.addItem("fac1", "Scoped item", firstColumn.column!.id);
+    await stub.setPhase("fac1", "organise");
+    const existing = await stub.createGroup("fac1", "Existing", firstColumn.column!.id);
+    const target = await stub.createGroup("fac1", "Target", firstColumn.column!.id);
+    const otherColumn = await stub.createGroup("fac1", "Existing", secondColumn.column!.id);
+    expect(existing.success).toBe(true);
+    expect(target.success).toBe(true);
+    expect(otherColumn.success).toBe(true);
+    await stub.moveItemToGroup("fac1", item.item!.id, target.group!.id, 0, await freshMovePreconditions(stub, item.item!.id));
+    await stub.setPhase("fac1", "vote");
+    await stub.castVote("fac1", target.group!.id, 1);
+    await stub.setPhaseForTest("organise");
+
+    const sameCurrentName = await stub.editGroup("fac1", existing.group!.id, " Existing ");
+    expect(sameCurrentName).toMatchObject({ success: true, group: { id: existing.group!.id, name: "Existing" } });
+
+    const beforeDuplicate = await stub.getRoomState();
+    const duplicate = await stub.editGroup("fac1", target.group!.id, " Existing ");
+
+    expect(duplicate).toMatchObject({ success: false, error: "Group name already exists in this column" });
+    expect(await stub.getRoomState()).toEqual(beforeDuplicate);
+  });
+
   it("allows the facilitator to create, rename, reorder, and delete columns in write and organise", async () => {
     const stub = await init("test-v2-column-crud-facilitator-phases");
     await stub.join("fac1", "Facilitator");

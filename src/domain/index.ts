@@ -25,6 +25,7 @@ export {
   reorderList,
   sanitizeGroupName,
   isValidGroupName,
+  hasDuplicateGroupNameInColumn,
   sanitizeColumnName,
   isValidColumnName,
   getUngroupedItems,

@@ -682,6 +682,34 @@ test.describe("Retro Board E2E", () => {
       await createGroupInColumn("Alpha", "Alpha themes");
       await createGroupInColumn("Alpha", "Alpha followups");
       await createGroupInColumn("Beta", "Beta themes");
+      await createGroupInColumn("Beta", "Alpha themes");
+
+      const beforeDuplicateCreate = await page.evaluate(async (id) => {
+        const response = await fetch(`/api/rooms/${id}`);
+        return response.json();
+      }, roomId) as { version: number; groups: { id: string; name: string; columnId: string }[]; items: { id: string; text: string; columnId: string; groupId: string | null; order: number }[]; votes: unknown[] };
+      const alphaLane = page.locator(".column-board__column").filter({
+        has: page.getByRole("heading", { name: "Alpha", exact: true }),
+      });
+      await alphaLane.getByPlaceholder(/new group name/i).fill(" Alpha themes ");
+      await alphaLane.getByRole("button", { name: /create group/i }).click();
+      await expect(page.getByRole("alert").filter({ hasText: /group name already exists in this column/i })).toBeVisible({ timeout: 5000 });
+      const afterDuplicateCreate = await page.evaluate(async (id) => {
+        const response = await fetch(`/api/rooms/${id}`);
+        return response.json();
+      }, roomId) as { version: number; groups: { id: string; name: string; columnId: string }[]; items: { id: string; text: string; columnId: string; groupId: string | null; order: number }[]; votes: unknown[] };
+      expect(afterDuplicateCreate).toEqual(beforeDuplicateCreate);
+
+      await alphaLane.getByRole("button", { name: /rename Alpha followups/i }).click();
+      await alphaLane.getByLabel(/edit Alpha followups group name/i).fill(" Alpha themes ");
+      await alphaLane.getByRole("button", { name: "Save" }).click();
+      await expect(page.getByRole("alert").filter({ hasText: /group name already exists in this column/i })).toBeVisible({ timeout: 5000 });
+      const afterDuplicateRename = await page.evaluate(async (id) => {
+        const response = await fetch(`/api/rooms/${id}`);
+        return response.json();
+      }, roomId) as { version: number; groups: { id: string; name: string; columnId: string }[]; items: { id: string; text: string; columnId: string; groupId: string | null; order: number }[]; votes: unknown[] };
+      expect(afterDuplicateRename).toEqual(beforeDuplicateCreate);
+      await alphaLane.getByRole("button", { name: "Cancel" }).click();
 
       let state = await page.evaluate(async (id) => {
         const response = await fetch(`/api/rooms/${id}`);

@@ -22,12 +22,14 @@ import {
   reorderList,
   sanitizeGroupName,
   isValidGroupName,
+  hasDuplicateGroupNameInColumn,
   getUngroupedItems,
   getGroupedItems,
   applyReorderItems,
   validateItemReorderPayload,
   applyReorderGroups,
   validateGroupReorderPayload,
+  applyEditGroup,
   applyDeleteGroup,
   applyMoveItemToGroup,
   applyCastVote,
@@ -386,6 +388,40 @@ describe("isValidGroupName", () => {
 
   it("accepts valid group names", () => {
     expect(isValidGroupName("Process")).toBe(true);
+  });
+});
+
+describe("group name uniqueness", () => {
+  const groups: Group[] = [
+    { id: "group-a", name: "Shared theme", columnId: "col-a", order: 0 },
+    { id: "group-b", name: "Shared theme", columnId: "col-b", order: 0 },
+    { id: "group-c", name: "Other theme", columnId: "col-a", order: 1 },
+  ];
+
+  it("detects duplicate sanitized group names only within the same column", () => {
+    expect(hasDuplicateGroupNameInColumn(groups, "col-a", "  Shared theme  ")).toBe(true);
+    expect(hasDuplicateGroupNameInColumn(groups, "col-b", "Shared theme")).toBe(true);
+    expect(hasDuplicateGroupNameInColumn(groups, "col-c", "Shared theme")).toBe(false);
+  });
+
+  it("allows a group to keep its current sanitized name when renaming", () => {
+    expect(hasDuplicateGroupNameInColumn(groups, "col-a", " Shared theme ", "group-a")).toBe(false);
+    expect(applyEditGroup(groups, "group-a", " Shared theme ")).toEqual({
+      groups: [
+        { id: "group-a", name: "Shared theme", columnId: "col-a", order: 0 },
+        { id: "group-b", name: "Shared theme", columnId: "col-b", order: 0 },
+        { id: "group-c", name: "Other theme", columnId: "col-a", order: 1 },
+      ],
+    });
+  });
+
+  it("rejects renaming a group to another sanitized name in the same column without mutating groups", () => {
+    const result = applyEditGroup(groups, "group-c", " Shared theme ");
+
+    expect(result).toEqual({
+      groups,
+      error: "Group name already exists in this column",
+    });
   });
 });
 
