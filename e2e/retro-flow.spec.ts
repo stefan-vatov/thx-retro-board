@@ -509,6 +509,8 @@ test.describe("Retro Board E2E", () => {
       await alice.getByLabel(/display name/i).fill("Alice");
       await alice.getByRole("button", { name: /join/i }).click();
       await expect(alice.getByText(/Phase: WRITE/i)).toBeVisible();
+      await expect(alice.getByRole("region", { name: /facilitator controls/i })).toContainText(/server-authoritative controls/i);
+      await expect(alice.getByRole("region", { name: /participants/i }).getByRole("heading", { name: /participants/i })).toBeVisible();
       await expect(alice.getByRole("button", { name: /configure columns/i })).toBeVisible();
       await expect(alice.getByRole("heading", { name: /create your first column/i })).toBeVisible();
       await expect(alice.getByRole("button", { name: /add item/i })).toBeDisabled();
@@ -519,6 +521,7 @@ test.describe("Retro Board E2E", () => {
       await bob.getByLabel(/display name/i).fill("Bob");
       await bob.getByRole("button", { name: /join/i }).click();
       await expect(bob.getByText(/Phase: WRITE/i)).toBeVisible();
+      await expect(bob.getByRole("region", { name: /participants/i }).getByRole("heading", { name: /participants/i })).toBeVisible();
       await expect(bob.getByRole("button", { name: /configure columns/i })).toHaveCount(0);
 
       await alice.getByRole("button", { name: /configure columns/i }).click();

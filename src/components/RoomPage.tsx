@@ -1,6 +1,28 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams } from "react-router-dom";
-import { AlertTriangle, ClipboardCheck, Copy, DoorOpen, Loader2, Radar, RefreshCw, ShieldCheck } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowDown,
+  ArrowRight,
+  ArrowUp,
+  ClipboardCheck,
+  Clock3,
+  Columns3,
+  Copy,
+  DoorOpen,
+  Loader2,
+  Pencil,
+  Plus,
+  Radar,
+  RefreshCw,
+  Save,
+  Send,
+  ShieldCheck,
+  Trash2,
+  Users,
+  Vote,
+  X,
+} from "lucide-react";
 import { ApiError, joinRoom, getRoomState, setVoteBudget, setPhase } from "../api";
 import { useRoom } from "../hooks";
 import type { RoomState, Phase, Column, RetroItem } from "../domain";
@@ -94,7 +116,8 @@ function classifyRoomLoadError(error: unknown): RoomLoadError {
 
 function ConnectionStatus({ connected }: { connected: boolean }) {
   return (
-    <span
+    <Badge
+      variant="secondary"
       className="connection-badge"
       aria-live="polite"
       aria-label={connected ? "Connected" : "Disconnected"}
@@ -104,7 +127,7 @@ function ConnectionStatus({ connected }: { connected: boolean }) {
         aria-hidden="true"
       />
       <span className="connection-badge__text">{connected ? "Connected" : "Disconnected"}</span>
-    </span>
+    </Badge>
   );
 }
 
@@ -204,13 +227,15 @@ function ParticipantList({ participants, currentId }: { participants: RoomState[
   return (
     <ul className="participant-list" aria-label="Participants">
       {participants.map((p) => (
-        <li key={p.id} className={`participant-chip${p.id === currentId ? " participant-chip--self" : ""}`}>
+        <li key={p.id}>
+        <Badge variant={p.id === currentId ? "default" : "secondary"} className={`participant-chip${p.id === currentId ? " participant-chip--self" : ""}`}>
           <span className="participant-chip__name">{p.displayName}</span>
           {p.isFacilitator && (
             <span className="facilitator-badge facilitator-badge--sm" aria-label={`${p.displayName} is facilitator`}>
               ⭐ Facilitator
             </span>
           )}
+        </Badge>
         </li>
       ))}
     </ul>
@@ -362,29 +387,31 @@ function ColumnConfiguration({
 
   return (
     <section className="column-config" aria-label="Column configuration">
-      <button
+      <Button
         type="button"
-        className="btn btn--secondary btn--sm"
+        variant="secondary"
+        size="sm"
         onClick={() => {
           clearFeedback();
           setOpen((value) => !value);
         }}
         aria-expanded={open}
       >
+        <Columns3 aria-hidden="true" />
         Configure columns
-      </button>
+      </Button>
 
       {open && (
-        <div className="column-config__panel">
-          <div className="column-config__header">
+        <Card className="column-config__panel">
+          <CardHeader className="column-config__header px-0">
             <div>
-              <h3 className="column-config__title">Columns</h3>
-              <p className="column-config__hint">
+              <CardTitle className="column-config__title">Columns</CardTitle>
+              <CardDescription className="column-config__hint">
                 Facilitators can configure columns during write and organise. Participants see changes live.
-              </p>
+              </CardDescription>
             </div>
-            <span className="column-config__count">{columns.length}/{MAX_COLUMNS}</span>
-          </div>
+            <Badge variant="secondary" className="column-config__count">{columns.length}/{MAX_COLUMNS}</Badge>
+          </CardHeader>
 
           {!canMutate && (
             <div className="status-msg status-msg--muted" role="status">
@@ -393,7 +420,7 @@ function ColumnConfiguration({
           )}
 
           <form className="column-config__form" onSubmit={handleCreateColumn}>
-            <input
+            <Input
               className={`input${displayedError ? " input--error" : ""}`}
               type="text"
               value={newColumnName}
@@ -406,20 +433,23 @@ function ColumnConfiguration({
               aria-label="New column name"
               disabled={!canMutate || isAtMax || pendingColumnMutation}
             />
-            <button
-              className="btn btn--secondary btn--sm"
+            <Button
+              variant="secondary"
+              size="sm"
               type="submit"
               disabled={!canMutate || isAtMax || pendingColumnMutation}
               aria-busy={pendingColumnMutation}
             >
+              {pendingColumnMutation ? <Loader2 className="loading-spinner" aria-hidden="true" /> : <Plus aria-hidden="true" />}
               {pendingColumnMutation ? "Adding…" : "Add column"}
-            </button>
+            </Button>
           </form>
 
           {displayedError && (
-            <div className="status-msg status-msg--error" role="alert">
-              {displayedError}
-            </div>
+            <Alert variant="destructive">
+              <AlertTriangle aria-hidden="true" />
+              <AlertDescription>{displayedError}</AlertDescription>
+            </Alert>
           )}
           {columnMsg && !displayedError && (
             <div className="status-msg status-msg--info" role="status">
@@ -432,7 +462,7 @@ function ColumnConfiguration({
               <li key={column.id} className="column-config__item">
                 <span className="column-config__order" aria-label={`Column order ${index + 1}`}>{index + 1}</span>
                 {editingColumnId === column.id ? (
-                  <input
+                  <Input
                     className="input column-config__edit-input"
                     value={editingName}
                     onChange={(event) => setEditingName(event.target.value)}
@@ -446,30 +476,41 @@ function ColumnConfiguration({
                 <span className="column-config__actions">
                   {editingColumnId === column.id ? (
                     <>
-                      <button
+                      <Button
                         type="button"
-                        className="btn btn--secondary btn--sm"
+                        variant="secondary"
+                        size="sm"
                         onClick={() => submitEdit(column.id)}
                         disabled={pendingColumnMutation}
                         aria-busy={pendingColumnMutation}
                       >
+                        {pendingColumnMutation ? <Loader2 className="loading-spinner" aria-hidden="true" /> : <Save aria-hidden="true" />}
                         {pendingColumnMutation ? "Saving…" : "Save"}
-                      </button>
-                      <button type="button" className="reorder-btn" onClick={() => setEditingColumnId(null)} aria-label="Cancel column edit">×</button>
+                      </Button>
+                      <Button type="button" variant="ghost" size="icon" className="reorder-btn" onClick={() => setEditingColumnId(null)} aria-label="Cancel column edit">
+                        <X aria-hidden="true" />
+                      </Button>
                     </>
                   ) : (
-                    <button type="button" className="btn btn--secondary btn--sm" onClick={() => startEdit(column)} disabled={!canMutate || pendingColumnMutation}>
+                    <Button type="button" variant="secondary" size="sm" onClick={() => startEdit(column)} disabled={!canMutate || pendingColumnMutation}>
+                      <Pencil aria-hidden="true" />
                       Edit
-                    </button>
+                    </Button>
                   )}
-                  <button type="button" className="reorder-btn" onClick={() => moveColumn(index, index - 1)} disabled={!canMutate || pendingColumnMutation || index === 0} aria-label={`Move ${column.name} column left`}>↑</button>
-                  <button type="button" className="reorder-btn" onClick={() => moveColumn(index, index + 1)} disabled={!canMutate || pendingColumnMutation || index === columns.length - 1} aria-label={`Move ${column.name} column right`}>↓</button>
-                  <button type="button" className="reorder-btn reorder-btn--danger" onClick={() => deleteColumn(column)} disabled={!canMutate || pendingColumnMutation} aria-label={`Delete ${column.name} column`}>🗑</button>
+                  <Button type="button" variant="ghost" size="icon" className="reorder-btn" onClick={() => moveColumn(index, index - 1)} disabled={!canMutate || pendingColumnMutation || index === 0} aria-label={`Move ${column.name} column left`}>
+                    <ArrowUp aria-hidden="true" />
+                  </Button>
+                  <Button type="button" variant="ghost" size="icon" className="reorder-btn" onClick={() => moveColumn(index, index + 1)} disabled={!canMutate || pendingColumnMutation || index === columns.length - 1} aria-label={`Move ${column.name} column right`}>
+                    <ArrowDown aria-hidden="true" />
+                  </Button>
+                  <Button type="button" variant="ghost" size="icon" className="reorder-btn reorder-btn--danger" onClick={() => deleteColumn(column)} disabled={!canMutate || pendingColumnMutation} aria-label={`Delete ${column.name} column`}>
+                    <Trash2 aria-hidden="true" />
+                  </Button>
                 </span>
               </li>
             ))}
           </ol>
-        </div>
+        </Card>
       )}
     </section>
   );
@@ -519,32 +560,36 @@ function WriteColumnBoard({ roomState }: { roomState: RoomState }) {
           .filter((item) => item.columnId === column.id && item.groupId === null)
           .sort((a, b) => a.order - b.order);
         return (
-          <section key={column.id} className="column-board__column" aria-labelledby={`write-column-${column.id}`} data-column-id={column.id}>
-            <div className="column-board__header">
-              <h3 id={`write-column-${column.id}`} className="column-board__title" title={column.name}>{column.name}</h3>
-              <span className="column-board__count" aria-label={`${items.length} items`}>{items.length}</span>
-            </div>
-            {items.length === 0 ? (
-              <p className="text-muted column-board__empty">No items in this lane yet. Choose “{column.name}” above to add one.</p>
-            ) : (
-              <ul className="item-list" aria-label={`${column.name} items`}>
-                {items.map((item, index) => renderItem(item, index))}
-              </ul>
-            )}
-          </section>
+          <Card key={column.id} className="column-board__column" role="region" aria-labelledby={`write-column-${column.id}`} data-column-id={column.id}>
+              <CardHeader className="column-board__header px-0">
+                <CardTitle id={`write-column-${column.id}`} role="heading" aria-level={3} className="column-board__title" title={column.name}>{column.name}</CardTitle>
+                <Badge variant="secondary" className="column-board__count" aria-label={`${items.length} items`}>{items.length}</Badge>
+              </CardHeader>
+              <CardContent className="px-0">
+                {items.length === 0 ? (
+                  <p className="text-muted column-board__empty">No items in this lane yet. Choose “{column.name}” above to add one.</p>
+                ) : (
+                  <ul className="item-list" aria-label={`${column.name} items`}>
+                    {items.map((item, index) => renderItem(item, index))}
+                  </ul>
+                )}
+              </CardContent>
+          </Card>
         );
       })}
 
       {unassigned.length > 0 && (
-        <section className="column-board__column column-board__column--secondary" aria-labelledby="write-column-unassigned">
-          <div className="column-board__header">
-            <h3 id="write-column-unassigned" className="column-board__title">Unassigned</h3>
-            <span className="column-board__count">{unassigned.length}</span>
-          </div>
-          <ul className="item-list">
-            {unassigned.map((item, index) => renderItem(item, index))}
-          </ul>
-        </section>
+        <Card className="column-board__column column-board__column--secondary" aria-labelledby="write-column-unassigned">
+          <CardHeader className="column-board__header px-0">
+            <CardTitle id="write-column-unassigned" role="heading" aria-level={3} className="column-board__title">Unassigned</CardTitle>
+            <Badge variant="secondary" className="column-board__count">{unassigned.length}</Badge>
+          </CardHeader>
+          <CardContent className="px-0">
+            <ul className="item-list">
+              {unassigned.map((item, index) => renderItem(item, index))}
+            </ul>
+          </CardContent>
+        </Card>
       )}
     </div>
   );
@@ -968,16 +1013,16 @@ export function RoomPage() {
       </header>
 
       {/* Phase Status Bar */}
-      <div ref={phaseStatusRef} className="phase-status" role="region" aria-label="Room status" tabIndex={-1}>
+      <Card ref={phaseStatusRef} className="phase-status" role="region" aria-label="Room status" tabIndex={-1}>
         <span className="phase-status__label">Phase: </span>
-        <span
-          className="phase-status__value badge badge--phase"
+        <Badge
+          className="phase-status__value badge--phase"
           data-phase={roomState?.phase?.toUpperCase() ?? "UNKNOWN"}
         >
           {roomState?.phase?.toUpperCase() ?? "UNKNOWN"}
-        </span>
+        </Badge>
         <TimerDisplay timer={roomState?.timer ?? { startedAt: null, durationSeconds: null, expired: false }} />
-      </div>
+      </Card>
 
       {/* Participants */}
       <section
@@ -986,18 +1031,32 @@ export function RoomPage() {
         aria-label="Participants"
         style={{ marginBottom: "var(--space-4)" }}
       >
-        <h2 className="sr-only">Participants</h2>
+        <h2 className="section-title">
+          <Users aria-hidden="true" size={14} />
+          Participants
+        </h2>
         <ParticipantList participants={roomState?.participants ?? []} currentId={participantId} />
       </section>
 
       {/* Facilitator Controls */}
       {isFacilitator && (
-        <div className="facilitator-panel" role="region" aria-label="Facilitator controls">
-          <p className="facilitator-panel__title">Facilitator Controls</p>
-          <div className="facilitator-panel__controls">
+        <Card className="facilitator-panel" role="region" aria-label="Facilitator controls">
+          <CardHeader className="px-0">
+            <CardTitle className="facilitator-panel__title">
+              <ShieldCheck aria-hidden="true" size={14} />
+              Facilitator Controls
+            </CardTitle>
+            <CardDescription>
+              Server-authoritative controls for phase progression, timing, vote budget, and board columns.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="facilitator-panel__controls px-0">
             <div className="facilitator-panel__row">
-              <label className="input-label" htmlFor="voteBudget">Vote Budget</label>
-              <input
+              <label className="input-label" htmlFor="voteBudget">
+                <Vote aria-hidden="true" size={14} />
+                Vote Budget
+              </label>
+              <Input
                 id="voteBudget"
                 className={`input${budgetMsg && budgetMsg.includes("must be") ? " input--error" : ""}`}
                 type="number"
@@ -1012,14 +1071,16 @@ export function RoomPage() {
                 aria-describedby={budgetMsg && budgetMsg.includes("must be") ? "budget-error" : undefined}
                 aria-invalid={budgetMsg && budgetMsg.includes("must be") ? "true" : undefined}
               />
-              <button
-                className="btn btn--secondary btn--sm"
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={handleSetBudget}
                 disabled={budgetPending}
                 aria-busy={budgetPending}
               >
+                {budgetPending ? <Loader2 className="loading-spinner" aria-hidden="true" /> : <Save aria-hidden="true" />}
                 {budgetPending ? "Saving…" : "Set"}
-              </button>
+              </Button>
               {budgetMsg && budgetMsg.includes("must be") ? (
                 <span id="budget-error" className="status-msg status-msg--error" style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }} role="alert">
                   {budgetMsg}
@@ -1031,15 +1092,15 @@ export function RoomPage() {
               ) : null}
             </div>
             <div className="facilitator-panel__row">
-              <button
-                className="btn btn--primary"
+              <Button
                 onClick={handleAdvancePhase}
                 disabled={roomState?.phase === "review" || phasePending}
                 aria-busy={phasePending}
                 aria-label="Advance to next phase"
               >
+                {phasePending ? <Loader2 className="loading-spinner" aria-hidden="true" /> : <ArrowRight aria-hidden="true" />}
                 {phasePending ? "Advancing…" : "Advance to Next Phase"}
-              </button>
+              </Button>
               {phaseMsg && (
                 <span className="status-msg status-msg--info" style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }} role="status">
                   {phaseMsg}
@@ -1047,8 +1108,11 @@ export function RoomPage() {
               )}
             </div>
             <div className="facilitator-panel__row">
-              <label className="input-label" htmlFor="timerMinutes">Timer (minutes)</label>
-              <input
+              <label className="input-label" htmlFor="timerMinutes">
+                <Clock3 aria-hidden="true" size={14} />
+                Timer (minutes)
+              </label>
+              <Input
                 id="timerMinutes"
                 className={`input${timerInputError ? " input--error" : ""}`}
                 type="number"
@@ -1063,14 +1127,16 @@ export function RoomPage() {
                 aria-describedby={timerInputError ? "timer-error" : undefined}
                 aria-invalid={timerInputError ? "true" : undefined}
               />
-              <button
-                className="btn btn--secondary btn--sm"
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={handleSetTimer}
                 disabled={timerPending}
                 aria-busy={timerPending}
               >
+                {timerPending ? <Loader2 className="loading-spinner" aria-hidden="true" /> : <Clock3 aria-hidden="true" />}
                 {timerPending ? "Starting…" : "Start Timer"}
-              </button>
+              </Button>
               {timerInputError && (
                 <span id="timer-error" className="status-msg status-msg--error" style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }} role="alert">
                   {timerInputError}
@@ -1090,14 +1156,17 @@ export function RoomPage() {
                 clearServerError={clearError}
               />
             )}
-          </div>
-        </div>
+          </CardContent>
+        </Card>
       )}
 
       {/* Board Area */}
-      <div className="board-area glass-panel">
+      <Card className="board-area glass-panel">
         <div className="board-header">
-          <h2 className="section-title">Board</h2>
+          <h2 className="section-title">
+            <Columns3 aria-hidden="true" size={14} />
+            Board
+          </h2>
           {roomState?.phase === "write" && (
             <span className="phase-hint" aria-hidden="true">Add your retro items</span>
           )}
@@ -1105,7 +1174,7 @@ export function RoomPage() {
 
         {/* Write Phase Composer */}
         {roomState?.phase === "write" && (
-          <div className="write-composer">
+          <Card className="write-composer">
             <form
               onSubmit={handleAddItem}
               className="write-composer__form"
@@ -1129,7 +1198,7 @@ export function RoomPage() {
                   ))}
                 </select>
                 <div className="write-composer__input-wrapper">
-                  <input
+                  <Input
                     type="text"
                     id="itemText"
                     className={`input write-composer__input${itemError ? " input--error" : ""}`}
@@ -1156,15 +1225,15 @@ export function RoomPage() {
                     </span>
                   )}
                 </div>
-                <button
+                <Button
                   type="submit"
-                  className="btn btn--primary write-composer__submit"
+                  className="write-composer__submit"
                   disabled={!connected || !hasConfiguredColumns || !itemInput.trim()}
                   aria-label="Add item"
                 >
-                  <span aria-hidden="true">+</span>
+                  <Send aria-hidden="true" />
                   Add
-                </button>
+                </Button>
               </div>
               {itemError && (
                 <div id={itemErrorId} className="status-msg status-msg--error write-composer__error" role="alert">
@@ -1182,7 +1251,7 @@ export function RoomPage() {
                 </div>
               )}
             </form>
-          </div>
+          </Card>
         )}
 
         {roomState?.phase === "organise" ? (
@@ -1206,7 +1275,7 @@ export function RoomPage() {
         ) : roomState?.phase === "write" ? (
           <WriteColumnBoard roomState={roomState} />
         ) : null}
-      </div>
+      </Card>
 
       {/* Room Footer — safe room code only, no tokens */}
       <footer className="room-footer" role="contentinfo">
