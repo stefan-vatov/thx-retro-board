@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { RoomState } from "../domain";
-import { getGroupedItems, getVotesForGroup, getRemainingBudget, getVotesByParticipant } from "../domain";
+import { getGroupedItems, getVotesForGroup, getRemainingBudget, getVotesByParticipant, getVotesForTarget, groupVoteTarget } from "../domain";
 
 interface VoteBoardProps {
   roomState: RoomState;
@@ -61,7 +61,8 @@ export function VoteBoard({ roomState, participantId, send, serverError = null, 
 
   function getParticipantVotesForGroup(groupId: string): number {
     return roomState.votes
-      .filter((v) => v.participantId === participantId && (v.groupId === groupId || v.itemId === groupId))
+      .filter((v) => v.participantId === participantId)
+      .filter((v) => getVotesForTarget([v], groupVoteTarget(groupId)) > 0)
       .reduce((sum, v) => sum + v.count, 0);
   }
 

@@ -30,11 +30,15 @@ export interface Group {
   order: number;
 }
 
+export type VoteTarget = { type: "group"; id: string } | { type: "item"; id: string };
+
 export interface VoteAllocation {
   participantId: string;
-  /** Group targeted by this allocation. */
-  groupId: string;
-  /** @deprecated Compatibility alias for groupId while UI message names migrate. */
+  /** Canonical target for this allocation. */
+  target?: VoteTarget;
+  /** @deprecated Compatibility alias for group targets while UI message names migrate. */
+  groupId?: string;
+  /** @deprecated Compatibility alias for legacy group targets or ungrouped item targets while UI message names migrate. */
   itemId?: string;
   count: number;
 }

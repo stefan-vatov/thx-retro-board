@@ -8,6 +8,7 @@ import type {
   Group,
   Column,
   VoteAllocation,
+  VoteTarget,
   ServerToClientMessage,
   ClientToServerMessage,
 } from "../src/domain";
@@ -34,7 +35,13 @@ import {
   applyMoveItemToGroup,
   applyCastVote,
   applyRemoveVote,
+  getVoteTarget,
   getVotesForGroup,
+  getVotesForUngroupedItem,
+  groupVoteTarget,
+  itemVoteTarget,
+  sameVoteTarget,
+  voteTargetKey,
 } from "../src/domain";
 
 interface StoredTimer {
@@ -143,6 +150,27 @@ function validateExpectedVersion(
   return { success: true, expectedVersion };
 }
 
+function parseVoteTargetMessage(
+  msg: Extract<ClientToServerMessage, { type: "cast-vote" | "remove-vote" }>,
+): { success: true; target: VoteTarget } | { success: false; error: string } {
+  const hasGroupId = Object.prototype.hasOwnProperty.call(msg, "groupId");
+  const hasItemId = Object.prototype.hasOwnProperty.call(msg, "itemId");
+  if (hasGroupId && hasItemId) {
+    return { success: false, error: "Vote target must specify exactly one target" };
+  }
+  if (hasGroupId) {
+    return typeof msg.groupId === "string" && msg.groupId.trim().length > 0
+      ? { success: true, target: groupVoteTarget(msg.groupId) }
+      : { success: false, error: "Group not found" };
+  }
+  if (hasItemId) {
+    return typeof msg.itemId === "string" && msg.itemId.trim().length > 0
+      ? { success: true, target: itemVoteTarget(msg.itemId) }
+      : { success: false, error: "Item not found" };
+  }
+  return { success: false, error: "Vote target is required" };
+}
+
 function normalizeColumns(stored: Pick<StoredState, "columns" | "groups">): Column[] {
   const source = stored.columns;
   if (!Array.isArray(source)) {
@@ -225,17 +253,57 @@ function normalizeItems(items: RetroItem[], columns: Column[], groups: Group[]):
   });
 }
 
-function normalizeVotes(votes: VoteAllocation[], groups: Group[]): VoteAllocation[] {
+function normalizeVoteTarget(vote: VoteAllocation, groups: Group[], items: RetroItem[]): VoteTarget | null {
   const validGroupIds = new Set(groups.map((group) => group.id));
-  return votes.flatMap((vote) => {
-    const groupId = vote.groupId ?? vote.itemId;
-    if (typeof groupId !== "string" || !validGroupIds.has(groupId)) return [];
-    return {
+  const validUngroupedItemIds = new Set(items.filter((item) => item.groupId === null).map((item) => item.id));
+  const canonicalTarget = vote.target
+    && (vote.target.type === "group" || vote.target.type === "item")
+    && typeof vote.target.id === "string"
+    ? vote.target
+    : null;
+  const legacyGroupTarget = typeof vote.groupId === "string" ? groupVoteTarget(vote.groupId) : null;
+  const legacyItemId = typeof vote.itemId === "string" ? vote.itemId : null;
+  const legacyItemTarget = legacyItemId === null
+    ? null
+    : validGroupIds.has(legacyItemId)
+      ? groupVoteTarget(legacyItemId)
+      : itemVoteTarget(legacyItemId);
+
+  const target = canonicalTarget ?? legacyGroupTarget ?? legacyItemTarget;
+  if (target === null) return null;
+  const aliases = [legacyGroupTarget, legacyItemTarget].filter((alias): alias is VoteTarget => alias !== null);
+  if (aliases.some((alias) => !sameVoteTarget(alias, target))) return null;
+  if (target.type === "group") {
+    return validGroupIds.has(target.id) ? target : null;
+  }
+  return validUngroupedItemIds.has(target.id) ? target : null;
+}
+
+function normalizeVotes(votes: VoteAllocation[], participants: Participant[], groups: Group[], items: RetroItem[]): VoteAllocation[] {
+  const validParticipantIds = new Set(participants.map((participant) => participant.id));
+  const merged = new Map<string, VoteAllocation>();
+  for (const vote of votes) {
+    if (
+      !vote
+      || typeof vote.participantId !== "string"
+      || !validParticipantIds.has(vote.participantId)
+      || typeof vote.count !== "number"
+      || !Number.isInteger(vote.count)
+      || vote.count < 1
+    ) {
+      continue;
+    }
+    const target = normalizeVoteTarget(vote, groups, items);
+    if (target === null) continue;
+    const key = `${vote.participantId}:${voteTargetKey(target)}`;
+    const existing = merged.get(key);
+    merged.set(key, {
       participantId: vote.participantId,
-      groupId,
-      count: vote.count,
-    };
-  });
+      target,
+      count: (existing?.count ?? 0) + vote.count,
+    });
+  }
+  return [...merged.values()];
 }
 
 function generateToken(): string {
@@ -303,8 +371,9 @@ export class RetroRoom extends DurableObject<Env> {
         columns,
         groups,
         items: normalizeItems(stored.items ?? [], columns, groups),
-        votes: normalizeVotes(stored.votes ?? [], groups),
+        votes: [],
       };
+      this.state.votes = normalizeVotes(stored.votes ?? [], this.state.participants, groups, this.state.items);
       return this.state;
     }
     return this.state!;
@@ -861,7 +930,23 @@ export class RetroRoom extends DurableObject<Env> {
     return { success: true };
   }
 
-  async castVote(participantId: string, groupId: string, count: number): Promise<{ success: boolean; error?: string }> {
+  private resolveVoteTarget(target: VoteTarget): { success: true; target: VoteTarget } | { success: false; error: string } {
+    if (target.type === "group") {
+      return this.state?.groups.some((group) => group.id === target.id)
+        ? { success: true, target }
+        : { success: false, error: "Group not found" };
+    }
+    const item = this.state?.items.find((candidate) => candidate.id === target.id);
+    if (!item) {
+      return { success: false, error: "Item not found" };
+    }
+    if (item.groupId !== null) {
+      return { success: false, error: "Cannot vote directly on a grouped item" };
+    }
+    return { success: true, target };
+  }
+
+  async castVote(participantId: string, targetOrGroupId: VoteTarget | string, count: number): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
 
     if (s.phase !== "vote") {
@@ -872,12 +957,13 @@ export class RetroRoom extends DurableObject<Env> {
       return { success: false, error: "Participant not found" };
     }
 
-    const groupExists = s.groups.some((group) => group.id === groupId);
-    if (!groupExists) {
-      return { success: false, error: "Group not found" };
+    const target = typeof targetOrGroupId === "string" ? groupVoteTarget(targetOrGroupId) : targetOrGroupId;
+    const targetValidation = this.resolveVoteTarget(target);
+    if (!targetValidation.success) {
+      return { success: false, error: targetValidation.error };
     }
 
-    const result = applyCastVote(s.votes, participantId, groupId, count, s.voteBudget);
+    const result = applyCastVote(s.votes, participantId, targetValidation.target, count, s.voteBudget);
     if (result.error) {
       return { success: false, error: result.error };
     }
@@ -885,13 +971,18 @@ export class RetroRoom extends DurableObject<Env> {
     s.votes = result.votes;
     await this.saveState();
 
-    const totalForGroup = getVotesForGroup(s.votes, groupId);
+    const totalForTarget = targetValidation.target.type === "group"
+      ? getVotesForGroup(s.votes, targetValidation.target.id)
+      : getVotesForUngroupedItem(s.votes, targetValidation.target.id);
     const broadcast: ServerToClientMessage = {
       type: "vote-changed",
-      groupId,
+      target: targetValidation.target,
+      groupId: targetValidation.target.type === "group" ? targetValidation.target.id : "",
+      itemId: targetValidation.target.type === "item" ? targetValidation.target.id : undefined,
       participantId,
       delta: count,
-      totalForGroup,
+      totalForGroup: totalForTarget,
+      totalForItem: targetValidation.target.type === "item" ? totalForTarget : undefined,
     };
     this.broadcast(broadcast);
     this.broadcastState(s);
@@ -899,7 +990,7 @@ export class RetroRoom extends DurableObject<Env> {
     return { success: true };
   }
 
-  async removeVote(participantId: string, groupId: string): Promise<{ success: boolean; error?: string }> {
+  async removeVote(participantId: string, targetOrGroupId: VoteTarget | string): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
 
     if (s.phase !== "vote") {
@@ -910,28 +1001,37 @@ export class RetroRoom extends DurableObject<Env> {
       return { success: false, error: "Participant not found" };
     }
 
-    const groupExists = s.groups.some((group) => group.id === groupId);
-    if (!groupExists) {
-      return { success: false, error: "Group not found" };
+    const target = typeof targetOrGroupId === "string" ? groupVoteTarget(targetOrGroupId) : targetOrGroupId;
+    const targetValidation = this.resolveVoteTarget(target);
+    if (!targetValidation.success) {
+      return { success: false, error: targetValidation.error };
     }
 
     const existing = s.votes.find(
-      (v) => v.participantId === participantId && (v.groupId === groupId || v.itemId === groupId),
+      (v) => {
+        const voteTarget = getVoteTarget(v);
+        return v.participantId === participantId && voteTarget !== null && sameVoteTarget(voteTarget, targetValidation.target);
+      },
     );
     if (!existing) {
       return { success: false, error: "No votes to remove" };
     }
 
-    s.votes = applyRemoveVote(s.votes, participantId, groupId);
+    s.votes = applyRemoveVote(s.votes, participantId, targetValidation.target);
     await this.saveState();
 
-    const totalForGroup = getVotesForGroup(s.votes, groupId);
+    const totalForTarget = targetValidation.target.type === "group"
+      ? getVotesForGroup(s.votes, targetValidation.target.id)
+      : getVotesForUngroupedItem(s.votes, targetValidation.target.id);
     const broadcast: ServerToClientMessage = {
       type: "vote-changed",
-      groupId,
+      target: targetValidation.target,
+      groupId: targetValidation.target.type === "group" ? targetValidation.target.id : "",
+      itemId: targetValidation.target.type === "item" ? targetValidation.target.id : undefined,
       participantId,
       delta: -1,
-      totalForGroup,
+      totalForGroup: totalForTarget,
+      totalForItem: targetValidation.target.type === "item" ? totalForTarget : undefined,
     };
     this.broadcast(broadcast);
     this.broadcastState(s);
@@ -1186,10 +1286,10 @@ export class RetroRoom extends DurableObject<Env> {
         break;
       }
       case "cast-vote": {
-        const targetGroupId = msg.groupId ?? msg.itemId;
-        const result = typeof targetGroupId === "string"
-          ? await this.castVote(participantId, targetGroupId, msg.count)
-          : { success: false, error: "Group not found" };
+        const target = parseVoteTargetMessage(msg);
+        const result = target.success
+          ? await this.castVote(participantId, target.target, msg.count)
+          : { success: false, error: target.error };
         if (!result.success) {
           const ws = this.sessions.get(participantId);
           ws?.send(JSON.stringify({ type: "error", message: result.error }));
@@ -1197,10 +1297,10 @@ export class RetroRoom extends DurableObject<Env> {
         break;
       }
       case "remove-vote": {
-        const targetGroupId = msg.groupId ?? msg.itemId;
-        const result = typeof targetGroupId === "string"
-          ? await this.removeVote(participantId, targetGroupId)
-          : { success: false, error: "Group not found" };
+        const target = parseVoteTargetMessage(msg);
+        const result = target.success
+          ? await this.removeVote(participantId, target.target)
+          : { success: false, error: target.error };
         if (!result.success) {
           const ws = this.sessions.get(participantId);
           ws?.send(JSON.stringify({ type: "error", message: result.error }));

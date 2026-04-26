@@ -13,6 +13,12 @@ import {
   canTransition,
   isPhaseAllowed,
   getVotesForItem,
+  getVotesForUngroupedItem,
+  groupVoteTarget,
+  itemVoteTarget,
+  getVotesForTarget,
+  getReviewTargets,
+  sortReviewTargets,
   getVotesByParticipant,
   getRemainingBudget,
   sanitizeDisplayName,
@@ -253,6 +259,18 @@ describe("vote helpers", () => {
     expect(getRemainingBudget(votes, "p1", 5)).toBe(2);
     expect(getRemainingBudget(votes, "p2", 5)).toBe(4);
     expect(getRemainingBudget(votes, "p3", 5)).toBe(5);
+  });
+
+  it("distinguishes canonical group and ungrouped item vote targets with the same ID", () => {
+    const mixedVotes = [
+      { participantId: "p1", target: groupVoteTarget("same-id"), count: 2 },
+      { participantId: "p1", target: itemVoteTarget("same-id"), count: 1 },
+    ];
+
+    expect(getVotesForTarget(mixedVotes, groupVoteTarget("same-id"))).toBe(2);
+    expect(getVotesForTarget(mixedVotes, itemVoteTarget("same-id"))).toBe(1);
+    expect(getVotesForUngroupedItem(mixedVotes, "same-id")).toBe(1);
+    expect(getVotesByParticipant(mixedVotes, "p1")).toBe(3);
   });
 });
 
@@ -697,7 +715,7 @@ describe("applyCastVote", () => {
   it("adds a new vote allocation", () => {
     const result = applyCastVote([], "p1", "g1", 1, 5);
     expect(result.error).toBeUndefined();
-    expect(result.votes).toEqual([{ participantId: "p1", groupId: "g1", count: 1 }]);
+    expect(result.votes).toEqual([{ participantId: "p1", target: groupVoteTarget("g1"), count: 1 }]);
   });
 
   it("stacks votes on the same group", () => {
@@ -707,6 +725,21 @@ describe("applyCastVote", () => {
     );
     expect(result.error).toBeUndefined();
     expect(result.votes).toEqual([{ participantId: "p1", groupId: "g1", count: 4 }]);
+  });
+
+  it("adds canonical ungrouped item allocations independently from group IDs", () => {
+    const result = applyCastVote(
+      [{ participantId: "p1", target: groupVoteTarget("same-id"), count: 1 }],
+      "p1",
+      itemVoteTarget("same-id"),
+      2,
+      5,
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.votes).toEqual([
+      { participantId: "p1", target: groupVoteTarget("same-id"), count: 1 },
+      { participantId: "p1", target: itemVoteTarget("same-id"), count: 2 },
+    ]);
   });
 
   it("rejects over-budget vote", () => {
@@ -736,8 +769,8 @@ describe("applyCastVote", () => {
     result = applyCastVote(result.votes, "p1", "g2", 3, 5);
     expect(result.error).toBeUndefined();
     expect(result.votes).toEqual([
-      { participantId: "p1", groupId: "g1", count: 2 },
-      { participantId: "p1", groupId: "g2", count: 3 },
+      { participantId: "p1", target: groupVoteTarget("g1"), count: 2 },
+      { participantId: "p1", target: groupVoteTarget("g2"), count: 3 },
     ]);
   });
 
@@ -767,8 +800,8 @@ describe("applyRemoveVote", () => {
   });
 
   it("removes allocation when count is 1", () => {
-    const votes = [{ participantId: "p1", itemId: "i1", count: 1 }];
-    const result = applyRemoveVote(votes, "p1", "i1");
+    const votes = [{ participantId: "p1", target: itemVoteTarget("i1"), count: 1 }];
+    const result = applyRemoveVote(votes, "p1", itemVoteTarget("i1"));
     expect(result).toEqual([]);
   });
 
@@ -828,5 +861,39 @@ describe("duplicate item vote identity", () => {
     expect(finalResult.error).toBeUndefined();
     expect(getVotesForItem(finalResult.votes, "i1")).toBe(1);
     expect(getVotesForItem(finalResult.votes, "i2")).toBe(3);
+  });
+});
+
+describe("review target helpers", () => {
+  it("builds and sorts mixed group and ungrouped item review targets", () => {
+    const state = makeState({
+      roomId: "review-targets",
+      columns: [
+        { id: "col-b", name: "B", order: 1 },
+        { id: "col-a", name: "A", order: 0 },
+      ],
+      groups: [
+        { id: "group-a", name: "Group A", columnId: "col-a", order: 1 },
+        { id: "group-b", name: "Group B", columnId: "col-b", order: 0 },
+      ],
+      items: [
+        { id: "item-a", text: "Ungrouped A", authorId: "p1", columnId: "col-a", groupId: null, order: 0 },
+        { id: "item-b-grouped", text: "Grouped", authorId: "p1", columnId: "col-b", groupId: "group-b", order: 0 },
+      ],
+      votes: [
+        { participantId: "p1", target: itemVoteTarget("item-a"), count: 3 },
+        { participantId: "p2", target: groupVoteTarget("group-b"), count: 2 },
+        { participantId: "p3", target: groupVoteTarget("group-a"), count: 3 },
+      ],
+    });
+
+    const targets = sortReviewTargets(getReviewTargets(state), state.columns);
+
+    expect(targets.map((target) => target.target)).toEqual([
+      itemVoteTarget("item-a"),
+      groupVoteTarget("group-a"),
+      groupVoteTarget("group-b"),
+    ]);
+    expect(targets.map((target) => target.totalVotes)).toEqual([3, 3, 2]);
   });
 });

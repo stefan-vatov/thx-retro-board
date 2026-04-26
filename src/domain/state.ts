@@ -1,4 +1,4 @@
-import type { Phase, Participant, RetroItem, Group, Column, VoteAllocation, TimerState, RoomState } from "./types";
+import type { Phase, Participant, RetroItem, Group, Column, VoteAllocation, TimerState, RoomState, VoteTarget } from "./types";
 
 export const DEFAULT_COLUMNS: readonly Column[] = [
 ] as const;
@@ -57,10 +57,54 @@ export function isPhaseAllowed(actionPhase: Phase, currentPhase: Phase): boolean
   return actionPhase === currentPhase;
 }
 
-export function getVotesForGroup(votes: VoteAllocation[], groupId: string): number {
+export function voteTargetKey(target: VoteTarget): string {
+  return `${target.type}:${target.id}`;
+}
+
+export function groupVoteTarget(groupId: string): VoteTarget {
+  return { type: "group", id: groupId };
+}
+
+export function itemVoteTarget(itemId: string): VoteTarget {
+  return { type: "item", id: itemId };
+}
+
+export function getVoteTarget(vote: VoteAllocation): VoteTarget | null {
+  if (
+    vote.target
+    && (vote.target.type === "group" || vote.target.type === "item")
+    && typeof vote.target.id === "string"
+  ) {
+    return vote.target;
+  }
+  if (typeof vote.groupId === "string") {
+    return groupVoteTarget(vote.groupId);
+  }
+  if (typeof vote.itemId === "string") {
+    return groupVoteTarget(vote.itemId);
+  }
+  return null;
+}
+
+export function sameVoteTarget(left: VoteTarget, right: VoteTarget): boolean {
+  return left.type === right.type && left.id === right.id;
+}
+
+export function getVotesForTarget(votes: VoteAllocation[], target: VoteTarget): number {
   return votes
-    .filter((v) => v.groupId === groupId || v.itemId === groupId)
+    .filter((v) => {
+      const voteTarget = getVoteTarget(v);
+      return voteTarget !== null && sameVoteTarget(voteTarget, target);
+    })
     .reduce((sum, v) => sum + v.count, 0);
+}
+
+export function getVotesForGroup(votes: VoteAllocation[], groupId: string): number {
+  return getVotesForTarget(votes, groupVoteTarget(groupId));
+}
+
+export function getVotesForUngroupedItem(votes: VoteAllocation[], itemId: string): number {
+  return getVotesForTarget(votes, itemVoteTarget(itemId));
 }
 
 /** @deprecated Votes target groups. Use getVotesForGroup. */
@@ -74,6 +118,45 @@ export function getVotesByParticipant(votes: VoteAllocation[], participantId: st
 
 export function getRemainingBudget(votes: VoteAllocation[], participantId: string, budget: number): number {
   return budget - getVotesByParticipant(votes, participantId);
+}
+
+export interface ReviewTarget {
+  target: VoteTarget;
+  columnId: string;
+  order: number;
+  totalVotes: number;
+}
+
+export function getReviewTargets(state: Pick<RoomState, "columns" | "groups" | "items" | "votes">): ReviewTarget[] {
+  const groups = state.groups.map((group) => ({
+    target: groupVoteTarget(group.id),
+    columnId: group.columnId,
+    order: group.order,
+    totalVotes: getVotesForGroup(state.votes, group.id),
+  }));
+  const ungroupedItems = getUngroupedItems(state.items).map((item) => ({
+    target: itemVoteTarget(item.id),
+    columnId: item.columnId,
+    order: item.order,
+    totalVotes: getVotesForUngroupedItem(state.votes, item.id),
+  }));
+  return [...groups, ...ungroupedItems];
+}
+
+export function sortReviewTargets(
+  targets: ReviewTarget[],
+  columns: Column[],
+): ReviewTarget[] {
+  const columnOrder = new Map(columns.map((column) => [column.id, column.order]));
+  return [...targets].sort((a, b) => {
+    const voteDifference = b.totalVotes - a.totalVotes;
+    if (voteDifference !== 0) return voteDifference;
+    const columnDifference = (columnOrder.get(a.columnId) ?? Number.MAX_SAFE_INTEGER) - (columnOrder.get(b.columnId) ?? Number.MAX_SAFE_INTEGER);
+    if (columnDifference !== 0) return columnDifference;
+    const orderDifference = a.order - b.order;
+    if (orderDifference !== 0) return orderDifference;
+    return voteTargetKey(a.target).localeCompare(voteTargetKey(b.target));
+  });
 }
 
 export function isTimerExpired(timer: TimerState): boolean {
@@ -342,7 +425,10 @@ export function applyDeleteGroup(
     nextUngroupedOrder += 1;
     return ungroupedItem;
   });
-  const nextVotes = votes.filter((vote) => (vote.groupId ?? vote.itemId) !== groupId);
+  const nextVotes = votes.filter((vote) => {
+    const target = getVoteTarget(vote);
+    return target === null || !sameVoteTarget(target, groupVoteTarget(groupId));
+  });
 
   return { groups: remainingGroups, items: nextItems, votes: nextVotes };
 }
@@ -398,6 +484,7 @@ export function applyDeleteColumn(
   }
 
   const deletedGroupIds = new Set(groups.filter((group) => group.columnId === columnId).map((group) => group.id));
+  const deletedItemIds = new Set(items.filter((item) => item.columnId === columnId).map((item) => item.id));
   const remainingColumns = columns
     .filter((column) => column.id !== columnId)
     .sort((a, b) => a.order - b.order)
@@ -417,8 +504,10 @@ export function applyDeleteColumn(
       order: allItems.filter((candidate) => candidate.columnId === item.columnId && candidate.groupId === item.groupId && candidate.order < item.order).length,
     }));
   const remainingVotes = votes.filter((vote) => {
-    const groupId = vote.groupId ?? vote.itemId;
-    return typeof groupId === "string" && !deletedGroupIds.has(groupId);
+    const target = getVoteTarget(vote);
+    if (target === null) return false;
+    if (target.type === "group") return !deletedGroupIds.has(target.id);
+    return !deletedItemIds.has(target.id);
   });
 
   return {
@@ -468,10 +557,11 @@ export function applyMoveItemToGroup(
 export function applyCastVote(
   votes: VoteAllocation[],
   participantId: string,
-  groupId: string,
+  targetOrGroupId: VoteTarget | string,
   count: number,
   budget: number,
 ): { votes: VoteAllocation[]; error?: string } {
+  const target = typeof targetOrGroupId === "string" ? groupVoteTarget(targetOrGroupId) : targetOrGroupId;
   if (count < 1 || !Number.isInteger(count)) {
     return { votes, error: "Vote count must be a positive integer" };
   }
@@ -483,40 +573,50 @@ export function applyCastVote(
   }
 
   const existing = votes.find(
-    (v) => v.participantId === participantId && (v.groupId === groupId || v.itemId === groupId),
+    (v) => {
+      const voteTarget = getVoteTarget(v);
+      return v.participantId === participantId && voteTarget !== null && sameVoteTarget(voteTarget, target);
+    },
   );
 
   if (existing) {
-    const updated = votes.map((v) =>
-      v.participantId === participantId && (v.groupId === groupId || v.itemId === groupId)
+    const updated = votes.map((v) => {
+      const voteTarget = getVoteTarget(v);
+      return v.participantId === participantId && voteTarget !== null && sameVoteTarget(voteTarget, target)
         ? { ...v, count: v.count + count }
-        : v,
-    );
+        : v;
+    });
     return { votes: updated };
   }
 
-  return { votes: [...votes, { participantId, groupId, count }] };
+  return { votes: [...votes, { participantId, target, count }] };
 }
 
 export function applyRemoveVote(
   votes: VoteAllocation[],
   participantId: string,
-  groupId: string,
+  targetOrGroupId: VoteTarget | string,
 ): VoteAllocation[] {
+  const target = typeof targetOrGroupId === "string" ? groupVoteTarget(targetOrGroupId) : targetOrGroupId;
   const existing = votes.find(
-    (v) => v.participantId === participantId && (v.groupId === groupId || v.itemId === groupId),
+    (v) => {
+      const voteTarget = getVoteTarget(v);
+      return v.participantId === participantId && voteTarget !== null && sameVoteTarget(voteTarget, target);
+    },
   );
   if (!existing) return votes;
 
   if (existing.count <= 1) {
-    return votes.filter(
-      (v) => !(v.participantId === participantId && (v.groupId === groupId || v.itemId === groupId)),
-    );
+    return votes.filter((v) => {
+      const voteTarget = getVoteTarget(v);
+      return !(v.participantId === participantId && voteTarget !== null && sameVoteTarget(voteTarget, target));
+    });
   }
 
-  return votes.map((v) =>
-    v.participantId === participantId && (v.groupId === groupId || v.itemId === groupId)
+  return votes.map((v) => {
+    const voteTarget = getVoteTarget(v);
+    return v.participantId === participantId && voteTarget !== null && sameVoteTarget(voteTarget, target)
       ? { ...v, count: v.count - 1 }
-      : v,
-  );
+      : v;
+  });
 }

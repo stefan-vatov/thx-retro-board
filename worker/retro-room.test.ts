@@ -1,6 +1,7 @@
 // @ts-expect-error -- cloudflare:workers vitest module
 import { env } from "cloudflare:workers";
 import { describe, it, expect } from "vitest";
+import { groupVoteTarget, itemVoteTarget } from "../src/domain";
 import type { RoomState } from "../src/domain";
 
 describe("RetroRoom Durable Object v2 schema", () => {
@@ -113,7 +114,7 @@ describe("RetroRoom Durable Object v2 schema", () => {
     expect(state.items).toEqual([
       expect.objectContaining({ id: item.item!.id, text: "Shipping was smooth", columnId, groupId: group.group!.id, order: 0 }),
     ]);
-    expect(state.votes).toEqual([{ participantId: "fac1", groupId: group.group!.id, count: 2 }]);
+    expect(state.votes).toEqual([{ participantId: "fac1", target: groupVoteTarget(group.group!.id), count: 2 }]);
   });
 
   it("normalizes persisted v2 ordering per column and per item list while preserving duplicate-looking identities", async () => {
@@ -178,8 +179,8 @@ describe("RetroRoom Durable Object v2 schema", () => {
       order: 0,
     });
     expect(state.votes).toEqual([
-      { participantId: "fac1", groupId: "group-a-1", count: 2 },
-      { participantId: "p2", groupId: "group-b-1", count: 1 },
+      { participantId: "fac1", target: groupVoteTarget("group-a-1"), count: 2 },
+      { participantId: "p2", target: groupVoteTarget("group-b-1"), count: 1 },
     ]);
   });
 
@@ -197,17 +198,94 @@ describe("RetroRoom Durable Object v2 schema", () => {
     const accepted = await stub.castVote("p2", group.group!.id, 5);
     expect(accepted.success).toBe(true);
     const beforeOverBudget = await stub.getRoomState();
-    expect(beforeOverBudget.votes).toEqual([{ participantId: "p2", groupId: group.group!.id, count: 5 }]);
+    expect(beforeOverBudget.votes).toEqual([{ participantId: "p2", target: groupVoteTarget(group.group!.id), count: 5 }]);
 
     const rejected = await stub.castVote("p2", group.group!.id, 1);
     expect(rejected.success).toBe(false);
     expect(rejected.error).toContain("Over budget");
     expect(await stub.getRoomState()).toEqual(beforeOverBudget);
 
-    const itemLevelAttempt = await stub.castVote("p2", item.item!.id, 1);
+    const itemLevelAttempt = await stub.castVote("p2", itemVoteTarget(item.item!.id), 1);
     expect(itemLevelAttempt.success).toBe(false);
-    expect(itemLevelAttempt.error).toBe("Group not found");
+    expect(itemLevelAttempt.error).toBe("Cannot vote directly on a grouped item");
     expect(await stub.getRoomState()).toEqual(beforeOverBudget);
+  });
+
+  it("accepts valid ungrouped item votes and shares budget with group votes", async () => {
+    const stub = await init("test-v2-mixed-vote-targets");
+    await stub.join("fac1", "Facilitator");
+    await stub.join("p2", "Participant");
+    const column = await stub.createColumn("fac1", "Lane");
+    const groupedItem = await stub.addItem("fac1", "Grouped topic", column.column!.id);
+    const ungroupedItem = await stub.addItem("fac1", "Ungrouped topic", column.column!.id);
+    await stub.setPhase("fac1", "organise");
+    const group = await stub.createGroup("fac1", "Group target", column.column!.id);
+    await stub.moveItemToGroup("fac1", groupedItem.item!.id, group.group!.id, 0, await freshMovePreconditions(stub, groupedItem.item!.id));
+    await stub.setPhase("fac1", "vote");
+
+    expect(await stub.castVote("p2", groupVoteTarget(group.group!.id), 2)).toMatchObject({ success: true });
+    expect(await stub.castVote("p2", itemVoteTarget(ungroupedItem.item!.id), 3)).toMatchObject({ success: true });
+    const beforeOverBudget = await stub.getRoomState();
+    expect(beforeOverBudget.votes).toEqual([
+      { participantId: "p2", target: groupVoteTarget(group.group!.id), count: 2 },
+      { participantId: "p2", target: itemVoteTarget(ungroupedItem.item!.id), count: 3 },
+    ]);
+
+    expect(await stub.castVote("p2", itemVoteTarget(ungroupedItem.item!.id), 1)).toMatchObject({ success: false, error: expect.stringContaining("Over budget") });
+    expect(await stub.getRoomState()).toEqual(beforeOverBudget);
+  });
+
+  it("rejects invalid mixed vote targets and counts without mutating state or version", async () => {
+    const stub = await init("test-v2-invalid-mixed-vote-targets");
+    await stub.join("fac1", "Facilitator");
+    const column = await stub.createColumn("fac1", "Lane");
+    const groupedItem = await stub.addItem("fac1", "Grouped topic", column.column!.id);
+    const ungroupedItem = await stub.addItem("fac1", "Ungrouped topic", column.column!.id);
+    await stub.setPhase("fac1", "organise");
+    const group = await stub.createGroup("fac1", "Group target", column.column!.id);
+    await stub.moveItemToGroup("fac1", groupedItem.item!.id, group.group!.id, 0, await freshMovePreconditions(stub, groupedItem.item!.id));
+    await stub.setPhase("fac1", "vote");
+
+    const before = await stub.getRoomState();
+    const rejectedAttempts = [
+      () => stub.castVote("missing", groupVoteTarget(group.group!.id), 1),
+      () => stub.castVote("fac1", groupVoteTarget("missing-group"), 1),
+      () => stub.castVote("fac1", itemVoteTarget("missing-item"), 1),
+      () => stub.castVote("fac1", itemVoteTarget(groupedItem.item!.id), 1),
+      () => stub.castVote("fac1", itemVoteTarget(ungroupedItem.item!.id), 0),
+      () => stub.castVote("fac1", itemVoteTarget(ungroupedItem.item!.id), 1.5),
+      () => stub.removeVote("fac1", itemVoteTarget(groupedItem.item!.id)),
+      () => stub.removeVote("fac1", itemVoteTarget(ungroupedItem.item!.id)),
+    ];
+
+    for (const attempt of rejectedAttempts) {
+      const result = await attempt();
+      expect(result.success).toBe(false);
+      expect(await stub.getRoomState()).toEqual(before);
+    }
+  });
+
+  it("removes only the authenticated participant allocation for the selected mixed target", async () => {
+    const stub = await init("test-v2-remove-mixed-votes");
+    await stub.join("fac1", "Facilitator");
+    await stub.join("p2", "Participant");
+    const column = await stub.createColumn("fac1", "Lane");
+    const ungroupedItem = await stub.addItem("fac1", "Ungrouped topic", column.column!.id);
+    await stub.setPhase("fac1", "organise");
+    const group = await stub.createGroup("fac1", "Group target", column.column!.id);
+    await stub.setPhase("fac1", "vote");
+    await stub.castVote("fac1", groupVoteTarget(group.group!.id), 1);
+    await stub.castVote("fac1", itemVoteTarget(ungroupedItem.item!.id), 2);
+    await stub.castVote("p2", itemVoteTarget(ungroupedItem.item!.id), 1);
+
+    expect(await stub.removeVote("fac1", itemVoteTarget(ungroupedItem.item!.id))).toMatchObject({ success: true });
+
+    const state = await stub.getRoomState();
+    expect(state.votes).toEqual([
+      { participantId: "fac1", target: groupVoteTarget(group.group!.id), count: 1 },
+      { participantId: "fac1", target: itemVoteTarget(ungroupedItem.item!.id), count: 1 },
+      { participantId: "p2", target: itemVoteTarget(ungroupedItem.item!.id), count: 1 },
+    ]);
   });
 
   it("rejects item adds without a valid existing column without changing state", async () => {
@@ -279,7 +357,46 @@ describe("RetroRoom Durable Object v2 schema", () => {
       expect.objectContaining({ id: "valid-item", columnId: "col-1", groupId: "group-1", order: 0 }),
       expect.objectContaining({ id: "cross-group", columnId: "col-2", groupId: null, order: 0 }),
     ]);
-    expect(state.votes).toEqual([{ participantId: "fac1", groupId: "group-1", count: 2 }]);
+    expect(state.votes).toEqual([{ participantId: "fac1", target: groupVoteTarget("group-1"), count: 2 }]);
+  });
+
+  it("normalizes persisted mixed votes to canonical safe targets", async () => {
+    const roomId = "test-v2-normalize-mixed-votes";
+    const id = env.RETRO_ROOM.idFromName(roomId);
+    const stub = env.RETRO_ROOM.get(id);
+    await stub.seedStoredStateForTest({
+      roomId,
+      participants: [
+        { id: "fac1", displayName: "Facilitator", isFacilitator: true },
+        { id: "p2", displayName: "Participant", isFacilitator: false },
+      ],
+      facilitatorId: "fac1",
+      phase: "vote",
+      columns: [{ id: "col-1", name: "Keep", order: 0 }],
+      groups: [{ id: "group-1", name: "Kept group", columnId: "col-1", order: 0 }],
+      items: [
+        { id: "grouped-item", text: "Grouped", authorId: "fac1", columnId: "col-1", groupId: "group-1", order: 0 },
+        { id: "free-item", text: "Free", authorId: "fac1", columnId: "col-1", groupId: null, order: 0 },
+      ],
+      votes: [
+        { participantId: "fac1", groupId: "group-1", itemId: "group-1", count: 1 },
+        { participantId: "fac1", target: groupVoteTarget("group-1"), count: 2 },
+        { participantId: "p2", itemId: "free-item", count: 3 },
+        { participantId: "p2", target: itemVoteTarget("free-item"), count: 1 },
+        { participantId: "p2", itemId: "grouped-item", count: 1 },
+        { participantId: "missing", target: groupVoteTarget("group-1"), count: 1 },
+        { participantId: "p2", target: itemVoteTarget("missing-item"), count: 1 },
+        { participantId: "p2", groupId: "group-1", itemId: "free-item", count: 1 },
+        { participantId: "p2", target: itemVoteTarget("free-item"), count: 0 },
+      ],
+    });
+
+    const state = await stub.getRoomState();
+
+    expect(state.votes).toEqual([
+      { participantId: "fac1", target: groupVoteTarget("group-1"), count: 3 },
+      { participantId: "p2", target: itemVoteTarget("free-item"), count: 4 },
+    ]);
   });
 
   it("rejects cross-column item moves without changing state", async () => {
@@ -552,6 +669,8 @@ describe("RetroRoom Durable Object v2 schema", () => {
     const remove = await stub.createColumn("fac1", "Remove");
     const keepItem = await stub.addItem("fac1", "Keep item", keep.column!.id);
     const removeItem = await stub.addItem("fac1", "Remove item", remove.column!.id);
+    const keepFreeItem = await stub.addItem("fac1", "Keep free item", keep.column!.id);
+    const removeFreeItem = await stub.addItem("fac1", "Remove free item", remove.column!.id);
 
     await stub.setPhase("fac1", "organise");
     const keepGroup = await stub.createGroup("fac1", "Keep group", keep.column!.id);
@@ -562,10 +681,17 @@ describe("RetroRoom Durable Object v2 schema", () => {
     await stub.setPhase("fac1", "vote");
     await stub.castVote("fac1", keepGroup.group!.id, 1);
     await stub.castVote("fac1", removeGroup.group!.id, 2);
+    await stub.castVote("fac1", itemVoteTarget(keepFreeItem.item!.id), 1);
+    await stub.castVote("fac1", itemVoteTarget(removeFreeItem.item!.id), 1);
     await stub.setPhaseForTest("organise");
 
     const before = await stub.getRoomState();
-    expect(before.votes.map((vote) => vote.groupId).sort()).toEqual([keepGroup.group!.id, removeGroup.group!.id].sort());
+    expect(before.votes.map((vote) => vote.target?.id).sort()).toEqual([
+      keepFreeItem.item!.id,
+      keepGroup.group!.id,
+      removeFreeItem.item!.id,
+      removeGroup.group!.id,
+    ].sort());
 
     const deleted = await stub.deleteColumn("fac1", remove.column!.id);
     expect(deleted.success).toBe(true);
@@ -573,10 +699,14 @@ describe("RetroRoom Durable Object v2 schema", () => {
     const after = await stub.getRoomState();
     expect(after.columns).toEqual([{ id: keep.column!.id, name: "Keep", order: 0 }]);
     expect(after.groups).toEqual([{ id: keepGroup.group!.id, name: "Keep group", columnId: keep.column!.id, order: 0 }]);
-    expect(after.items).toEqual([
+    expect(after.items.sort((a, b) => a.text.localeCompare(b.text))).toEqual([
+      expect.objectContaining({ id: keepFreeItem.item!.id, text: "Keep free item", columnId: keep.column!.id, groupId: null, order: 0 }),
       expect.objectContaining({ id: keepItem.item!.id, text: "Keep item", columnId: keep.column!.id, groupId: keepGroup.group!.id, order: 0 }),
     ]);
-    expect(after.votes).toEqual([{ participantId: "fac1", groupId: keepGroup.group!.id, count: 1 }]);
+    expect(after.votes).toEqual([
+      { participantId: "fac1", target: groupVoteTarget(keepGroup.group!.id), count: 1 },
+      { participantId: "fac1", target: itemVoteTarget(keepFreeItem.item!.id), count: 1 },
+    ]);
     expect(after.version).toBe(before.version + 1);
   });
 

@@ -1,4 +1,4 @@
-export { type Phase, type Participant, type RetroItem, type Column, type Group, type VoteAllocation, type TimerState, type RoomState } from "./types";
+export { type Phase, type Participant, type RetroItem, type Column, type Group, type VoteTarget, type VoteAllocation, type TimerState, type RoomState } from "./types";
 export { type ServerToClientMessage, type ClientToServerMessage } from "./messages";
 export {
   createRoomState,
@@ -13,10 +13,19 @@ export {
   PHASE_ORDER,
   canTransition,
   isPhaseAllowed,
+  voteTargetKey,
+  groupVoteTarget,
+  itemVoteTarget,
+  getVoteTarget,
+  sameVoteTarget,
+  getVotesForTarget,
   getVotesForItem,
   getVotesForGroup,
+  getVotesForUngroupedItem,
   getVotesByParticipant,
   getRemainingBudget,
+  getReviewTargets,
+  sortReviewTargets,
   isTimerExpired,
   sanitizeDisplayName,
   isValidDisplayName,
