@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button-variants";
@@ -24,5 +26,22 @@ describe("shadcn Tailwind foundation", () => {
     expect(Badge).toBeTypeOf("function");
     expect(Alert).toBeTypeOf("function");
     expect(Separator).toBeTypeOf("function");
+  });
+
+  it("renders Badge as its child element when asChild is provided", () => {
+    const markup = renderToStaticMarkup(
+      createElement(
+        Badge,
+        { asChild: true, variant: "secondary" },
+        createElement("a", { href: "/room/example" }, "Room link"),
+      ),
+    );
+
+    expect(markup).toMatch(/^<a /);
+    expect(markup).toContain('data-slot="badge"');
+    expect(markup).toContain('href="/room/example"');
+    expect(markup).toContain("bg-secondary");
+    expect(markup).toContain("Room link");
+    expect(markup).not.toContain("<span");
   });
 });
