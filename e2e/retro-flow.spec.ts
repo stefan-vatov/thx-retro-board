@@ -427,6 +427,86 @@ test.describe("Retro Board E2E", () => {
       await ctx3.close();
     });
 
+    test("organise columns support nested groups, same-column moves, blocked cross-column drops, and refresh persistence", async ({ browser }) => {
+      const ctx = await browser.newContext();
+      const page = await ctx.newPage();
+      await createJoinedRoom(page);
+      const roomId = new URL(page.url()).pathname.split("/").pop()!;
+
+      await createWriteColumn(page, "Alpha");
+      await createWriteColumn(page, "Beta");
+
+      for (const [columnName, itemText] of [
+        ["Alpha", "Alpha A"],
+        ["Alpha", "Alpha B"],
+        ["Beta", "Beta A"],
+      ] as const) {
+        await page.getByLabel(/column for new item/i).selectOption({ label: columnName });
+        await page.getByPlaceholder(/add a retro item/i).fill(itemText);
+        await page.getByRole("button", { name: /add item/i }).click();
+        await expect(page.locator(".column-board__column", { hasText: columnName }).getByText(itemText)).toBeVisible({ timeout: 5000 });
+      }
+
+      await advanceToPhase(page, "organise");
+      await expect(page.getByRole("region", { name: /room status/i })).toBeFocused();
+      await expect(page.getByRole("heading", { name: "Alpha" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Beta" })).toBeVisible();
+
+      async function createGroupInColumn(columnName: string, groupName: string) {
+        const lane = page.locator(".column-board__column", { hasText: columnName });
+        await lane.getByPlaceholder(/new group name/i).fill(groupName);
+        await lane.getByRole("button", { name: /create group/i }).click();
+        await expect(lane.getByText(groupName)).toBeVisible({ timeout: 5000 });
+      }
+
+      await createGroupInColumn("Alpha", "Alpha themes");
+      await createGroupInColumn("Alpha", "Alpha followups");
+      await createGroupInColumn("Beta", "Beta themes");
+
+      let state = await page.evaluate(async (id) => {
+        const response = await fetch(`/api/rooms/${id}`);
+        return response.json();
+      }, roomId) as { version: number; groups: { id: string; name: string; columnId: string }[]; items: { id: string; text: string; columnId: string; groupId: string | null; order: number }[] };
+      const alphaThemes = state.groups.find((group) => group.name === "Alpha themes")!;
+      const alphaFollowups = state.groups.find((group) => group.name === "Alpha followups")!;
+
+      await dragItemToDropZone(page, "Alpha A", alphaThemes.id, 0);
+      await expect(page.locator(`[data-drop-list="${alphaThemes.id}"]`, { hasText: "Alpha A" })).toBeVisible({ timeout: 5000 });
+      await dragItemToDropZone(page, "Alpha B", alphaThemes.id, 1);
+      await expect(page.locator(`[data-drop-list="${alphaThemes.id}"] [data-drag-item-id]`).nth(1)).toContainText("Alpha B", { timeout: 5000 });
+
+      await dragItemToDropZone(page, "Alpha B", alphaThemes.id, 0);
+      await expect(page.locator(`[data-drop-list="${alphaThemes.id}"] [data-drag-item-id]`).first()).toContainText("Alpha B", { timeout: 5000 });
+
+      await dragItemToDropZone(page, "Alpha A", alphaFollowups.id, 0);
+      await expect(page.locator(`[data-drop-list="${alphaFollowups.id}"]`, { hasText: "Alpha A" })).toBeVisible({ timeout: 5000 });
+
+      await dragItemToDropZone(page, "Alpha A", null, 0);
+      await expect(page.locator(`[data-drop-list="__ungrouped__"][data-drop-column-id="${alphaThemes.columnId}"]`, { hasText: "Alpha A" })).toBeVisible({ timeout: 5000 });
+
+      state = await page.evaluate(async (id) => {
+        const response = await fetch(`/api/rooms/${id}`);
+        return response.json();
+      }, roomId) as { version: number; groups: { id: string; name: string; columnId: string }[]; items: { id: string; text: string; columnId: string; groupId: string | null; order: number }[] };
+      const beforeRejectedVersion = state.version;
+      await dragItemToDropZone(page, "Beta A", alphaThemes.id, 0);
+      await expect(page.getByRole("alert").filter({ hasText: /original column/i })).toBeVisible({ timeout: 5000 });
+      const rejectedState = await page.evaluate(async (id) => {
+        const response = await fetch(`/api/rooms/${id}`);
+        return response.json();
+      }, roomId) as { version: number; items: { text: string; groupId: string | null }[] };
+      expect(rejectedState.version).toBe(beforeRejectedVersion);
+      expect(rejectedState.items.find((item) => item.text === "Beta A")?.groupId).toBeNull();
+
+      await page.reload();
+      await expect(page.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
+      await expect(page.locator(`[data-drop-list="${alphaThemes.id}"]`, { hasText: "Alpha B" })).toBeVisible({ timeout: 5000 });
+      await expect(page.locator(`[data-drop-list="__ungrouped__"][data-drop-column-id="${alphaThemes.columnId}"]`, { hasText: "Alpha A" })).toBeVisible();
+      await expect(page.locator(".column-board__column", { hasText: "Beta" }).getByText("Beta A")).toBeVisible();
+
+      await ctx.close();
+    });
+
     test.skip("organise create-column form blocks maximum columns with visible feedback", async ({ page }) => {
       await page.goto("/");
       await page.getByRole("button", { name: /create room/i }).click();
