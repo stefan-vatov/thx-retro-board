@@ -798,6 +798,18 @@ describe("RetroRoom Durable Object", () => {
       expect(state.version).toBe(state0.version + 1);
     });
 
+    it("reorderItems rejects unknown participants without mutating layout", async () => {
+      const stub = await setupOrganiseRoom("test-reorder-items-unknown-participant");
+      const before = await stub.getRoomState();
+      const ids = before.items.map((i) => i.id);
+
+      const result = await stub.reorderItems("missing-participant", [ids[2]!, ids[0]!, ids[1]!]);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Participant not found");
+      expect(await stub.getRoomState()).toEqual(before);
+    });
+
     it("reorderItems rejects duplicate missing and unknown item IDs atomically", async () => {
       const stub = await setupOrganiseRoom("test-reorder-items-invalid-ids");
       const before = await stub.getRoomState();
@@ -1325,6 +1337,21 @@ describe("RetroRoom Durable Object", () => {
       expect(state.votes[0]!.participantId).toBe("fac1");
       expect(state.votes[0]!.itemId).toBe(itemId);
       expect(state.votes[0]!.count).toBe(1);
+    });
+
+    it("rejects unknown participant vote mutations without mutating canonical votes", async () => {
+      const stub = await setupVoteRoom("test-vote-unknown-participant");
+      const before = await stub.getRoomState();
+      const itemId = before.items[0]!.id;
+
+      const cast = await stub.castVote("missing-participant", itemId, 1);
+      const remove = await stub.removeVote("missing-participant", itemId);
+
+      expect(cast.success).toBe(false);
+      expect(cast.error).toContain("Participant not found");
+      expect(remove.success).toBe(false);
+      expect(remove.error).toContain("Participant not found");
+      expect(await stub.getRoomState()).toEqual(before);
     });
 
     it("participant can stack votes on the same item", async () => {

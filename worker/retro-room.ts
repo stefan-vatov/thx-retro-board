@@ -274,6 +274,9 @@ export class RetroRoom extends DurableObject<Env> {
 
   async setVoteBudget(participantId: string, budget: number): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
+    if (!this.hasParticipant(s, participantId)) {
+      return { success: false, error: "Participant not found" };
+    }
     if (s.facilitatorId !== participantId) {
       return { success: false, error: "Only the facilitator can set vote budget" };
     }
@@ -324,6 +327,10 @@ export class RetroRoom extends DurableObject<Env> {
   async setPhase(participantId: string, phase: Phase): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
 
+    if (!this.hasParticipant(s, participantId)) {
+      return { success: false, error: "Participant not found" };
+    }
+
     if (s.facilitatorId !== participantId) {
       return { success: false, error: "Only the facilitator can change phase" };
     }
@@ -352,6 +359,10 @@ export class RetroRoom extends DurableObject<Env> {
 
   async setTimer(participantId: string, durationSeconds: number): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
+
+    if (!this.hasParticipant(s, participantId)) {
+      return { success: false, error: "Participant not found" };
+    }
 
     if (s.facilitatorId !== participantId) {
       return { success: false, error: "Only the facilitator can set timers" };
@@ -388,6 +399,10 @@ export class RetroRoom extends DurableObject<Env> {
       return { success: false, error: "Cannot configure columns during vote or review phase" };
     }
     return { success: true };
+  }
+
+  private hasParticipant(s: StoredState, participantId: string): boolean {
+    return s.participants.some((participant) => participant.id === participantId);
   }
 
   async createColumn(participantId: string, rawName: string): Promise<{ success: boolean; error?: string; column?: Column }> {
@@ -459,11 +474,15 @@ export class RetroRoom extends DurableObject<Env> {
     return { success: true, group: columnResult.column };
   }
 
-  async reorderItems(_participantId: string, orderedIds: unknown): Promise<{ success: boolean; error?: string }> {
+  async reorderItems(participantId: string, orderedIds: unknown): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
 
     if (s.phase !== "organise") {
       return { success: false, error: "Cannot reorder items outside organise phase" };
+    }
+
+    if (!this.hasParticipant(s, participantId)) {
+      return { success: false, error: "Participant not found" };
     }
 
     const validation = validateItemReorderPayload(s.items, orderedIds);
@@ -555,6 +574,10 @@ export class RetroRoom extends DurableObject<Env> {
       return { success: false, error: "Cannot vote outside vote phase" };
     }
 
+    if (!this.hasParticipant(s, participantId)) {
+      return { success: false, error: "Participant not found" };
+    }
+
     const itemExists = s.items.some((i) => i.id === itemId);
     if (!itemExists) {
       return { success: false, error: "Item not found" };
@@ -587,6 +610,10 @@ export class RetroRoom extends DurableObject<Env> {
 
     if (s.phase !== "vote") {
       return { success: false, error: "Cannot remove votes outside vote phase" };
+    }
+
+    if (!this.hasParticipant(s, participantId)) {
+      return { success: false, error: "Participant not found" };
     }
 
     const existing = s.votes.find(

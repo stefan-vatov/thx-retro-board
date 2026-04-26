@@ -527,6 +527,98 @@ test.describe("Retro Board E2E", () => {
       await ctxB.close();
     });
 
+    test("same browser rooms keep identical labels and dragged layouts isolated through review and refresh", async ({ browser }) => {
+      const ctx = await browser.newContext();
+      const roomA = await ctx.newPage();
+      await roomA.goto("/");
+      await roomA.getByRole("button", { name: /create room/i }).click();
+      await roomA.waitForURL(/\/room\//);
+      const roomAUrl = roomA.url();
+      const roomAId = new URL(roomAUrl).pathname.split("/").pop()!;
+      await roomA.getByLabel(/display name/i).fill("Alice");
+      await roomA.getByRole("button", { name: /join/i }).click();
+      await expect(roomA.getByText(/Phase: WRITE/i)).toBeVisible();
+
+      const roomB = await ctx.newPage();
+      await roomB.goto("/");
+      await roomB.getByRole("button", { name: /create room/i }).click();
+      await roomB.waitForURL(/\/room\//);
+      const roomBUrl = roomB.url();
+      const roomBId = new URL(roomBUrl).pathname.split("/").pop()!;
+      await roomB.getByLabel(/display name/i).fill("Alice");
+      await roomB.getByRole("button", { name: /join/i }).click();
+      await expect(roomB.getByText(/Phase: WRITE/i)).toBeVisible();
+      expect(roomAId).not.toBe(roomBId);
+
+      for (const page of [roomA, roomB]) {
+        await page.getByRole("button", { name: /configure columns/i }).click();
+        await page.getByLabel(/new column name/i).fill("Shared");
+        await page.getByRole("button", { name: /add column/i }).click();
+        await expect(page.getByRole("heading", { name: "Shared" })).toBeVisible({ timeout: 5000 });
+        await page.getByPlaceholder(/add a retro item/i).fill("Identical item");
+        await page.getByRole("button", { name: /add item/i }).click();
+        await expect(page.getByText("Identical item")).toBeVisible();
+        await page.getByRole("button", { name: /advance to next phase/i }).click();
+        await expect(page.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
+      }
+
+      const stateA = await roomA.evaluate(async (id) => {
+        const response = await fetch(`/api/rooms/${id}`);
+        return response.json();
+      }, roomAId) as { columns: { id: string; name: string }[] };
+      const stateB = await roomB.evaluate(async (id) => {
+        const response = await fetch(`/api/rooms/${id}`);
+        return response.json();
+      }, roomBId) as { columns: { id: string; name: string }[] };
+      const roomASharedId = stateA.columns.find((column) => column.name === "Shared")!.id;
+      const roomBStopId = stateB.columns.find((column) => column.name === "Stop")!.id;
+
+      await dragItemToDropZone(roomA, "Identical item", roomASharedId, 0);
+      await dragItemToDropZone(roomB, "Identical item", roomBStopId, 0);
+
+      for (const page of [roomA, roomB]) {
+        await page.getByRole("button", { name: /advance to next phase/i }).click();
+        await expect(page.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
+        await page.locator("li button[title='Add a vote']").first().click();
+        await page.getByRole("button", { name: /advance to next phase/i }).click();
+        await expect(page.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
+        await page.reload();
+        await expect(page.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
+        await expect(page.getByText("Identical item")).toBeVisible();
+      }
+
+      const finalA = await roomA.evaluate(async (id) => {
+        const response = await fetch(`/api/rooms/${id}`);
+        return response.json();
+      }, roomAId) as { items: { text: string; columnId: string | null }[]; votes: { itemId: string; count: number }[]; phase: string };
+      const finalB = await roomB.evaluate(async (id) => {
+        const response = await fetch(`/api/rooms/${id}`);
+        return response.json();
+      }, roomBId) as { items: { text: string; columnId: string | null }[]; votes: { itemId: string; count: number }[]; phase: string };
+
+      expect(finalA.phase).toBe("review");
+      expect(finalB.phase).toBe("review");
+      expect(finalA.items.find((item) => item.text === "Identical item")?.columnId).toBe(roomASharedId);
+      expect(finalB.items.find((item) => item.text === "Identical item")?.columnId).toBe(roomBStopId);
+      expect(finalA.votes).toHaveLength(1);
+      expect(finalB.votes).toHaveLength(1);
+
+      const lateCtx = await browser.newContext();
+      const lateJoiner = await lateCtx.newPage();
+      await lateJoiner.goto(roomAUrl);
+      await lateJoiner.getByLabel(/display name/i).fill("Late Alice");
+      await lateJoiner.getByRole("button", { name: /join/i }).click();
+      await expect(lateJoiner.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
+      await expect(lateJoiner.getByRole("heading", { name: "Shared" })).toBeVisible({ timeout: 5000 });
+      await expect(lateJoiner.getByText("Identical item")).toBeVisible();
+      await expect(lateJoiner.getByPlaceholder(/add a retro item/i)).toHaveCount(0);
+      await expect(lateJoiner.locator("[data-drag-item-id]")).toHaveCount(0);
+      await expect(lateJoiner.locator("li button[title='Add a vote']")).toHaveCount(0);
+
+      await lateCtx.close();
+      await ctx.close();
+    });
+
     test("refresh preserves room state in each phase", async ({ browser }) => {
       const ctx = await browser.newContext();
       const page = await ctx.newPage();
