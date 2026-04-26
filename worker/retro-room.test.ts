@@ -113,7 +113,34 @@ describe("RetroRoom Durable Object v2 schema", () => {
     expect(state.items).toEqual([
       expect.objectContaining({ id: item.item!.id, text: "Shipping was smooth", columnId, groupId: group.group!.id, order: 0 }),
     ]);
-    expect(state.votes).toEqual([{ participantId: "fac1", groupId: group.group!.id, itemId: group.group!.id, count: 2 }]);
+    expect(state.votes).toEqual([{ participantId: "fac1", groupId: group.group!.id, count: 2 }]);
+  });
+
+  it("enforces vote budget against group IDs without item-level allocations", async () => {
+    const stub = await init("test-v2-group-vote-budget");
+    await stub.join("fac1", "Facilitator");
+    await stub.join("p2", "Participant");
+    const column = await stub.createColumn("fac1", "Lane");
+    const item = await stub.addItem("fac1", "Grouped topic", column.column!.id);
+    await stub.setPhase("fac1", "organise");
+    const group = await stub.createGroup("fac1", "Vote target", column.column!.id);
+    await stub.moveItemToGroup("fac1", item.item!.id, group.group!.id, 0, await freshMovePreconditions(stub, item.item!.id));
+    await stub.setPhase("fac1", "vote");
+
+    const accepted = await stub.castVote("p2", group.group!.id, 5);
+    expect(accepted.success).toBe(true);
+    const beforeOverBudget = await stub.getRoomState();
+    expect(beforeOverBudget.votes).toEqual([{ participantId: "p2", groupId: group.group!.id, count: 5 }]);
+
+    const rejected = await stub.castVote("p2", group.group!.id, 1);
+    expect(rejected.success).toBe(false);
+    expect(rejected.error).toContain("Over budget");
+    expect(await stub.getRoomState()).toEqual(beforeOverBudget);
+
+    const itemLevelAttempt = await stub.castVote("p2", item.item!.id, 1);
+    expect(itemLevelAttempt.success).toBe(false);
+    expect(itemLevelAttempt.error).toBe("Group not found");
+    expect(await stub.getRoomState()).toEqual(beforeOverBudget);
   });
 
   it("rejects item adds without a valid existing column without changing state", async () => {
@@ -435,7 +462,7 @@ describe("RetroRoom Durable Object v2 schema", () => {
     expect(after.items).toEqual([
       expect.objectContaining({ id: keepItem.item!.id, text: "Keep item", columnId: keep.column!.id, groupId: keepGroup.group!.id, order: 0 }),
     ]);
-    expect(after.votes).toEqual([{ participantId: "fac1", groupId: keepGroup.group!.id, itemId: keepGroup.group!.id, count: 1 }]);
+    expect(after.votes).toEqual([{ participantId: "fac1", groupId: keepGroup.group!.id, count: 1 }]);
     expect(after.version).toBe(before.version + 1);
   });
 

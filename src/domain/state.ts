@@ -57,13 +57,14 @@ export function isPhaseAllowed(actionPhase: Phase, currentPhase: Phase): boolean
   return actionPhase === currentPhase;
 }
 
-export function getVotesForItem(votes: VoteAllocation[], itemId: string): number {
+export function getVotesForGroup(votes: VoteAllocation[], groupId: string): number {
   return votes
-    .filter((v) => v.groupId === itemId || v.itemId === itemId)
+    .filter((v) => v.groupId === groupId || v.itemId === groupId)
     .reduce((sum, v) => sum + v.count, 0);
 }
 
-export const getVotesForGroup = getVotesForItem;
+/** @deprecated Votes target groups. Use getVotesForGroup. */
+export const getVotesForItem = getVotesForGroup;
 
 export function getVotesByParticipant(votes: VoteAllocation[], participantId: string): number {
   return votes
@@ -449,7 +450,7 @@ export function applyMoveItemToGroup(
 export function applyCastVote(
   votes: VoteAllocation[],
   participantId: string,
-  itemId: string,
+  groupId: string,
   count: number,
   budget: number,
 ): { votes: VoteAllocation[]; error?: string } {
@@ -464,39 +465,39 @@ export function applyCastVote(
   }
 
   const existing = votes.find(
-    (v) => v.participantId === participantId && (v.groupId === itemId || v.itemId === itemId),
+    (v) => v.participantId === participantId && (v.groupId === groupId || v.itemId === groupId),
   );
 
   if (existing) {
     const updated = votes.map((v) =>
-      v.participantId === participantId && (v.groupId === itemId || v.itemId === itemId)
+      v.participantId === participantId && (v.groupId === groupId || v.itemId === groupId)
         ? { ...v, count: v.count + count }
         : v,
     );
     return { votes: updated };
   }
 
-  return { votes: [...votes, { participantId, groupId: itemId, itemId, count }] };
+  return { votes: [...votes, { participantId, groupId, count }] };
 }
 
 export function applyRemoveVote(
   votes: VoteAllocation[],
   participantId: string,
-  itemId: string,
+  groupId: string,
 ): VoteAllocation[] {
   const existing = votes.find(
-    (v) => v.participantId === participantId && (v.groupId === itemId || v.itemId === itemId),
+    (v) => v.participantId === participantId && (v.groupId === groupId || v.itemId === groupId),
   );
   if (!existing) return votes;
 
   if (existing.count <= 1) {
     return votes.filter(
-      (v) => !(v.participantId === participantId && (v.groupId === itemId || v.itemId === itemId)),
+      (v) => !(v.participantId === participantId && (v.groupId === groupId || v.itemId === groupId)),
     );
   }
 
   return votes.map((v) =>
-    v.participantId === participantId && (v.groupId === itemId || v.itemId === itemId)
+    v.participantId === participantId && (v.groupId === groupId || v.itemId === groupId)
       ? { ...v, count: v.count - 1 }
       : v,
   );

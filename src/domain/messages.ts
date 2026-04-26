@@ -7,7 +7,7 @@ export type ServerToClientMessage =
   | { type: "items-reordered"; items: import("./types").RetroItem[] }
   | { type: "groups-changed"; groups: import("./types").Group[] }
   | { type: "columns-changed"; columns: import("./types").Column[]; version: number }
-  | { type: "vote-changed"; groupId: string; itemId?: string; participantId: string; delta: number; totalForItem: number }
+  | { type: "vote-changed"; groupId: string; itemId?: string; participantId: string; delta: number; totalForGroup: number; totalForItem?: number }
   // delta > 0 for cast-vote (always +count), delta < 0 for remove-vote (always -1).
   // The vote-changed message is informational; authoritative state arrives via snapshot broadcast.
   | { type: "timer-updated"; timer: import("./types").TimerState }

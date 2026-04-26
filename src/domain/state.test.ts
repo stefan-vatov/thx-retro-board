@@ -659,18 +659,18 @@ describe("applyMoveItemToGroup", () => {
 
 describe("applyCastVote", () => {
   it("adds a new vote allocation", () => {
-    const result = applyCastVote([], "p1", "i1", 1, 5);
+    const result = applyCastVote([], "p1", "g1", 1, 5);
     expect(result.error).toBeUndefined();
-    expect(result.votes).toEqual([{ participantId: "p1", groupId: "i1", itemId: "i1", count: 1 }]);
+    expect(result.votes).toEqual([{ participantId: "p1", groupId: "g1", count: 1 }]);
   });
 
-  it("stacks votes on the same item", () => {
+  it("stacks votes on the same group", () => {
     const result = applyCastVote(
-      [{ participantId: "p1", itemId: "i1", count: 2 }],
-      "p1", "i1", 2, 5,
+      [{ participantId: "p1", groupId: "g1", count: 2 }],
+      "p1", "g1", 2, 5,
     );
     expect(result.error).toBeUndefined();
-    expect(result.votes).toEqual([{ participantId: "p1", itemId: "i1", count: 4 }]);
+    expect(result.votes).toEqual([{ participantId: "p1", groupId: "g1", count: 4 }]);
   });
 
   it("rejects over-budget vote", () => {
@@ -694,14 +694,14 @@ describe("applyCastVote", () => {
     expect(result.error).toBeTruthy();
   });
 
-  it("distributes votes across items", () => {
-    let result = applyCastVote([], "p1", "i1", 2, 5);
+  it("distributes votes across groups", () => {
+    let result = applyCastVote([], "p1", "g1", 2, 5);
     expect(result.error).toBeUndefined();
-    result = applyCastVote(result.votes, "p1", "i2", 3, 5);
+    result = applyCastVote(result.votes, "p1", "g2", 3, 5);
     expect(result.error).toBeUndefined();
     expect(result.votes).toEqual([
-      { participantId: "p1", groupId: "i1", itemId: "i1", count: 2 },
-      { participantId: "p1", groupId: "i2", itemId: "i2", count: 3 },
+      { participantId: "p1", groupId: "g1", count: 2 },
+      { participantId: "p1", groupId: "g2", count: 3 },
     ]);
   });
 

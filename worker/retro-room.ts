@@ -33,7 +33,7 @@ import {
   applyMoveItemToGroup,
   applyCastVote,
   applyRemoveVote,
-  getVotesForItem,
+  getVotesForGroup,
 } from "../src/domain";
 
 interface StoredTimer {
@@ -840,7 +840,7 @@ export class RetroRoom extends DurableObject<Env> {
     return { success: true };
   }
 
-  async castVote(participantId: string, itemId: string, count: number): Promise<{ success: boolean; error?: string }> {
+  async castVote(participantId: string, groupId: string, count: number): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
 
     if (s.phase !== "vote") {
@@ -851,12 +851,12 @@ export class RetroRoom extends DurableObject<Env> {
       return { success: false, error: "Participant not found" };
     }
 
-    const groupExists = s.groups.some((group) => group.id === itemId);
+    const groupExists = s.groups.some((group) => group.id === groupId);
     if (!groupExists) {
       return { success: false, error: "Group not found" };
     }
 
-    const result = applyCastVote(s.votes, participantId, itemId, count, s.voteBudget);
+    const result = applyCastVote(s.votes, participantId, groupId, count, s.voteBudget);
     if (result.error) {
       return { success: false, error: result.error };
     }
@@ -864,14 +864,13 @@ export class RetroRoom extends DurableObject<Env> {
     s.votes = result.votes;
     await this.saveState();
 
-    const totalForItem = getVotesForItem(s.votes, itemId);
+    const totalForGroup = getVotesForGroup(s.votes, groupId);
     const broadcast: ServerToClientMessage = {
       type: "vote-changed",
-        groupId: itemId,
-      itemId,
+      groupId,
       participantId,
       delta: count,
-      totalForItem,
+      totalForGroup,
     };
     this.broadcast(broadcast);
     this.broadcastState(s);
@@ -879,7 +878,7 @@ export class RetroRoom extends DurableObject<Env> {
     return { success: true };
   }
 
-  async removeVote(participantId: string, itemId: string): Promise<{ success: boolean; error?: string }> {
+  async removeVote(participantId: string, groupId: string): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
 
     if (s.phase !== "vote") {
@@ -890,24 +889,28 @@ export class RetroRoom extends DurableObject<Env> {
       return { success: false, error: "Participant not found" };
     }
 
+    const groupExists = s.groups.some((group) => group.id === groupId);
+    if (!groupExists) {
+      return { success: false, error: "Group not found" };
+    }
+
     const existing = s.votes.find(
-      (v) => v.participantId === participantId && (v.groupId === itemId || v.itemId === itemId),
+      (v) => v.participantId === participantId && (v.groupId === groupId || v.itemId === groupId),
     );
     if (!existing) {
       return { success: false, error: "No votes to remove" };
     }
 
-    s.votes = applyRemoveVote(s.votes, participantId, itemId);
+    s.votes = applyRemoveVote(s.votes, participantId, groupId);
     await this.saveState();
 
-    const totalForItem = getVotesForItem(s.votes, itemId);
+    const totalForGroup = getVotesForGroup(s.votes, groupId);
     const broadcast: ServerToClientMessage = {
       type: "vote-changed",
-        groupId: itemId,
-      itemId,
+      groupId,
       participantId,
       delta: -1,
-      totalForItem,
+      totalForGroup,
     };
     this.broadcast(broadcast);
     this.broadcastState(s);

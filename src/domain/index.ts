@@ -14,6 +14,7 @@ export {
   canTransition,
   isPhaseAllowed,
   getVotesForItem,
+  getVotesForGroup,
   getVotesByParticipant,
   getRemainingBudget,
   isTimerExpired,

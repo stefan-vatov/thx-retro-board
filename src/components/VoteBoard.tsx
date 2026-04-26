@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { RoomState } from "../domain";
-import { getUngroupedItems, getGroupedItems, getVotesForItem, getRemainingBudget, getVotesByParticipant } from "../domain";
+import { getGroupedItems, getVotesForGroup, getRemainingBudget, getVotesByParticipant } from "../domain";
 
 interface VoteBoardProps {
   roomState: RoomState;
@@ -21,11 +21,11 @@ export function VoteBoard({ roomState, participantId, send, serverError = null, 
   const sortedGroups = [...roomState.groups].sort((a, b) => a.order - b.order);
 
   const handleVote = useCallback(
-    (itemId: string) => {
+    (groupId: string) => {
       if (effectiveRemaining <= 0) return;
       setVoteError(null);
       clearServerError?.();
-      if (!send({ type: "cast-vote", itemId, count: 1 })) {
+      if (!send({ type: "cast-vote", groupId, count: 1 })) {
         setVoteError("Vote not sent. Please try again once the room is connected.");
         return;
       }
@@ -35,15 +35,15 @@ export function VoteBoard({ roomState, participantId, send, serverError = null, 
   );
 
   const handleRemoveVote = useCallback(
-    (itemId: string) => {
-      if (pendingRemoves.has(itemId)) return;
+    (groupId: string) => {
+      if (pendingRemoves.has(groupId)) return;
       setVoteError(null);
       clearServerError?.();
-      if (!send({ type: "remove-vote", itemId })) {
+      if (!send({ type: "remove-vote", groupId })) {
         setVoteError("Vote not removed. Please try again once the room is connected.");
         return;
       }
-      setPendingRemoves((prev) => new Set(prev).add(itemId));
+      setPendingRemoves((prev) => new Set(prev).add(groupId));
     },
     [clearServerError, pendingRemoves, send],
   );
@@ -59,50 +59,65 @@ export function VoteBoard({ roomState, participantId, send, serverError = null, 
     }
   }, [roomState.version]);
 
-  function getParticipantVotesForItem(itemId: string): number {
+  function getParticipantVotesForGroup(groupId: string): number {
     return roomState.votes
-      .filter((v) => v.participantId === participantId && v.itemId === itemId)
+      .filter((v) => v.participantId === participantId && (v.groupId === groupId || v.itemId === groupId))
       .reduce((sum, v) => sum + v.count, 0);
   }
 
-  function renderItem(item: { id: string; text: string }) {
-    const totalVotes = getVotesForItem(roomState.votes, item.id);
-    const myVotes = getParticipantVotesForItem(item.id);
-
+  function renderGroup(group: { id: string; name: string }) {
+    const totalVotes = getVotesForGroup(roomState.votes, group.id);
+    const myVotes = getParticipantVotesForGroup(group.id);
+    const groupItems = getGroupedItems(roomState.items, group.id);
     return (
-      <li key={item.id} className="item-row">
-        <span className="item-row__text">{item.text}</span>
-        <span className="item-row__actions" style={{ display: "flex", gap: "var(--space-2)", alignItems: "center" }}>
-          <span style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", minWidth: "3rem", textAlign: "right" }}>
-            {totalVotes} vote{totalVotes !== 1 ? "s" : ""}
-          </span>
-          {myVotes > 0 && (
-            <span style={{ fontSize: "var(--text-xs)", color: "var(--accent)", marginLeft: "var(--space-1)" }}>
-              (you: {myVotes})
+      <div key={group.id} className="group-panel" data-vote-group-id={group.id}>
+        <div className="group-panel__header">
+          <h4 className="group-panel__title">{group.name}</h4>
+          <span className="item-row__actions" style={{ display: "flex", gap: "var(--space-2)", alignItems: "center" }}>
+            <span style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", minWidth: "3rem", textAlign: "right" }}>
+              {totalVotes} vote{totalVotes !== 1 ? "s" : ""}
             </span>
-          )}
-          <button
-            className="reorder-btn"
-            onClick={() => handleRemoveVote(item.id)}
-            disabled={myVotes === 0 || pendingRemoves.has(item.id)}
-            title="Remove one of your votes"
-            aria-label="Remove one of your votes"
-          >
-            −
-          </button>
-          <button
-            className="reorder-btn"
-            onClick={() => handleVote(item.id)}
-            disabled={effectiveRemaining <= 0}
-            title="Add a vote"
-            aria-label="Add a vote"
-          >
-            +
-          </button>
-        </span>
-      </li>
+            {myVotes > 0 && (
+              <span style={{ fontSize: "var(--text-xs)", color: "var(--accent)", marginLeft: "var(--space-1)" }}>
+                (you: {myVotes})
+              </span>
+            )}
+            <button
+              className="reorder-btn"
+              onClick={() => handleRemoveVote(group.id)}
+              disabled={myVotes === 0 || pendingRemoves.has(group.id)}
+              title={`Remove one of your votes from ${group.name}`}
+              aria-label={`Remove one of your votes from ${group.name}`}
+            >
+              −
+            </button>
+            <button
+              className="reorder-btn"
+              onClick={() => handleVote(group.id)}
+              disabled={effectiveRemaining <= 0}
+              title={`Add a vote to ${group.name}`}
+              aria-label={`Add a vote to ${group.name}`}
+            >
+              +
+            </button>
+          </span>
+        </div>
+        {groupItems.length === 0 ? (
+          <p className="text-muted" style={{ fontSize: "var(--text-sm)", margin: 0 }}>No items.</p>
+        ) : (
+          <ul className="item-list" aria-label={`Items in ${group.name}`}>
+            {groupItems.map((item) => (
+              <li key={item.id} className="item-row">
+                <span className="item-row__text">{item.text}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     );
   }
+
+  const hasGroups = sortedGroups.length > 0;
 
   return (
     <div>
@@ -119,43 +134,15 @@ export function VoteBoard({ roomState, participantId, send, serverError = null, 
         </div>
       )}
 
-      {sortedGroups.map((group) => {
-        const groupItems = getGroupedItems(roomState.items, group.id);
-        return (
-          <div key={group.id} className="group-panel">
-            <div className="group-panel__header">
-              <h4 className="group-panel__title">{group.name}</h4>
-            </div>
-            {groupItems.length === 0 ? (
-              <p className="text-muted" style={{ fontSize: "var(--text-sm)", margin: 0 }}>No items.</p>
-            ) : (
-              <ul className="item-list">
-                {groupItems.map((item) => renderItem(item))}
-              </ul>
-            )}
-          </div>
-        );
-      })}
-
-      {(() => {
-        const ungrouped = getUngroupedItems(roomState.items);
-        if (ungrouped.length === 0) return null;
-        return (
-          <div className="ungrouped-section">
-            <div className="section-header">
-              <span className="section-title">Ungrouped</span>
-            </div>
-            <ul className="item-list">
-              {ungrouped.map((item) => renderItem(item))}
-            </ul>
-          </div>
-        );
-      })()}
-
-      {roomState.items.length === 0 && (
+      {hasGroups ? (
+        sortedGroups.map((group) => renderGroup(group))
+      ) : (
         <div className="empty-state">
           <div className="empty-state__icon">🗳️</div>
-          <p className="empty-state__text">No items to vote on.</p>
+          <p className="empty-state__text">No groups to vote on.</p>
+          <p className="text-muted" style={{ margin: 0 }}>
+            Create groups during organise before voting, or advance when there is nothing to vote on.
+          </p>
         </div>
       )}
     </div>

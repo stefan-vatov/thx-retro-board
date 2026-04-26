@@ -507,6 +507,87 @@ test.describe("Retro Board E2E", () => {
       await ctx.close();
     });
 
+    test("group voting aggregates in realtime, persists through refresh, and handles no groups", async ({ browser }) => {
+      const ctx1 = await browser.newContext();
+      const alice = await ctx1.newPage();
+      await createJoinedRoom(alice);
+      const roomUrl = alice.url();
+      const roomId = new URL(roomUrl).pathname.split("/").pop()!;
+
+      const ctx2 = await browser.newContext();
+      const bob = await ctx2.newPage();
+      await bob.goto(roomUrl);
+      await bob.getByLabel(/display name/i).fill("Bob");
+      await bob.getByRole("button", { name: /join/i }).click();
+      await expect(bob.getByText(/Phase: WRITE/i)).toBeVisible();
+
+      await createWriteColumn(alice, "Wins");
+      await alice.getByLabel(/column for new item/i).selectOption({ label: "Wins" });
+      await alice.getByPlaceholder(/add a retro item/i).fill("Shared success");
+      await alice.getByRole("button", { name: /add item/i }).click();
+      await expect(bob.getByText("Shared success")).toBeVisible({ timeout: 5000 });
+
+      await advanceToPhase(alice, "organise");
+      await expect(bob.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
+      const lane = alice.locator(".column-board__column", { hasText: "Wins" });
+      await lane.getByPlaceholder(/new group name/i).fill("Launch wins");
+      await lane.getByRole("button", { name: /create group/i }).click();
+      await expect(bob.getByText("Launch wins")).toBeVisible({ timeout: 5000 });
+
+      const organiseState = await alice.evaluate(async (id) => {
+        const response = await fetch(`/api/rooms/${id}`);
+        return response.json();
+      }, roomId) as { groups: { id: string; name: string }[] };
+      const launchWins = organiseState.groups.find((group) => group.name === "Launch wins")!;
+      await dragItemToDropZone(alice, "Shared success", launchWins.id, 0);
+      await expect(bob.locator(`[data-drop-list="${launchWins.id}"]`, { hasText: "Shared success" })).toBeVisible({ timeout: 5000 });
+
+      await alice.getByRole("button", { name: /advance to next phase/i }).click();
+      await expect(alice.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
+      await expect(bob.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
+      await expect(alice.locator(".item-row", { hasText: "Shared success" }).getByRole("button")).toHaveCount(0);
+
+      await alice.getByRole("button", { name: /add a vote to Launch wins/i }).click();
+      await alice.getByRole("button", { name: /add a vote to Launch wins/i }).click();
+      await bob.getByRole("button", { name: /add a vote to Launch wins/i }).click();
+      await expect(alice.locator("[data-vote-group-id]", { hasText: "Launch wins" }).getByText(/3 votes?/)).toBeVisible({ timeout: 5000 });
+      await expect(bob.locator("[data-vote-group-id]", { hasText: "Launch wins" }).getByText(/3 votes?/)).toBeVisible({ timeout: 5000 });
+
+      const voteState = await alice.evaluate(async (id) => {
+        const response = await fetch(`/api/rooms/${id}`);
+        return response.json();
+      }, roomId) as { votes: { participantId: string; groupId: string; itemId?: string; count: number }[] };
+      expect(voteState.votes).toEqual(expect.arrayContaining([
+        { participantId: expect.any(String), groupId: launchWins.id, count: 2 },
+        { participantId: expect.any(String), groupId: launchWins.id, count: 1 },
+      ]));
+      expect(voteState.votes.every((vote) => vote.groupId === launchWins.id && vote.itemId === undefined)).toBe(true);
+
+      await bob.reload();
+      await expect(bob.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
+      await expect(bob.locator("[data-vote-group-id]", { hasText: "Launch wins" }).getByText(/3 votes?/)).toBeVisible({ timeout: 5000 });
+      await alice.getByRole("button", { name: /advance to next phase/i }).click();
+      await expect(alice.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
+      await expect(bob.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
+
+      await ctx1.close();
+      await ctx2.close();
+
+      const emptyCtx = await browser.newContext();
+      const emptyPage = await emptyCtx.newPage();
+      await createJoinedRoom(emptyPage);
+      await createWriteColumn(emptyPage, "Topics");
+      await emptyPage.getByLabel(/column for new item/i).selectOption({ label: "Topics" });
+      await emptyPage.getByPlaceholder(/add a retro item/i).fill("Ungrouped only");
+      await emptyPage.getByRole("button", { name: /add item/i }).click();
+      await advanceToPhase(emptyPage, "vote");
+      await expect(emptyPage.getByText("No groups to vote on.")).toBeVisible({ timeout: 5000 });
+      await expect(emptyPage.getByRole("button", { name: /add a vote/i })).toHaveCount(0);
+      await emptyPage.getByRole("button", { name: /advance to next phase/i }).click();
+      await expect(emptyPage.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
+      await emptyCtx.close();
+    });
+
     test.skip("organise create-column form blocks maximum columns with visible feedback", async ({ page }) => {
       await page.goto("/");
       await page.getByRole("button", { name: /create room/i }).click();
