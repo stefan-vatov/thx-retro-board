@@ -18,6 +18,8 @@ export type ClientToServerMessage =
   | { type: "add-item"; text: string; columnId?: string | null }
   | { type: "reorder-items"; itemIds: string[] }
   | { type: "create-group"; name: string; columnId: string }
+  | { type: "edit-group"; groupId: string; name: string }
+  | { type: "delete-group"; groupId: string }
   | { type: "create-column"; name: string }
   | { type: "edit-column"; columnId: string; name: string }
   | { type: "delete-column"; columnId: string }

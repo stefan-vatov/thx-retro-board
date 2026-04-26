@@ -182,7 +182,7 @@ export function OrganiseBoard({ roomState, isFacilitator, send, serverError = nu
     setDragStart({
       itemId,
       expectedVersion: roomState.version,
-      sourceGroupId: item.columnId ?? item.groupId,
+      sourceGroupId: item.groupId,
       sourceIndex: item.order,
     });
     setActiveDrop(null);

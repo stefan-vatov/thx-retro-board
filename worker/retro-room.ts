@@ -23,6 +23,10 @@ import {
   applyEditColumn,
   applyDeleteColumn,
   validateFullColumnPermutation,
+  validateGroupReorderPayload,
+  applyReorderColumnGroups,
+  applyEditGroup,
+  applyDeleteGroup,
   applyReorderItems,
   validateItemReorderPayload,
   validateExistingColumnId,
@@ -577,11 +581,6 @@ export class RetroRoom extends DurableObject<Env> {
   }
 
   async createGroup(participantId: string, rawName: string, columnId?: string): Promise<{ success: boolean; error?: string; group?: Group }> {
-    if (columnId === undefined) {
-      const columnResult = await this.createColumn(participantId, rawName);
-      if (!columnResult.success) return { success: false, error: columnResult.error };
-      return { success: true, group: { ...columnResult.column!, columnId: columnResult.column!.id } };
-    }
     const s = await this.loadState();
     if (s.phase !== "organise") {
       return { success: false, error: "Cannot create groups outside organise phase" };
@@ -636,8 +635,68 @@ export class RetroRoom extends DurableObject<Env> {
     return { success: true };
   }
 
-  async reorderGroups(participantId: string, orderedIds: string[]): Promise<{ success: boolean; error?: string }> {
-    return this.reorderColumns(participantId, orderedIds);
+  private canMutateGroups(s: StoredState, participantId: string): { success: true } | { success: false; error: string } {
+    if (s.phase !== "organise") {
+      return { success: false, error: "Cannot mutate groups outside organise phase" };
+    }
+    if (!this.hasParticipant(s, participantId)) {
+      return { success: false, error: "Participant not found" };
+    }
+    return { success: true };
+  }
+
+  async editGroup(participantId: string, groupId: string, rawName: string): Promise<{ success: boolean; error?: string; group?: Group }> {
+    const s = await this.loadState();
+    const allowed = this.canMutateGroups(s, participantId);
+    if (!allowed.success) return allowed;
+    if (typeof groupId !== "string" || groupId.trim().length === 0) {
+      return { success: false, error: "Group not found" };
+    }
+
+    const result = applyEditGroup(s.groups, groupId, rawName);
+    if (result.error) {
+      return { success: false, error: result.error };
+    }
+    s.groups = result.groups;
+    await this.saveState();
+    this.broadcastState(s);
+    return { success: true, group: s.groups.find((group) => group.id === groupId) };
+  }
+
+  async deleteGroup(participantId: string, groupId: string): Promise<{ success: boolean; error?: string }> {
+    const s = await this.loadState();
+    const allowed = this.canMutateGroups(s, participantId);
+    if (!allowed.success) return allowed;
+    if (typeof groupId !== "string" || groupId.trim().length === 0) {
+      return { success: false, error: "Group not found" };
+    }
+
+    const result = applyDeleteGroup(s.groups, s.items, s.votes, groupId);
+    if (result.error) {
+      return { success: false, error: result.error };
+    }
+    s.groups = result.groups;
+    s.items = result.items;
+    s.votes = result.votes;
+    await this.saveState();
+    this.broadcastState(s);
+    return { success: true };
+  }
+
+  async reorderGroups(participantId: string, orderedIds: unknown): Promise<{ success: boolean; error?: string }> {
+    const s = await this.loadState();
+    const allowed = this.canMutateGroups(s, participantId);
+    if (!allowed.success) return allowed;
+
+    const validation = validateGroupReorderPayload(s.groups, orderedIds);
+    if (!validation.valid) {
+      return { success: false, error: validation.error };
+    }
+
+    s.groups = applyReorderColumnGroups(s.groups, validation.ids);
+    await this.saveState();
+    this.broadcastState(s);
+    return { success: true };
   }
 
   async moveItemToGroup(
@@ -935,6 +994,22 @@ export class RetroRoom extends DurableObject<Env> {
       }
       case "create-group": {
         const result = await this.createGroup(participantId, msg.name, msg.columnId);
+        if (!result.success) {
+          const ws = this.sessions.get(participantId);
+          ws?.send(JSON.stringify({ type: "error", message: result.error }));
+        }
+        break;
+      }
+      case "edit-group": {
+        const result = await this.editGroup(participantId, msg.groupId, msg.name);
+        if (!result.success) {
+          const ws = this.sessions.get(participantId);
+          ws?.send(JSON.stringify({ type: "error", message: result.error }));
+        }
+        break;
+      }
+      case "delete-group": {
+        const result = await this.deleteGroup(participantId, msg.groupId);
         if (!result.success) {
           const ws = this.sessions.get(participantId);
           ws?.send(JSON.stringify({ type: "error", message: result.error }));

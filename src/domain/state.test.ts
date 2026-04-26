@@ -27,6 +27,8 @@ import {
   applyReorderItems,
   validateItemReorderPayload,
   applyReorderGroups,
+  validateGroupReorderPayload,
+  applyDeleteGroup,
   applyMoveItemToGroup,
   applyCastVote,
   applyRemoveVote,
@@ -536,6 +538,57 @@ describe("applyReorderGroups", () => {
     const result = applyReorderGroups(groups, ["g3", "g1", "g2"]);
     expect(result.map((g) => g.id)).toEqual(["g3", "g1", "g2"]);
     expect(result.map((g) => g.order)).toEqual([0, 1, 2]);
+  });
+});
+
+describe("validateGroupReorderPayload", () => {
+  const groups: Group[] = [
+    { id: "g1", name: "A", columnId: "col-1", order: 0 },
+    { id: "g2", name: "B", columnId: "col-1", order: 1 },
+    { id: "g3", name: "C", columnId: "col-2", order: 0 },
+  ];
+
+  it("accepts a complete same-column group permutation", () => {
+    expect(validateGroupReorderPayload(groups, ["g2", "g1"])).toEqual({ valid: true, ids: ["g2", "g1"] });
+  });
+
+  it("rejects duplicate, omitted, unknown, and cross-column group reorder payloads", () => {
+    expect(validateGroupReorderPayload(groups, ["g1", "g1"])).toMatchObject({ valid: false, error: expect.stringContaining("duplicate") });
+    expect(validateGroupReorderPayload(groups, ["g1"])).toMatchObject({ valid: false, error: expect.stringContaining("every group") });
+    expect(validateGroupReorderPayload(groups, ["g1", "missing"])).toMatchObject({ valid: false, error: expect.stringContaining("unknown") });
+    expect(validateGroupReorderPayload(groups, ["g1", "g3"])).toMatchObject({ valid: false, error: expect.stringContaining("single column") });
+  });
+});
+
+describe("applyDeleteGroup", () => {
+  it("removes only the target nested group, ungroups its items in the same column, and removes its votes", () => {
+    const groups: Group[] = [
+      { id: "g1", name: "A", columnId: "col-1", order: 0 },
+      { id: "g2", name: "B", columnId: "col-1", order: 1 },
+      { id: "g3", name: "C", columnId: "col-2", order: 0 },
+    ];
+    const items: RetroItem[] = [
+      { id: "i1", text: "One", authorId: "p1", columnId: "col-1", groupId: "g1", order: 0 },
+      { id: "i2", text: "Two", authorId: "p1", columnId: "col-1", groupId: "g2", order: 0 },
+      { id: "i3", text: "Three", authorId: "p1", columnId: "col-2", groupId: "g3", order: 0 },
+    ];
+    const votes = [
+      { participantId: "p1", groupId: "g1", itemId: "g1", count: 1 },
+      { participantId: "p2", groupId: "g2", itemId: "g2", count: 2 },
+    ];
+
+    const result = applyDeleteGroup(groups, items, votes, "g1");
+
+    expect([...result.groups].sort((a, b) => a.columnId.localeCompare(b.columnId) || a.order - b.order)).toEqual([
+      { id: "g2", name: "B", columnId: "col-1", order: 0 },
+      { id: "g3", name: "C", columnId: "col-2", order: 0 },
+    ]);
+    expect(result.items).toEqual([
+      expect.objectContaining({ id: "i1", columnId: "col-1", groupId: null, order: 0 }),
+      expect.objectContaining({ id: "i2", columnId: "col-1", groupId: "g2", order: 0 }),
+      expect.objectContaining({ id: "i3", columnId: "col-2", groupId: "g3", order: 0 }),
+    ]);
+    expect(result.votes).toEqual([{ participantId: "p2", groupId: "g2", itemId: "g2", count: 2 }]);
   });
 });
 

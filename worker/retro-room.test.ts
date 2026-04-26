@@ -196,6 +196,130 @@ describe("RetroRoom Durable Object v2 schema", () => {
     expect(await stub.getRoomState()).toEqual(before);
   });
 
+  it("accepts same-column group reorder and rejects duplicate, omitted, unknown, and cross-column group payloads atomically", async () => {
+    const stub = await init("test-v2-group-reorder-invariants");
+    await stub.join("fac1", "Facilitator");
+    const first = await stub.createColumn("fac1", "First");
+    const second = await stub.createColumn("fac1", "Second");
+    await stub.setPhase("fac1", "organise");
+    const firstA = await stub.createGroup("fac1", "First A", first.column!.id);
+    const firstB = await stub.createGroup("fac1", "First B", first.column!.id);
+    const secondA = await stub.createGroup("fac1", "Second A", second.column!.id);
+
+    const accepted = await stub.reorderGroups("fac1", [firstB.group!.id, firstA.group!.id]);
+    expect(accepted.success).toBe(true);
+    const afterAccepted = await stub.getRoomState();
+    expect(afterAccepted.groups
+      .filter((group) => group.columnId === first.column!.id)
+      .sort((a, b) => a.order - b.order)
+      .map((group) => [group.id, group.order])).toEqual([
+      [firstB.group!.id, 0],
+      [firstA.group!.id, 1],
+    ]);
+
+    for (const groupIds of [
+      [firstB.group!.id, firstB.group!.id],
+      [firstB.group!.id],
+      [firstB.group!.id, "missing-group"],
+      [firstB.group!.id, secondA.group!.id],
+    ]) {
+      const before = await stub.getRoomState();
+      const rejected = await stub.reorderGroups("fac1", groupIds);
+      expect(rejected.success).toBe(false);
+      expect(await stub.getRoomState()).toEqual(before);
+    }
+  });
+
+  it("rejects stale item moves without changing state or version", async () => {
+    const stub = await init("test-v2-stale-item-move-reject");
+    await stub.join("fac1", "Facilitator");
+    const column = await stub.createColumn("fac1", "Lane");
+    const item = await stub.addItem("fac1", "Scoped item", column.column!.id);
+    await stub.setPhase("fac1", "organise");
+    const group = await stub.createGroup("fac1", "Group", column.column!.id);
+    const stalePreconditions = await freshMovePreconditions(stub, item.item!.id);
+    const otherGroup = await stub.createGroup("fac1", "Other group", column.column!.id);
+    expect(otherGroup.success).toBe(true);
+
+    const before = await stub.getRoomState();
+    const stale = await stub.moveItemToGroup("fac1", item.item!.id, group.group!.id, 0, stalePreconditions);
+
+    expect(stale.success).toBe(false);
+    expect(stale.error).toContain("Stale");
+    expect(await stub.getRoomState()).toEqual(before);
+  });
+
+  it("rejects duplicate, omitted, unknown, and cross-column item reorder payloads atomically", async () => {
+    const stub = await init("test-v2-item-reorder-invariants");
+    await stub.join("fac1", "Facilitator");
+    const first = await stub.createColumn("fac1", "First");
+    const second = await stub.createColumn("fac1", "Second");
+    const firstA = await stub.addItem("fac1", "First A", first.column!.id);
+    const firstB = await stub.addItem("fac1", "First B", first.column!.id);
+    const secondA = await stub.addItem("fac1", "Second A", second.column!.id);
+    await stub.setPhase("fac1", "organise");
+
+    for (const itemIds of [
+      [firstA.item!.id, firstA.item!.id],
+      [firstA.item!.id],
+      [firstA.item!.id, "missing-item"],
+      [firstA.item!.id, secondA.item!.id],
+    ]) {
+      const before = await stub.getRoomState();
+      const rejected = await stub.reorderItems("fac1", itemIds);
+      expect(rejected.success).toBe(false);
+      expect(await stub.getRoomState()).toEqual(before);
+    }
+
+    const accepted = await stub.reorderItems("fac1", [firstB.item!.id, firstA.item!.id]);
+    expect(accepted.success).toBe(true);
+    const afterAccepted = await stub.getRoomState();
+    expect(afterAccepted.items
+      .filter((item) => item.columnId === first.column!.id && item.groupId === null)
+      .sort((a, b) => a.order - b.order)
+      .map((item) => item.id)).toEqual([firstB.item!.id, firstA.item!.id]);
+  });
+
+  it("creates, renames, and deletes nested groups while preserving parent column invariants", async () => {
+    const stub = await init("test-v2-nested-group-crud-invariants");
+    await stub.join("fac1", "Facilitator");
+    const column = await stub.createColumn("fac1", "Lane");
+    const item = await stub.addItem("fac1", "Grouped item", column.column!.id);
+    await stub.setPhase("fac1", "organise");
+    const group = await stub.createGroup("fac1", "Original", column.column!.id);
+    await stub.moveItemToGroup("fac1", item.item!.id, group.group!.id, 0, await freshMovePreconditions(stub, item.item!.id));
+    await stub.setPhase("fac1", "vote");
+    await stub.castVote("fac1", group.group!.id, 1);
+    await stub.setPhaseForTest("organise");
+
+    const renamed = await stub.editGroup("fac1", group.group!.id, "Renamed");
+    expect(renamed).toMatchObject({ success: true, group: { id: group.group!.id, name: "Renamed", columnId: column.column!.id } });
+    const beforeDelete = await stub.getRoomState();
+
+    const deleted = await stub.deleteGroup("fac1", group.group!.id);
+    expect(deleted.success).toBe(true);
+    const afterDelete = await stub.getRoomState();
+    expect(afterDelete.columns).toEqual(beforeDelete.columns);
+    expect(afterDelete.groups).toEqual([]);
+    expect(afterDelete.items).toEqual([
+      expect.objectContaining({ id: item.item!.id, columnId: column.column!.id, groupId: null, order: 0 }),
+    ]);
+    expect(afterDelete.votes).toEqual([]);
+    expect(afterDelete.version).toBe(beforeDelete.version + 1);
+  });
+
+  it("rejects missing or unknown group parent columns without changing state", async () => {
+    const stub = await init("test-v2-group-parent-required");
+    await stub.join("fac1", "Facilitator");
+    await stub.createColumn("fac1", "Lane");
+    await stub.setPhase("fac1", "organise");
+    const before = await stub.getRoomState();
+
+    await expect(stub.createGroup("fac1", "No parent")).resolves.toMatchObject({ success: false, error: "Column not found" });
+    await expect(stub.createGroup("fac1", "Unknown parent", "missing-column")).resolves.toMatchObject({ success: false, error: "Column not found" });
+    expect(await stub.getRoomState()).toEqual(before);
+  });
+
   it("allows the facilitator to create, rename, reorder, and delete columns in write and organise", async () => {
     const stub = await init("test-v2-column-crud-facilitator-phases");
     await stub.join("fac1", "Facilitator");

@@ -223,6 +223,111 @@ export function applyReorderGroups<T extends { id: string; order: number }>(grou
   return reordered.map((g, idx) => ({ ...g, order: idx }));
 }
 
+export function validateGroupReorderPayload(
+  groups: Group[],
+  orderedIds: unknown,
+): { valid: true; ids: string[] } | { valid: false; error: string } {
+  if (!Array.isArray(orderedIds)) {
+    return { valid: false, error: "Group order must be an array" };
+  }
+  if (!orderedIds.every((id): id is string => typeof id === "string")) {
+    return { valid: false, error: "Group order must contain only group IDs" };
+  }
+  if (orderedIds.length === 0) {
+    return { valid: false, error: "Group reorder must include every group in one column exactly once" };
+  }
+
+  const groupsById = new Map(groups.map((group) => [group.id, group]));
+  const seen = new Set<string>();
+  let targetColumnId: string | undefined;
+
+  for (const id of orderedIds) {
+    if (seen.has(id)) {
+      return { valid: false, error: "Group reorder contains a duplicate group" };
+    }
+    seen.add(id);
+
+    const group = groupsById.get(id);
+    if (!group) {
+      return { valid: false, error: "Group reorder contains an unknown group" };
+    }
+    targetColumnId ??= group.columnId;
+    if (group.columnId !== targetColumnId) {
+      return { valid: false, error: "Group reorder must be scoped to a single column" };
+    }
+  }
+
+  const scopedGroupIds = groups
+    .filter((group) => group.columnId === targetColumnId)
+    .map((group) => group.id);
+  if (scopedGroupIds.length !== orderedIds.length) {
+    return { valid: false, error: "Group reorder must include every group in one column exactly once" };
+  }
+  for (const id of scopedGroupIds) {
+    if (!seen.has(id)) {
+      return { valid: false, error: "Group reorder is missing a group from the target column" };
+    }
+  }
+
+  return { valid: true, ids: orderedIds };
+}
+
+export function applyReorderColumnGroups(groups: Group[], orderedIds: string[]): Group[] {
+  const orderedIdSet = new Set(orderedIds);
+  const targetColumnId = groups.find((group) => group.id === orderedIds[0])?.columnId;
+  if (targetColumnId === undefined) return groups;
+
+  const reorderedGroups = applyReorderGroups(
+    groups.filter((group) => orderedIdSet.has(group.id)),
+    orderedIds,
+  );
+  const reorderedById = new Map(reorderedGroups.map((group) => [group.id, group]));
+
+  return groups.map((group) => reorderedById.get(group.id) ?? group);
+}
+
+export function applyEditGroup(groups: Group[], groupId: string, rawName: string): { groups: Group[]; error?: string } {
+  const sanitized = sanitizeGroupName(rawName);
+  if (!isValidGroupName(rawName)) {
+    return { groups, error: "Group name cannot be empty" };
+  }
+  if (!groups.some((group) => group.id === groupId)) {
+    return { groups, error: "Group not found" };
+  }
+  return { groups: groups.map((group) => group.id === groupId ? { ...group, name: sanitized } : group) };
+}
+
+export function applyDeleteGroup(
+  groups: Group[],
+  items: RetroItem[],
+  votes: VoteAllocation[],
+  groupId: string,
+): { groups: Group[]; items: RetroItem[]; votes: VoteAllocation[]; error?: string } {
+  const deletedGroup = groups.find((group) => group.id === groupId);
+  if (!deletedGroup) {
+    return { groups, items, votes, error: "Group not found" };
+  }
+
+  const remainingGroups = groups
+    .filter((group) => group.id !== groupId)
+    .sort((a, b) => a.order - b.order)
+    .map((group, _index, allGroups) => ({
+      ...group,
+      order: allGroups.filter((candidate) => candidate.columnId === group.columnId && candidate.order < group.order).length,
+    }));
+  const ungroupedOrderStart = items.filter((item) => item.columnId === deletedGroup.columnId && item.groupId === null).length;
+  let nextUngroupedOrder = ungroupedOrderStart;
+  const nextItems = items.map((item) => {
+    if (item.groupId !== groupId) return item;
+    const ungroupedItem = { ...item, groupId: null, order: nextUngroupedOrder };
+    nextUngroupedOrder += 1;
+    return ungroupedItem;
+  });
+  const nextVotes = votes.filter((vote) => (vote.groupId ?? vote.itemId) !== groupId);
+
+  return { groups: remainingGroups, items: nextItems, votes: nextVotes };
+}
+
 export function validateFullColumnPermutation(columns: Column[], orderedIds: unknown): { valid: true; ids: string[] } | { valid: false; error: string } {
   if (!Array.isArray(orderedIds)) {
     return { valid: false, error: "Column order must be an array" };
