@@ -20,6 +20,7 @@ export type ClientToServerMessage =
   | { type: "create-group"; name: string; columnId: string }
   | { type: "create-column"; name: string }
   | { type: "edit-column"; columnId: string; name: string }
+  | { type: "delete-column"; columnId: string }
   | { type: "reorder-columns"; columnIds: string[] }
   | { type: "reorder-groups"; groupIds: string[] }
   | {

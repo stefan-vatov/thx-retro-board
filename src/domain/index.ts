@@ -33,6 +33,7 @@ export {
   applyReorderGroups,
   applyReorderColumns,
   applyEditColumn,
+  applyDeleteColumn,
   validateFullColumnPermutation,
   validateExistingColumnId,
   applyMoveItemToGroup,

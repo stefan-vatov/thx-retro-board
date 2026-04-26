@@ -8,6 +8,7 @@ import {
   validateFullColumnPermutation,
   applyReorderColumns,
   applyEditColumn,
+  applyDeleteColumn,
   PHASE_ORDER,
   canTransition,
   isPhaseAllowed,
@@ -137,6 +138,52 @@ describe("column helpers", () => {
     expect(result.error).toBeUndefined();
     expect(result.columns.find((column) => column.id === "start")?.name).toBe("Begin");
     expect(result.columns.map((column) => column.id)).toEqual(columns.map((column) => column.id));
+  });
+
+  it("deletes a column and cascades only its contained groups, items, and votes", () => {
+    const columns = [
+      { id: "keep", name: "Keep", order: 0 },
+      { id: "delete", name: "Delete", order: 1 },
+      { id: "also-keep", name: "Also keep", order: 2 },
+    ];
+    const groups = [
+      { id: "keep-group", name: "Keep group", columnId: "keep", order: 0 },
+      { id: "delete-group", name: "Delete group", columnId: "delete", order: 0 },
+      { id: "also-keep-group", name: "Also keep group", columnId: "also-keep", order: 0 },
+    ];
+    const items = [
+      { id: "keep-item", text: "Keep", authorId: "p1", columnId: "keep", groupId: "keep-group", order: 0 },
+      { id: "delete-item", text: "Delete", authorId: "p1", columnId: "delete", groupId: "delete-group", order: 0 },
+      { id: "also-keep-item", text: "Also keep", authorId: "p1", columnId: "also-keep", groupId: null, order: 0 },
+    ];
+    const votes = [
+      { participantId: "p1", groupId: "keep-group", count: 1 },
+      { participantId: "p1", groupId: "delete-group", count: 2 },
+      { participantId: "p2", groupId: "also-keep-group", count: 3 },
+    ];
+
+    const result = applyDeleteColumn(columns, groups, items, votes, "delete");
+
+    expect(result.error).toBeUndefined();
+    expect(result.columns.map((column) => [column.id, column.order])).toEqual([["keep", 0], ["also-keep", 1]]);
+    expect(result.groups.map((group) => group.id)).toEqual(["keep-group", "also-keep-group"]);
+    expect(result.items.map((item) => item.id)).toEqual(["keep-item", "also-keep-item"]);
+    expect(result.votes).toEqual([
+      { participantId: "p1", groupId: "keep-group", count: 1 },
+      { participantId: "p2", groupId: "also-keep-group", count: 3 },
+    ]);
+  });
+
+  it("deletes the final column into an empty board", () => {
+    const result = applyDeleteColumn(
+      [{ id: "last", name: "Last", order: 0 }],
+      [{ id: "last-group", name: "Last group", columnId: "last", order: 0 }],
+      [{ id: "last-item", text: "Last", authorId: "p1", columnId: "last", groupId: "last-group", order: 0 }],
+      [{ participantId: "p1", groupId: "last-group", count: 1 }],
+      "last",
+    );
+
+    expect(result).toEqual({ columns: [], groups: [], items: [], votes: [] });
   });
 });
 

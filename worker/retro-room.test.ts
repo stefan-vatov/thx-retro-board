@@ -195,4 +195,121 @@ describe("RetroRoom Durable Object v2 schema", () => {
     expect(move.error).toContain("another column");
     expect(await stub.getRoomState()).toEqual(before);
   });
+
+  it("allows the facilitator to create, rename, reorder, and delete columns in write and organise", async () => {
+    const stub = await init("test-v2-column-crud-facilitator-phases");
+    await stub.join("fac1", "Facilitator");
+
+    const first = await stub.createColumn("fac1", "First");
+    const second = await stub.createColumn("fac1", "Second");
+    expect(first.success).toBe(true);
+    expect(second.success).toBe(true);
+
+    const rename = await stub.editColumn("fac1", first.column!.id, "Renamed");
+    expect(rename.success).toBe(true);
+    expect(rename.column).toMatchObject({ id: first.column!.id, name: "Renamed" });
+
+    const reorder = await stub.reorderColumns("fac1", [second.column!.id, first.column!.id]);
+    expect(reorder.success).toBe(true);
+    expect((await stub.getRoomState()).columns.map((column) => [column.id, column.order])).toEqual([
+      [second.column!.id, 0],
+      [first.column!.id, 1],
+    ]);
+
+    await stub.setPhase("fac1", "organise");
+    const third = await stub.createColumn("fac1", "Third");
+    expect(third.success).toBe(true);
+
+    const deleteSecond = await stub.deleteColumn("fac1", second.column!.id);
+    expect(deleteSecond.success).toBe(true);
+    expect((await stub.getRoomState()).columns.map((column) => column.id)).toEqual([first.column!.id, third.column!.id]);
+  });
+
+  it("deletes a column with contained groups, items, and votes while preserving unrelated columns", async () => {
+    const stub = await init("test-v2-column-delete-cascade");
+    await stub.join("fac1", "Facilitator");
+    const keep = await stub.createColumn("fac1", "Keep");
+    const remove = await stub.createColumn("fac1", "Remove");
+    const keepItem = await stub.addItem("fac1", "Keep item", keep.column!.id);
+    const removeItem = await stub.addItem("fac1", "Remove item", remove.column!.id);
+
+    await stub.setPhase("fac1", "organise");
+    const keepGroup = await stub.createGroup("fac1", "Keep group", keep.column!.id);
+    const removeGroup = await stub.createGroup("fac1", "Remove group", remove.column!.id);
+    await stub.moveItemToGroup("fac1", keepItem.item!.id, keepGroup.group!.id, 0, await freshMovePreconditions(stub, keepItem.item!.id));
+    await stub.moveItemToGroup("fac1", removeItem.item!.id, removeGroup.group!.id, 0, await freshMovePreconditions(stub, removeItem.item!.id));
+
+    await stub.setPhase("fac1", "vote");
+    await stub.castVote("fac1", keepGroup.group!.id, 1);
+    await stub.castVote("fac1", removeGroup.group!.id, 2);
+    await stub.setPhaseForTest("organise");
+
+    const before = await stub.getRoomState();
+    expect(before.votes.map((vote) => vote.groupId).sort()).toEqual([keepGroup.group!.id, removeGroup.group!.id].sort());
+
+    const deleted = await stub.deleteColumn("fac1", remove.column!.id);
+    expect(deleted.success).toBe(true);
+
+    const after = await stub.getRoomState();
+    expect(after.columns).toEqual([{ id: keep.column!.id, name: "Keep", order: 0 }]);
+    expect(after.groups).toEqual([{ id: keepGroup.group!.id, name: "Keep group", columnId: keep.column!.id, order: 0 }]);
+    expect(after.items).toEqual([
+      expect.objectContaining({ id: keepItem.item!.id, text: "Keep item", columnId: keep.column!.id, groupId: keepGroup.group!.id, order: 0 }),
+    ]);
+    expect(after.votes).toEqual([{ participantId: "fac1", groupId: keepGroup.group!.id, itemId: keepGroup.group!.id, count: 1 }]);
+    expect(after.version).toBe(before.version + 1);
+  });
+
+  it("deletes the final column without recreating defaults or allowing invalid item adds", async () => {
+    const stub = await init("test-v2-column-delete-last");
+    await stub.join("fac1", "Facilitator");
+    const last = await stub.createColumn("fac1", "Last");
+    await stub.addItem("fac1", "Only item", last.column!.id);
+
+    const deleted = await stub.deleteColumn("fac1", last.column!.id);
+    expect(deleted.success).toBe(true);
+
+    const state = await stub.getRoomState();
+    expect(state.columns).toEqual([]);
+    expect(state.groups).toEqual([]);
+    expect(state.items).toEqual([]);
+    expect(state.votes).toEqual([]);
+
+    const add = await stub.addItem("fac1", "No lane", last.column!.id);
+    expect(add.success).toBe(false);
+    expect(add.error).toBe("Column not found");
+    expect(await stub.getRoomState()).toEqual(state);
+  });
+
+  it("rejects participant and late-phase column CRUD without changing state or version", async () => {
+    const stub = await init("test-v2-column-crud-rejects");
+    await stub.join("fac1", "Facilitator");
+    await stub.join("p2", "Participant");
+    const first = await stub.createColumn("fac1", "First");
+    const second = await stub.createColumn("fac1", "Second");
+
+    const beforeParticipant = await stub.getRoomState();
+    await expect(stub.createColumn("p2", "Participant create")).resolves.toMatchObject({ success: false });
+    await expect(stub.editColumn("p2", first.column!.id, "Participant rename")).resolves.toMatchObject({ success: false });
+    await expect(stub.reorderColumns("p2", [second.column!.id, first.column!.id])).resolves.toMatchObject({ success: false });
+    await expect(stub.deleteColumn("p2", first.column!.id)).resolves.toMatchObject({ success: false });
+    expect(await stub.getRoomState()).toEqual(beforeParticipant);
+
+    await stub.setPhase("fac1", "organise");
+    await stub.setPhase("fac1", "vote");
+    const beforeVotePhase = await stub.getRoomState();
+    await expect(stub.createColumn("fac1", "Late create")).resolves.toMatchObject({ success: false });
+    await expect(stub.editColumn("fac1", first.column!.id, "Late rename")).resolves.toMatchObject({ success: false });
+    await expect(stub.reorderColumns("fac1", [second.column!.id, first.column!.id])).resolves.toMatchObject({ success: false });
+    await expect(stub.deleteColumn("fac1", first.column!.id)).resolves.toMatchObject({ success: false });
+    expect(await stub.getRoomState()).toEqual(beforeVotePhase);
+
+    await stub.setPhase("fac1", "review");
+    const beforeReviewPhase = await stub.getRoomState();
+    await expect(stub.createColumn("fac1", "Review create")).resolves.toMatchObject({ success: false });
+    await expect(stub.editColumn("fac1", first.column!.id, "Review rename")).resolves.toMatchObject({ success: false });
+    await expect(stub.reorderColumns("fac1", [second.column!.id, first.column!.id])).resolves.toMatchObject({ success: false });
+    await expect(stub.deleteColumn("fac1", first.column!.id)).resolves.toMatchObject({ success: false });
+    expect(await stub.getRoomState()).toEqual(beforeReviewPhase);
+  });
 });

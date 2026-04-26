@@ -262,6 +262,49 @@ export function applyEditColumn(columns: Column[], columnId: string, rawName: st
   return { columns: columns.map((column) => column.id === columnId ? { ...column, name: sanitized } : column) };
 }
 
+export function applyDeleteColumn(
+  columns: Column[],
+  groups: Group[],
+  items: RetroItem[],
+  votes: VoteAllocation[],
+  columnId: string,
+): { columns: Column[]; groups: Group[]; items: RetroItem[]; votes: VoteAllocation[]; error?: string } {
+  if (!columns.some((column) => column.id === columnId)) {
+    return { columns, groups, items, votes, error: "Column not found" };
+  }
+
+  const deletedGroupIds = new Set(groups.filter((group) => group.columnId === columnId).map((group) => group.id));
+  const remainingColumns = columns
+    .filter((column) => column.id !== columnId)
+    .sort((a, b) => a.order - b.order)
+    .map((column, order) => ({ ...column, order }));
+  const remainingGroups = groups
+    .filter((group) => group.columnId !== columnId)
+    .sort((a, b) => a.order - b.order)
+    .map((group, _index, allGroups) => ({
+      ...group,
+      order: allGroups.filter((candidate) => candidate.columnId === group.columnId && candidate.order < group.order).length,
+    }));
+  const remainingItems = items
+    .filter((item) => item.columnId !== columnId)
+    .sort((a, b) => a.order - b.order)
+    .map((item, _index, allItems) => ({
+      ...item,
+      order: allItems.filter((candidate) => candidate.columnId === item.columnId && candidate.groupId === item.groupId && candidate.order < item.order).length,
+    }));
+  const remainingVotes = votes.filter((vote) => {
+    const groupId = vote.groupId ?? vote.itemId;
+    return typeof groupId === "string" && !deletedGroupIds.has(groupId);
+  });
+
+  return {
+    columns: remainingColumns,
+    groups: remainingGroups,
+    items: remainingItems,
+    votes: remainingVotes,
+  };
+}
+
 export function applyMoveItemToGroup(
   items: RetroItem[],
   itemId: string,

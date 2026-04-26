@@ -21,6 +21,7 @@ import {
   MAX_COLUMNS,
   applyReorderColumns,
   applyEditColumn,
+  applyDeleteColumn,
   validateFullColumnPermutation,
   applyReorderItems,
   validateItemReorderPayload,
@@ -553,6 +554,28 @@ export class RetroRoom extends DurableObject<Env> {
     return { success: true };
   }
 
+  async deleteColumn(participantId: string, columnId: string): Promise<{ success: boolean; error?: string }> {
+    const s = await this.loadState();
+    const allowed = this.canMutateColumns(s, participantId);
+    if (!allowed.success) return allowed;
+    if (typeof columnId !== "string" || columnId.trim().length === 0) {
+      return { success: false, error: "Column not found" };
+    }
+
+    const result = applyDeleteColumn(s.columns ?? [], s.groups, s.items, s.votes, columnId);
+    if (result.error) {
+      return { success: false, error: result.error };
+    }
+
+    s.columns = result.columns;
+    s.groups = result.groups;
+    s.items = result.items;
+    s.votes = result.votes;
+    await this.saveState();
+    this.broadcastState(s);
+    return { success: true };
+  }
+
   async createGroup(participantId: string, rawName: string, columnId?: string): Promise<{ success: boolean; error?: string; group?: Group }> {
     if (columnId === undefined) {
       const columnResult = await this.createColumn(participantId, rawName);
@@ -936,6 +959,14 @@ export class RetroRoom extends DurableObject<Env> {
       }
       case "reorder-columns": {
         const result = await this.reorderColumns(participantId, msg.columnIds);
+        if (!result.success) {
+          const ws = this.sessions.get(participantId);
+          ws?.send(JSON.stringify({ type: "error", message: result.error }));
+        }
+        break;
+      }
+      case "delete-column": {
+        const result = await this.deleteColumn(participantId, msg.columnId);
         if (!result.success) {
           const ws = this.sessions.get(participantId);
           ws?.send(JSON.stringify({ type: "error", message: result.error }));
