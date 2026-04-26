@@ -1,6 +1,10 @@
 import { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
+import { ArrowRight, Loader2, ShieldCheck, Sparkles, UsersRound } from "lucide-react";
 import { createRoom } from "../api";
+import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
+import { Button } from "./ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 
 export function HomePage() {
   const navigate = useNavigate();
@@ -23,44 +27,75 @@ export function HomePage() {
   }
 
   return (
-    <div className="content-shell content-shell--narrow" style={{ minHeight: "100vh", display: "flex", flexDirection: "column", justifyContent: "center" }}>
-      <div className="glass-panel" style={{ textAlign: "center" }}>
-        <div style={{ marginBottom: "var(--space-6)" }}>
-          <div className="empty-state__icon" style={{ fontSize: "3rem", marginBottom: "var(--space-4)" }}>📋</div>
-          <h1 className="page-title" style={{ marginBottom: "var(--space-3)", letterSpacing: "-0.03em" }}>Retro Board</h1>
-          <p style={{ color: "var(--text-secondary)", marginBottom: "var(--space-2)", lineHeight: "var(--leading-relaxed)" }}>
-            Collaborative retrospectives with timed phases. Write, organise, vote, and reflect — together.
-          </p>
+    <main className="home-hero" aria-labelledby="home-title">
+      <section className="home-hero__content" aria-label="Retro Board introduction">
+        <div className="home-hero__eyebrow">
+          <Sparkles aria-hidden="true" size={16} />
+          Clean, timed retrospectives
         </div>
-        <button
-          ref={createButtonRef}
-          className="btn btn--primary"
-          style={{ width: "100%", minHeight: "48px", fontSize: "var(--text-base)" }}
-          onClick={handleCreate}
-          disabled={creating}
-          aria-busy={creating}
-        >
-          {creating ? (
-            <>
-              <span className="loading-spinner" aria-hidden="true" />
-              Creating room…
-            </>
-          ) : "Create Room"}
-        </button>
-        {error && (
-          <div className="status-msg status-msg--error" style={{ marginTop: "var(--space-4)", textAlign: "left" }} role="alert">
-            {error}
-            <button
-              className="btn btn--sm"
-              style={{ marginTop: "var(--space-2)", display: "block" }}
-              onClick={handleCreate}
-              disabled={creating}
-            >
-              Try Again
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
+        <h1 id="home-title" className="home-hero__title">Retro Board</h1>
+        <p className="home-hero__copy">
+          Create a private room, invite your team, and move from writing to organising, voting, and review without exposing participant credentials.
+        </p>
+        <div className="home-hero__proof" aria-label="Product highlights">
+          <span><UsersRound aria-hidden="true" size={16} /> Realtime collaboration</span>
+          <span><ShieldCheck aria-hidden="true" size={16} /> Safe invite links</span>
+        </div>
+      </section>
+
+      <Card className="home-create-card">
+        <CardHeader className="text-center">
+          <div className="home-create-card__icon" aria-hidden="true">📋</div>
+          <CardTitle className="text-2xl">Start a room</CardTitle>
+          <CardDescription>
+            You will become the facilitator and can share an invite after joining.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <Button
+            ref={createButtonRef}
+            size="lg"
+            className="h-12 w-full text-base"
+            onClick={handleCreate}
+            disabled={creating}
+            aria-busy={creating}
+          >
+            {creating ? (
+              <>
+                <Loader2 className="loading-spinner" aria-hidden="true" />
+                Creating room…
+              </>
+            ) : (
+              <>
+                Create Room
+                <ArrowRight aria-hidden="true" />
+              </>
+            )}
+          </Button>
+          {creating && (
+            <p className="home-create-card__status" role="status" aria-live="polite">
+              Creating a private room and preparing your facilitator join screen…
+            </p>
+          )}
+          {error && (
+            <Alert variant="destructive">
+              <AlertTitle>Room creation failed</AlertTitle>
+              <AlertDescription>
+                <p>{error}</p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="mt-2"
+                  onClick={handleCreate}
+                  disabled={creating}
+                >
+                  Try Again
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
+        </CardContent>
+      </Card>
+    </main>
   );
 }

@@ -101,7 +101,28 @@ test.describe("Retro Board E2E", () => {
     test("root page shows create room control", async ({ page }) => {
       await page.goto("/");
       await expect(page.locator("h1")).toContainText("Retro Board");
-      await expect(page.getByRole("button", { name: /create room/i })).toBeVisible();
+      await expect(page.getByText(/clean, timed retrospectives/i)).toBeVisible();
+      await expect(page.getByRole("button", { name: /^create room$/i })).toHaveCount(1);
+      await expect(page.getByRole("button", { name: /^create room$/i })).toBeVisible();
+    });
+
+    test("creating a room exposes pending state and blocks duplicate submissions", async ({ page }) => {
+      let createRequests = 0;
+      await page.route("**/api/rooms", async (route) => {
+        createRequests += 1;
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        await route.continue();
+      });
+
+      await page.goto("/");
+      const create = page.getByRole("button", { name: /^create room$/i });
+      await create.click();
+      await create.click({ force: true });
+      await expect(create).toBeDisabled();
+      await expect(create).toHaveAttribute("aria-busy", "true");
+      await expect(page.getByRole("status")).toContainText(/creating a private room/i);
+      await page.waitForURL(/\/room\//);
+      expect(createRequests).toBe(1);
     });
 
     test("creating a room navigates to a room URL", async ({ page }) => {
@@ -126,6 +147,7 @@ test.describe("Retro Board E2E", () => {
       // Should show join form (display name input)
       await expect(page2.getByLabel(/display name/i)).toBeVisible();
       await expect(page2.getByRole("button", { name: /join/i })).toBeVisible();
+      await expect(page2.getByText(/your name is stored only in this browser/i)).toBeVisible();
       await page2.close();
       await page.close();
     });
@@ -142,6 +164,30 @@ test.describe("Retro Board E2E", () => {
       await expect(page.getByText(/please enter a display name/i)).toBeVisible();
     });
 
+    test("join trims names, exposes pending state, and blocks duplicate submissions", async ({ page }) => {
+      await page.goto("/");
+      await page.getByRole("button", { name: /create room/i }).click();
+      await page.waitForURL(/\/room\//);
+      const roomId = new URL(page.url()).pathname.split("/").pop()!;
+      let joinRequests = 0;
+      await page.route(`**/api/rooms/${roomId}/join`, async (route) => {
+        joinRequests += 1;
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        await route.continue();
+      });
+
+      await page.getByLabel(/display name/i).fill("  Alice  ");
+      const join = page.locator("button[type='submit']");
+      await join.click();
+      await join.click({ force: true });
+      await expect(join).toBeDisabled();
+      await expect(join).toHaveAttribute("aria-busy", "true");
+      await expect(page.getByRole("status")).toContainText(/joining room/i);
+      await expect(page.getByText(/Phase: WRITE/i)).toBeVisible();
+      await expect(page.locator(".participant-chip__name")).toHaveText("Alice");
+      expect(joinRequests).toBe(1);
+    });
+
     test("joining with a valid name enters the room", async ({ page }) => {
       await page.goto("/");
       await page.getByRole("button", { name: /create room/i }).click();
@@ -154,6 +200,44 @@ test.describe("Retro Board E2E", () => {
       await expect(page.getByText(/Phase: WRITE/i)).toBeVisible();
       await expect(page.getByText(/Alice/i)).toBeVisible();
       await expect(page.getByText(/⭐ Facilitator/)).toBeVisible();
+    });
+
+    test("stored identity reconnects without showing the join form", async ({ page }) => {
+      await page.goto("/");
+      await page.getByRole("button", { name: /create room/i }).click();
+      await page.waitForURL(/\/room\//);
+      const roomUrl = page.url();
+      await page.getByLabel(/display name/i).fill("Alice");
+      await page.getByRole("button", { name: /join/i }).click();
+      await expect(page.getByText(/Phase: WRITE/i)).toBeVisible();
+
+      await page.goto(roomUrl);
+      await expect(page.getByText(/Phase: WRITE/i)).toBeVisible();
+      await expect(page.getByLabel(/display name/i)).toHaveCount(0);
+    });
+
+    test("invite copy failure exposes only safe manual room URL", async ({ page }) => {
+      await page.addInitScript(() => {
+        Object.defineProperty(navigator, "clipboard", {
+          configurable: true,
+          value: { writeText: () => Promise.reject(new Error("denied")) },
+        });
+      });
+      await createJoinedRoom(page);
+      await page.getByRole("button", { name: /copy room invite link/i }).click();
+      const manualUrl = page.getByLabel(/room invite url/i);
+      await expect(manualUrl).toBeVisible();
+      await expect(manualUrl).toHaveValue(/\/room\/[A-Z0-9_-]+$/i);
+      const value = await manualUrl.inputValue();
+      expect(value).not.toMatch(/[?&](token|pid)=|auth-[a-f0-9]{64}/i);
+      await expect(page.locator("body")).not.toContainText(/token=|pid=|auth-[a-f0-9]{64}/i);
+    });
+
+    test("unknown room URL shows a polished recoverable not-found state", async ({ page }) => {
+      await page.goto(`/room/missing-${Date.now()}`);
+      await expect(page.getByRole("heading", { name: /room not found/i })).toBeVisible();
+      await expect(page.getByText(/check the invite link/i)).toBeVisible();
+      await expect(page.getByRole("link", { name: /return home/i })).toHaveAttribute("href", "/");
     });
 
     test("phase mutation exposes pending state and blocks duplicate submissions", async ({ page }) => {

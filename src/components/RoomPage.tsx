@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useParams } from "react-router-dom";
+import { AlertTriangle, ClipboardCheck, Copy, DoorOpen, Loader2, Radar, ShieldCheck } from "lucide-react";
 import { joinRoom, getRoomState, setVoteBudget, setPhase } from "../api";
 import { useRoom } from "../hooks";
 import type { RoomState, Phase, Column, RetroItem } from "../domain";
@@ -7,6 +8,11 @@ import { sanitizeItemText, isValidItemText, PHASE_ORDER, sanitizeColumnName, isV
 import { OrganiseBoard } from "./OrganiseBoard";
 import { VoteBoard } from "./VoteBoard";
 import { ReviewBoard } from "./ReviewBoard";
+import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
+import { Badge } from "./ui/badge";
+import { Button } from "./ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
+import { Input } from "./ui/input";
 
 type PageState = "loading" | "join" | "room" | "not-found";
 
@@ -117,50 +123,46 @@ function InviteButton({ roomId }: { roomId: string }) {
     : "Copy room invite link";
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-1)", alignItems: "flex-end" }}>
-      <button
+    <div className="invite-control">
+      <Button
         ref={buttonRef}
-        className={`btn btn--secondary btn--sm invite-btn${copied ? " invite-btn--copied" : ""}`}
+        variant={copied ? "default" : copyFailed ? "destructive" : "secondary"}
+        size="sm"
+        className={`invite-btn${copied ? " invite-btn--copied" : ""}`}
         onClick={handleInvite}
         aria-label={accessibleLabel}
         type="button"
       >
         {copied ? (
           <>
-            <span aria-hidden="true">✓</span>
+            <ClipboardCheck aria-hidden="true" />
             Copied!
           </>
         ) : copyFailed ? (
           <>
-            <span aria-hidden="true">!</span>
+            <AlertTriangle aria-hidden="true" />
             Error
           </>
         ) : (
           <>
-            <span aria-hidden="true">🔗</span>
+            <Copy aria-hidden="true" />
             Invite
           </>
         )}
-      </button>
+      </Button>
       {manualUrl && (
-        <input
+        <div className="invite-control__fallback" role="alert">
+          <span>Copy failed. Select this safe room URL manually:</span>
+          <Input
           ref={manualInputRef}
           type="text"
           readOnly
           value={manualUrl}
           aria-label="Room invite URL — select and copy manually"
-          style={{
-            fontSize: "var(--text-xs)",
-            padding: "var(--space-1) var(--space-2)",
-            borderRadius: "var(--radius-md)",
-            background: "var(--glass-bg)",
-            border: "1px solid var(--glass-border)",
-            color: "var(--text-secondary)",
-            width: "220px",
-            cursor: "text",
-          }}
+            className="h-8 w-[min(18rem,80vw)] text-xs"
           onClick={(e) => (e.target as HTMLInputElement).select()}
         />
+        </div>
       )}
     </div>
   );
@@ -754,46 +756,66 @@ export function RoomPage() {
 
   if (pageState === "loading") {
     return (
-      <div className="content-shell content-shell--narrow" style={{ minHeight: "100vh", display: "flex", flexDirection: "column", justifyContent: "center" }}>
-        <div className="glass-panel loading-state" role="status" aria-label="Loading room">
-          <span className="loading-spinner" aria-hidden="true" />
-          <p className="loading-state__text" style={{ marginTop: "var(--space-3)" }}>Loading room…</p>
-        </div>
-      </div>
+      <main className="state-surface" aria-labelledby="loading-title">
+        <Card className="state-card loading-state" role="status" aria-label="Loading room">
+          <CardHeader className="items-center text-center">
+            <div className="state-card__icon" aria-hidden="true">
+              <Loader2 className="loading-spinner" />
+            </div>
+            <CardTitle id="loading-title" role="heading" aria-level={1}>Loading room…</CardTitle>
+            <CardDescription>
+              Checking the room and restoring your local identity if one exists.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      </main>
     );
   }
 
   if (pageState === "not-found") {
     return (
-      <div className="content-shell content-shell--narrow" style={{ minHeight: "100vh", display: "flex", flexDirection: "column", justifyContent: "center" }}>
-        <div className="glass-panel empty-state" style={{ textAlign: "center" }}>
-          <div className="empty-state__icon" role="img" aria-label="Room not found">🔍</div>
-          <h1 className="page-title" style={{ marginBottom: "var(--space-3)", marginTop: "var(--space-3)" }}>Room Not Found</h1>
-          <p className="empty-state__text" style={{ marginBottom: "var(--space-5)" }}>
-            This room does not exist, has been closed, or the link may be incorrect.
-          </p>
-          <a href="/" className="btn btn--primary">Return to Home</a>
-        </div>
-      </div>
+      <main className="state-surface" aria-labelledby="not-found-title">
+        <Card className="state-card empty-state">
+          <CardHeader className="items-center text-center">
+            <div className="state-card__icon" role="img" aria-label="Room not found">🔍</div>
+            <CardTitle id="not-found-title" role="heading" aria-level={1} className="text-2xl">Room Not Found</CardTitle>
+            <CardDescription>
+              This room does not exist, has been closed, or the link may be incorrect. Check the invite link or start a new room.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex justify-center">
+            <Button asChild>
+              <a href="/">Return Home</a>
+            </Button>
+          </CardContent>
+        </Card>
+      </main>
     );
   }
 
   if (pageState === "join") {
     return (
-      <div className="content-shell content-shell--narrow" style={{ minHeight: "100vh", display: "flex", flexDirection: "column", justifyContent: "center" }}>
-        <div className="glass-panel">
-          <h1 className="page-title" style={{ marginBottom: "var(--space-3)" }}>Join Room</h1>
-          <p style={{ color: "var(--text-secondary)", marginBottom: "var(--space-5)", lineHeight: "var(--leading-relaxed)" }}>
-            Enter your display name to join this retrospective.
-          </p>
-          <form onSubmit={handleJoin} noValidate>
-            <div className="input-group" style={{ marginBottom: "var(--space-4)" }}>
+      <main className="state-surface" aria-labelledby="join-title">
+        <Card className="state-card join-card">
+          <CardHeader>
+            <div className="join-card__badge">
+              <DoorOpen aria-hidden="true" size={16} />
+              Room invite
+            </div>
+            <CardTitle id="join-title" role="heading" aria-level={1} className="text-2xl">Join Room</CardTitle>
+            <CardDescription>
+              Enter the name teammates will see in this retrospective. Your name is stored only in this browser for reconnects.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+          <form onSubmit={handleJoin} noValidate className="join-card__form">
+            <div className="input-group">
               <label className="input-label" htmlFor="displayName">
                 Display Name
               </label>
-              <input
+              <Input
                 id="displayName"
-                className={`input${joinError ? " input--error" : ""}`}
+                className={joinError ? "input--error" : undefined}
                 type="text"
                 value={displayName}
                 onChange={(e) => {
@@ -808,28 +830,35 @@ export function RoomPage() {
                 aria-invalid={joinError ? "true" : undefined}
               />
             </div>
-            <button
+            <Button
               type="submit"
-              className="btn btn--primary"
-              style={{ width: "100%" }}
+              className="h-11 w-full"
               disabled={joinLoading}
               aria-busy={joinLoading}
             >
               {joinLoading ? (
                 <>
-                  <span className="loading-spinner" aria-hidden="true" />
+                  <Loader2 className="loading-spinner" aria-hidden="true" />
                   Joining…
                 </>
               ) : "Join Room"}
-            </button>
+            </Button>
+            {joinLoading && (
+              <p className="join-card__status" role="status" aria-live="polite">
+                Joining room and establishing a private reconnect token…
+              </p>
+            )}
             {joinError && (
-              <div id="join-error" className="status-msg status-msg--error" style={{ marginTop: "var(--space-3)" }} role="alert">
-                {joinError}
-              </div>
+              <Alert id="join-error" variant="destructive">
+                <AlertTriangle aria-hidden="true" />
+                <AlertTitle>Could not join</AlertTitle>
+                <AlertDescription>{joinError}</AlertDescription>
+              </Alert>
             )}
           </form>
-        </div>
-      </div>
+          </CardContent>
+        </Card>
+      </main>
     );
   }
 
@@ -843,8 +872,18 @@ export function RoomPage() {
         <div className="room-header__left">
           <h1 className="room-header__title">Retro Board</h1>
           <ConnectionStatus connected={connected} />
+          {!connected && (
+            <Badge variant="secondary" role="status" aria-live="polite" className="room-header__offline">
+              <Radar aria-hidden="true" />
+              Reconnecting — content remains readable
+            </Badge>
+          )}
         </div>
         <div className="room-header__right">
+          <span className="room-header__privacy">
+            <ShieldCheck aria-hidden="true" />
+            Safe invite
+          </span>
           <InviteButton roomId={roomId!} />
         </div>
       </header>
