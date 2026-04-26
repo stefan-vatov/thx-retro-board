@@ -569,6 +569,14 @@ test.describe("Retro Board E2E", () => {
       await alice.getByRole("button", { name: /advance to next phase/i }).click();
       await expect(alice.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
       await expect(bob.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
+      await expect(alice.getByText("Slide 1 of 1")).toBeVisible({ timeout: 5000 });
+      await expect(alice.locator("[data-review-group-id]", { hasText: "Launch wins" }).getByLabel(/3 votes?/)).toBeVisible();
+      await expect(alice.locator("[data-review-group-id]", { hasText: "Launch wins" }).getByText("Shared success")).toBeVisible();
+      await expect(alice.getByRole("button", { name: /add a vote/i })).toHaveCount(0);
+      await bob.reload();
+      await expect(bob.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
+      await expect(bob.getByText("Slide 1 of 1")).toBeVisible({ timeout: 5000 });
+      await expect(bob.locator("[data-review-group-id]", { hasText: "Launch wins" }).getByLabel(/3 votes?/)).toBeVisible();
 
       await ctx1.close();
       await ctx2.close();
@@ -585,6 +593,9 @@ test.describe("Retro Board E2E", () => {
       await expect(emptyPage.getByRole("button", { name: /add a vote/i })).toHaveCount(0);
       await emptyPage.getByRole("button", { name: /advance to next phase/i }).click();
       await expect(emptyPage.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
+      await expect(emptyPage.getByText("No groups to review.")).toBeVisible({ timeout: 5000 });
+      await expect(emptyPage.getByText("Create groups during organise to produce review slides.")).toBeVisible();
+      await expect(emptyPage.getByText("Ungrouped only")).toHaveCount(0);
       await emptyCtx.close();
     });
 
