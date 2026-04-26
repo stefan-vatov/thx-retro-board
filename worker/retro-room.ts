@@ -129,6 +129,25 @@ function generateToken(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+function getWebSocketCredentials(request: Request, url: URL): { pid: string | null; token: string | null } {
+  const queryPid = url.searchParams.get("pid");
+  const queryToken = url.searchParams.get("token");
+  if (queryPid || queryToken) {
+    return { pid: queryPid, token: queryToken };
+  }
+
+  const protocols = (request.headers.get("Sec-WebSocket-Protocol") ?? "")
+    .split(",")
+    .map((protocol) => protocol.trim());
+  const pidProtocol = protocols.find((protocol) => protocol.startsWith("pid-"));
+  const authProtocol = protocols.find((protocol) => protocol.startsWith("auth-"));
+
+  return {
+    pid: pidProtocol ? pidProtocol.slice("pid-".length) : null,
+    token: authProtocol ? authProtocol.slice("auth-".length) : null,
+  };
+}
+
 export class RetroRoom extends DurableObject<Env> {
   private state: StoredState | null = null;
   private sessions = new Map<string, WebSocket>();
@@ -696,8 +715,7 @@ export class RetroRoom extends DurableObject<Env> {
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
 
-      const pid = url.searchParams.get("pid");
-      const token = url.searchParams.get("token");
+      const { pid, token } = getWebSocketCredentials(request, url);
 
       if (!pid || !token) {
         return new Response(JSON.stringify({ error: "Missing pid or token" }), { status: 400 });
@@ -727,7 +745,11 @@ export class RetroRoom extends DurableObject<Env> {
       const snapshot = await this.getRoomState();
       server.send(JSON.stringify({ type: "snapshot", state: snapshot }));
 
-      return new Response(null, { status: 101, webSocket: client });
+      return new Response(null, {
+        status: 101,
+        webSocket: client,
+        headers: { "Sec-WebSocket-Protocol": "retro-board" },
+      });
     }
 
     return new Response("Not found", { status: 404 });

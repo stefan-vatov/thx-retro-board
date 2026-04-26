@@ -193,6 +193,79 @@ test.describe("Retro Board E2E", () => {
       await expect(page.locator(".group-panel", { hasText: "Start" }).getByText("Disconnected drag item")).toBeVisible();
       await expect(page.locator(".group-panel", { hasText: "Stop" }).getByText("Disconnected drag item")).toHaveCount(0);
     });
+
+    test("WebSocket credentials are not exposed in browser-visible URLs or console failures", async ({ page }) => {
+      const consoleErrors: string[] = [];
+      const pageErrors: string[] = [];
+      page.on("console", (message) => {
+        if (message.type() === "error") consoleErrors.push(message.text());
+      });
+      page.on("pageerror", (error) => pageErrors.push(error.message));
+
+      await createJoinedRoom(page);
+      await expect(page.getByLabel("Connected", { exact: true })).toBeVisible({ timeout: 5000 });
+
+      const visibleText = await page.locator("body").innerText();
+      expect(visibleText).not.toMatch(/token=|pid=|auth-[a-f0-9]{64}/i);
+      const resourceUrls = await page.evaluate(() => performance.getEntriesByType("resource").map((entry) => entry.name));
+      expect(resourceUrls.join("\n")).not.toMatch(/[?&](token|pid)=|auth-[a-f0-9]{64}/i);
+      expect(consoleErrors.join("\n")).not.toMatch(/[?&](token|pid)=|auth-[a-f0-9]{64}/i);
+      expect(pageErrors).toEqual([]);
+    });
+
+    test("mobile long content remains constrained without horizontal overflow", async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      const longName = "Alice-" + "VeryLongParticipantName".repeat(3);
+      await createJoinedRoom(page, longName);
+      await page.getByRole("button", { name: /configure columns/i }).click();
+      const longColumn = "ExtremelyLongColumnLabelWithoutSpaces".repeat(3).slice(0, 80);
+      await page.getByLabel(/new column name/i).fill(longColumn);
+      await page.getByRole("button", { name: /add column/i }).click();
+      await expect(page.getByRole("heading", { name: longColumn })).toBeVisible({ timeout: 5000 });
+      await page.getByLabel(/column for new item/i).selectOption({ label: longColumn });
+      await page.getByPlaceholder(/add a retro item/i).fill("LongItemTextWithoutSpaces".repeat(24));
+      await page.getByRole("button", { name: /add item/i }).click();
+      await expect(page.getByText(/LongItemTextWithoutSpaces/)).toBeVisible({ timeout: 5000 });
+
+      const metrics = await page.evaluate(() => ({
+        scrollWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth,
+        bodyScrollWidth: document.body.scrollWidth,
+      }));
+      expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth + 1);
+      expect(metrics.bodyScrollWidth).toBeLessThanOrEqual(metrics.clientWidth + 1);
+      await expect(page.getByRole("button", { name: /add item/i })).toBeVisible();
+    });
+
+    test("reduced motion disables continuous spinner animation and heavy transitions", async ({ page }) => {
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      await page.route("**/api/rooms", async (route) => {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        await route.continue();
+      });
+      await page.goto("/");
+      await page.getByRole("button", { name: /create room/i }).click();
+      const spinner = page.locator(".loading-spinner").first();
+      await expect(spinner).toBeVisible();
+      const styles = await spinner.evaluate((element) => {
+        const computed = window.getComputedStyle(element);
+        return {
+          animationName: computed.animationName,
+          animationDuration: computed.animationDuration,
+          transitionDuration: computed.transitionDuration,
+        };
+      });
+      expect(styles.animationName).toBe("none");
+      expect(styles.animationDuration).toBe("0s");
+      expect(styles.transitionDuration).toBe("0s");
+    });
+
+    test("phase changes leave focus on a logical visible room status target", async ({ page }) => {
+      await createJoinedRoom(page);
+      await page.getByRole("button", { name: /advance to next phase/i }).click();
+      await expect(page.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
+      await expect(page.getByRole("region", { name: /room status/i })).toBeFocused();
+    });
   });
 
   test.describe("Two-user flow", () => {

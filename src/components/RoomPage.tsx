@@ -79,6 +79,14 @@ function InviteButton({ roomId }: { roomId: string }) {
   const [copySupported] = useState(() => typeof navigator !== "undefined" && typeof navigator.clipboard !== "undefined");
   const [manualUrl, setManualUrl] = useState<string | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const manualInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (manualUrl) {
+      manualInputRef.current?.focus();
+      manualInputRef.current?.select();
+    }
+  }, [manualUrl]);
 
   function handleInvite() {
     const inviteUrl = `${window.location.origin}/room/${roomId}`;
@@ -136,6 +144,7 @@ function InviteButton({ roomId }: { roomId: string }) {
       </button>
       {manualUrl && (
         <input
+          ref={manualInputRef}
           type="text"
           readOnly
           value={manualUrl}
@@ -495,6 +504,7 @@ export function RoomPage() {
   const [budgetPending, setBudgetPending] = useState(false);
   const [phasePending, setPhasePending] = useState(false);
   const [timerPending, setTimerPending] = useState(false);
+  const phaseStatusRef = useRef<HTMLDivElement>(null);
 
   const { state: wsState, connected, lastError, clearError, send } = useRoom(roomId ?? "", participantId, connectionToken);
 
@@ -630,6 +640,7 @@ export function RoomPage() {
       const result = await setPhase(roomId, participantId, nextPhase);
       if (result.success) {
         setPhaseMsg(`Advanced to ${nextPhase}.`);
+        window.setTimeout(() => phaseStatusRef.current?.focus(), 0);
         // Refetch authoritative state so the UI updates even if the WebSocket broadcast
         // was missed during a post-reload reconnect window
         try {
@@ -785,7 +796,7 @@ export function RoomPage() {
       </header>
 
       {/* Phase Status Bar */}
-      <div className="phase-status" role="region" aria-label="Room status">
+      <div ref={phaseStatusRef} className="phase-status" role="region" aria-label="Room status" tabIndex={-1}>
         <span className="phase-status__label">Phase: </span>
         <span
           className="phase-status__value badge badge--phase"

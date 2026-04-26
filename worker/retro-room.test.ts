@@ -356,6 +356,25 @@ describe("RetroRoom Durable Object", () => {
     expect(response.webSocket).toBeDefined();
   });
 
+  it("accepts WebSocket credentials via subprotocols without query secrets", async () => {
+    const roomId = "test-ws-auth-subprotocol";
+    const id = env.RETRO_ROOM.idFromName(roomId);
+    const stub = env.RETRO_ROOM.get(id);
+    await stub.initRoom(roomId);
+    const joinResult = await stub.join("p1", "Alice");
+    const token = joinResult.connectionToken!;
+
+    const response = await stub.fetch(new Request("http://do/ws", {
+      headers: {
+        Upgrade: "websocket",
+        "Sec-WebSocket-Protocol": `retro-board, pid-p1, auth-${token}`,
+      },
+    }));
+    expect(response.status).toBe(101);
+    expect(response.headers.get("Sec-WebSocket-Protocol")).toBe("retro-board");
+    expect(response.webSocket).toBeDefined();
+  });
+
   describe("add-item", () => {
     async function setupRoom(roomId: string) {
       const id = env.RETRO_ROOM.idFromName(roomId);

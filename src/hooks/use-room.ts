@@ -27,8 +27,12 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
   useEffect(() => {
     if (!connectionToken) return;
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//${window.location.host}/api/rooms/${encodeURIComponent(roomId)}/ws?pid=${encodeURIComponent(participantId)}&token=${encodeURIComponent(connectionToken)}`;
-    const ws = new WebSocket(wsUrl);
+    const wsUrl = `${protocol}//${window.location.host}/api/rooms/${encodeURIComponent(roomId)}/ws`;
+    const ws = new WebSocket(wsUrl, [
+      "retro-board",
+      `pid-${participantId}`,
+      `auth-${connectionToken}`,
+    ]);
     wsRef.current = ws;
 
     ws.addEventListener("open", () => {

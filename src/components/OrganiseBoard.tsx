@@ -416,7 +416,6 @@ function DragList({ title, groupId, items, emptyText, isOrganise, draggingItemId
               onPointerDown={(event) => {
                 if (event.button !== 0) return;
                 event.preventDefault();
-                event.currentTarget.setPointerCapture?.(event.pointerId);
                 onDragStart(item.id);
               }}
               onMouseDown={(event) => {
@@ -434,7 +433,6 @@ function DragList({ title, groupId, items, emptyText, isOrganise, draggingItemId
                 onPointerDown={(event) => {
                   if (event.button !== 0) return;
                   event.preventDefault();
-                  event.currentTarget.setPointerCapture?.(event.pointerId);
                   onDragStart(item.id);
                 }}
                 onMouseDown={(event) => {
