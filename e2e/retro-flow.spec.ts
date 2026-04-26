@@ -101,6 +101,32 @@ test.describe("Retro Board E2E", () => {
       await expect(page.getByText(/Alice/i)).toBeVisible();
       await expect(page.getByText(/⭐ Facilitator/)).toBeVisible();
     });
+
+    test("phase mutation exposes pending state and blocks duplicate submissions", async ({ page }) => {
+      await page.goto("/");
+      await page.getByRole("button", { name: /create room/i }).click();
+      await page.waitForURL(/\/room\//);
+      const roomId = new URL(page.url()).pathname.split("/").pop()!;
+
+      await page.getByLabel(/display name/i).fill("Alice");
+      await page.getByRole("button", { name: /join/i }).click();
+      await expect(page.getByText(/Phase: WRITE/i)).toBeVisible();
+
+      let phaseRequests = 0;
+      await page.route(`**/api/rooms/${roomId}/phase`, async (route) => {
+        phaseRequests += 1;
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        await route.continue();
+      });
+
+      const advance = page.getByRole("button", { name: /advance to next phase/i });
+      await advance.click();
+      await advance.click({ force: true });
+      await expect(advance).toBeDisabled();
+      await expect(advance).toHaveAttribute("aria-busy", "true");
+      await expect(page.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
+      expect(phaseRequests).toBe(1);
+    });
   });
 
   test.describe("Two-user flow", () => {
@@ -323,6 +349,41 @@ test.describe("Retro Board E2E", () => {
       }, roomId) as { items: { text: string; columnId: string | null; order: number }[]; version: number };
       expect(stateAfter.version).toBeGreaterThan(stateBefore.version);
       expect(stateAfter.items.find((item) => item.text === "Touch E")?.columnId).toBe(continueColumnId);
+
+      await ctx.close();
+    });
+
+    test("mobile repeated controls meet touch target baseline", async ({ browser }) => {
+      const ctx = await browser.newContext({
+        hasTouch: true,
+        isMobile: true,
+        viewport: { width: 390, height: 844 },
+      });
+      const page = await ctx.newPage();
+      await page.goto("/");
+      await page.getByRole("button", { name: /create room/i }).click();
+      await page.waitForURL(/\/room\//);
+      await page.getByLabel(/display name/i).fill("Alice");
+      await page.getByRole("button", { name: /join/i }).click();
+      await expect(page.getByText(/Phase: WRITE/i)).toBeVisible();
+
+      await page.getByPlaceholder(/add a retro item/i).fill("Touch target item");
+      await page.getByRole("button", { name: /add item/i }).click();
+      await page.getByRole("button", { name: /advance to next phase/i }).click();
+      await expect(page.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
+
+      const controls = [
+        page.getByRole("button", { name: /drag Touch target item/i }).first(),
+        page.getByRole("button", { name: /create group \/ column/i }),
+        page.getByRole("button", { name: /advance to next phase/i }),
+      ];
+
+      for (const control of controls) {
+        const box = await control.boundingBox();
+        expect(box).not.toBeNull();
+        expect(box!.width).toBeGreaterThanOrEqual(44);
+        expect(box!.height).toBeGreaterThanOrEqual(44);
+      }
 
       await ctx.close();
     });

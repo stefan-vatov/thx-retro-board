@@ -6,7 +6,7 @@ interface UseRoomResult {
   connected: boolean;
   lastError: string | null;
   clearError: () => void;
-  send: (message: unknown) => void;
+  send: (message: unknown) => boolean;
 }
 
 export function useRoom(roomId: string, participantId: string, connectionToken?: string): UseRoomResult {
@@ -87,7 +87,10 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       setLastError(null);
       wsRef.current.send(JSON.stringify(message));
+      return true;
     }
+    setLastError("Reconnecting. Please try again once the room is connected.");
+    return false;
   }, []);
 
   const clearError = useCallback(() => setLastError(null), []);

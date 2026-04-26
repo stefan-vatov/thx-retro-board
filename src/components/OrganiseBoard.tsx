@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { RoomState, RetroItem, Group } from "../domain";
 import {
   getUngroupedItems,
@@ -12,7 +12,7 @@ import {
 interface OrganiseBoardProps {
   roomState: RoomState;
   isFacilitator: boolean;
-  send: (message: unknown) => void;
+  send: (message: unknown) => boolean;
   serverError?: string | null;
   clearServerError?: () => void;
 }
@@ -20,6 +20,8 @@ interface OrganiseBoardProps {
 export function OrganiseBoard({ roomState, isFacilitator, send, serverError = null, clearServerError }: OrganiseBoardProps) {
   const [newGroupName, setNewGroupName] = useState("");
   const [groupError, setGroupError] = useState<string | null>(null);
+  const [columnPending, setColumnPending] = useState(false);
+  const columnPendingVersionRef = useRef<number | null>(null);
   const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
   const [dragStart, setDragStart] = useState<{ itemId: string; expectedVersion: number; sourceGroupId: string | null; sourceIndex: number } | null>(null);
   const [activeDrop, setActiveDrop] = useState<DropTarget | null>(null);
@@ -49,9 +51,32 @@ export function OrganiseBoard({ roomState, isFacilitator, send, serverError = nu
       return;
     }
     clearServerError?.();
-    send({ type: "create-column", name: sanitizeColumnName(newGroupName) });
+    if (!send({ type: "create-column", name: sanitizeColumnName(newGroupName) })) {
+      setGroupError("Reconnecting. Please try again once the room is connected.");
+      return;
+    }
+    columnPendingVersionRef.current = roomState.version;
+    setColumnPending(true);
     setNewGroupName("");
   }
+
+  useEffect(() => {
+    if (columnPending && columnPendingVersionRef.current !== roomState.version) {
+      columnPendingVersionRef.current = null;
+      setColumnPending(false);
+    }
+  }, [columnPending, roomState.version]);
+
+  useEffect(() => {
+    if (serverColumnError) {
+      const timeout = window.setTimeout(() => {
+        columnPendingVersionRef.current = null;
+        setColumnPending(false);
+      }, 0);
+      return () => window.clearTimeout(timeout);
+    }
+    return undefined;
+  }, [serverColumnError]);
 
   const handleReorderGroups = useCallback(
     (fromIdx: number, toIdx: number) => {
@@ -184,11 +209,19 @@ export function OrganiseBoard({ roomState, isFacilitator, send, serverError = nu
               maxLength={MAX_COLUMN_NAME_LENGTH}
               placeholder="New group name / column name…"
               aria-label="New column name"
-              disabled={isAtMaxColumns}
+              disabled={isAtMaxColumns || columnPending}
               aria-describedby={feedbackMessages.length > 0 ? "organise-column-feedback" : undefined}
               aria-invalid={groupError || serverColumnError ? "true" : undefined}
             />
-            <button type="submit" className="btn btn--secondary btn--sm" aria-label="Create group / column" disabled={isAtMaxColumns}>Create Column</button>
+            <button
+              type="submit"
+              className="btn btn--secondary btn--sm"
+              aria-label="Create group / column"
+              disabled={isAtMaxColumns || columnPending}
+              aria-busy={columnPending}
+            >
+              {columnPending ? "Creating…" : "Create Column"}
+            </button>
           </form>
           {feedbackMessages.length > 0 && (
             <div id="organise-column-feedback" style={{ display: "grid", gap: "var(--space-1)" }}>

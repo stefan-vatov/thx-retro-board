@@ -184,7 +184,7 @@ body {
 
 /* --- Centered Content Shell --- */
 .content-shell {
-  max-width: 720px;
+  max-width: 1120px;
   width: 100%;
   margin: 0 auto;
   padding: var(--space-8) var(--space-4);
@@ -244,6 +244,8 @@ body {
   display: flex;
   align-items: center;
   gap: var(--space-3);
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .room-header__title {
@@ -723,6 +725,7 @@ body {
   border-radius: var(--radius-md);
   border: 1px solid transparent;
   line-height: var(--leading-relaxed);
+  overflow-wrap: anywhere;
 }
 
 .status-msg--error {
@@ -794,9 +797,11 @@ body {
 
 .item-row__text {
   flex: 1;
+  min-width: 0;
   font-size: var(--text-base);
   color: var(--text-primary);
   word-break: break-word;
+  overflow-wrap: anywhere;
   line-height: var(--leading-relaxed);
 }
 
@@ -808,14 +813,28 @@ body {
 }
 
 .drag-handle {
-  border: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
   background: transparent;
-  padding: var(--space-1);
+  padding: 0;
   color: var(--text-muted);
   font-size: var(--text-sm);
   letter-spacing: -0.2em;
   line-height: 1;
   cursor: grab;
+}
+
+.drag-handle:hover,
+.drag-handle:focus-visible {
+  background: var(--glass-bg-hover);
+  border-color: var(--glass-border);
+  color: var(--text-primary);
 }
 
 .drag-status {
@@ -1329,8 +1348,8 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  min-width: 44px;
+  min-height: 44px;
   padding: 0;
   font-size: var(--text-base);
   background: transparent;

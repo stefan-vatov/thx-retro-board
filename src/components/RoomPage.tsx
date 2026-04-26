@@ -188,7 +188,7 @@ function ColumnConfiguration({
   clearServerError,
 }: {
   roomState: RoomState;
-  send: (message: unknown) => void;
+  send: (message: unknown) => boolean;
   serverError: string | null;
   clearServerError: () => void;
 }) {
@@ -198,10 +198,31 @@ function ColumnConfiguration({
   const [editingName, setEditingName] = useState("");
   const [columnMsg, setColumnMsg] = useState<string | null>(null);
   const [columnError, setColumnError] = useState<string | null>(null);
+  const [pendingColumnMutation, setPendingColumnMutation] = useState(false);
+  const pendingColumnVersionRef = useRef<number | null>(null);
   const canMutate = roomState.phase === "write" || roomState.phase === "organise";
   const columns = getSortedColumns(roomState);
   const isAtMax = columns.length >= MAX_COLUMNS;
   const displayedError = columnError ?? (serverError && /column/i.test(serverError) ? serverError : null);
+
+  useEffect(() => {
+    if (pendingColumnMutation && pendingColumnVersionRef.current !== roomState.version) {
+      pendingColumnVersionRef.current = null;
+      setPendingColumnMutation(false);
+      setColumnMsg(null);
+    }
+  }, [pendingColumnMutation, roomState.version]);
+
+  useEffect(() => {
+    if (displayedError) {
+      const timeout = window.setTimeout(() => {
+        pendingColumnVersionRef.current = null;
+        setPendingColumnMutation(false);
+      }, 0);
+      return () => window.clearTimeout(timeout);
+    }
+    return undefined;
+  }, [displayedError]);
 
   function clearFeedback() {
     setColumnMsg(null);
@@ -231,7 +252,12 @@ function ColumnConfiguration({
       setColumnError(validationError);
       return;
     }
-    send({ type: "create-column", name: sanitizeColumnName(newColumnName) });
+    if (!send({ type: "create-column", name: sanitizeColumnName(newColumnName) })) {
+      setColumnError("Reconnecting. Please try again once the room is connected.");
+      return;
+    }
+    pendingColumnVersionRef.current = roomState.version;
+    setPendingColumnMutation(true);
     setNewColumnName("");
     setColumnMsg("Column creation sent.");
   }
@@ -249,7 +275,12 @@ function ColumnConfiguration({
       setColumnError(validationError);
       return;
     }
-    send({ type: "edit-column", columnId, name: sanitizeColumnName(editingName) });
+    if (!send({ type: "edit-column", columnId, name: sanitizeColumnName(editingName) })) {
+      setColumnError("Reconnecting. Please try again once the room is connected.");
+      return;
+    }
+    pendingColumnVersionRef.current = roomState.version;
+    setPendingColumnMutation(true);
     setEditingColumnId(null);
     setEditingName("");
     setColumnMsg("Column rename sent.");
@@ -261,7 +292,12 @@ function ColumnConfiguration({
     const [moved] = reordered.splice(fromIdx, 1);
     if (!moved) return;
     reordered.splice(toIdx, 0, moved);
-    send({ type: "reorder-columns", columnIds: reordered.map((column) => column.id) });
+    if (!send({ type: "reorder-columns", columnIds: reordered.map((column) => column.id) })) {
+      setColumnError("Reconnecting. Please try again once the room is connected.");
+      return;
+    }
+    pendingColumnVersionRef.current = roomState.version;
+    setPendingColumnMutation(true);
     setColumnMsg("Column reorder sent.");
   }
 
@@ -309,10 +345,15 @@ function ColumnConfiguration({
               maxLength={MAX_COLUMN_NAME_LENGTH}
               placeholder="New column name…"
               aria-label="New column name"
-              disabled={!canMutate || isAtMax}
+              disabled={!canMutate || isAtMax || pendingColumnMutation}
             />
-            <button className="btn btn--secondary btn--sm" type="submit" disabled={!canMutate || isAtMax}>
-              Add column
+            <button
+              className="btn btn--secondary btn--sm"
+              type="submit"
+              disabled={!canMutate || isAtMax || pendingColumnMutation}
+              aria-busy={pendingColumnMutation}
+            >
+              {pendingColumnMutation ? "Adding…" : "Add column"}
             </button>
           </form>
 
@@ -346,16 +387,24 @@ function ColumnConfiguration({
                 <span className="column-config__actions">
                   {editingColumnId === column.id ? (
                     <>
-                      <button type="button" className="btn btn--secondary btn--sm" onClick={() => submitEdit(column.id)}>Save</button>
+                      <button
+                        type="button"
+                        className="btn btn--secondary btn--sm"
+                        onClick={() => submitEdit(column.id)}
+                        disabled={pendingColumnMutation}
+                        aria-busy={pendingColumnMutation}
+                      >
+                        {pendingColumnMutation ? "Saving…" : "Save"}
+                      </button>
                       <button type="button" className="reorder-btn" onClick={() => setEditingColumnId(null)} aria-label="Cancel column edit">×</button>
                     </>
                   ) : (
-                    <button type="button" className="btn btn--secondary btn--sm" onClick={() => startEdit(column)} disabled={!canMutate}>
+                    <button type="button" className="btn btn--secondary btn--sm" onClick={() => startEdit(column)} disabled={!canMutate || pendingColumnMutation}>
                       Edit
                     </button>
                   )}
-                  <button type="button" className="reorder-btn" onClick={() => moveColumn(index, index - 1)} disabled={!canMutate || index === 0} aria-label={`Move ${column.name} column left`}>↑</button>
-                  <button type="button" className="reorder-btn" onClick={() => moveColumn(index, index + 1)} disabled={!canMutate || index === columns.length - 1} aria-label={`Move ${column.name} column right`}>↓</button>
+                  <button type="button" className="reorder-btn" onClick={() => moveColumn(index, index - 1)} disabled={!canMutate || pendingColumnMutation || index === 0} aria-label={`Move ${column.name} column left`}>↑</button>
+                  <button type="button" className="reorder-btn" onClick={() => moveColumn(index, index + 1)} disabled={!canMutate || pendingColumnMutation || index === columns.length - 1} aria-label={`Move ${column.name} column right`}>↓</button>
                 </span>
               </li>
             ))}
@@ -443,6 +492,9 @@ export function RoomPage() {
   const [timerMsg, setTimerMsg] = useState<string | null>(null);
   const [timerInputError, setTimerInputError] = useState<string | null>(null);
   const [phaseMsg, setPhaseMsg] = useState<string | null>(null);
+  const [budgetPending, setBudgetPending] = useState(false);
+  const [phasePending, setPhasePending] = useState(false);
+  const [timerPending, setTimerPending] = useState(false);
 
   const { state: wsState, connected, lastError, clearError, send } = useRoom(roomId ?? "", participantId, connectionToken);
 
@@ -459,6 +511,19 @@ export function RoomPage() {
   const effectiveSelectedColumnId = selectedColumnId && sortedRoomColumns.some((column) => column.id === selectedColumnId)
     ? selectedColumnId
     : sortedRoomColumns[0]?.id ?? null;
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setTimerPending(false), 0);
+    return () => window.clearTimeout(timeout);
+  }, [roomState?.timer.startedAt, roomState?.timer.durationSeconds]);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setPhaseMsg(null);
+      setBudgetMsg(null);
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [roomState?.phase, roomState?.voteBudget]);
 
   useEffect(() => {
     if (!roomId) return;
@@ -527,51 +592,62 @@ export function RoomPage() {
   }
 
   async function handleSetBudget() {
-    if (!roomId) return;
+    if (!roomId || budgetPending) return;
+    setBudgetMsg(null);
     const budget = parseInt(voteBudgetInput, 10);
     if (isNaN(budget) || budget < 1 || budget > 100) {
       setBudgetMsg("Vote budget must be between 1 and 100.");
       return;
     }
-    const result = await setVoteBudget(roomId, participantId, budget);
-    if (result.success) {
-      setBudgetMsg("Vote budget updated.");
-      // Refetch authoritative state to handle any missed WebSocket broadcasts during reconnect
-      try {
-        const state = await getRoomState(roomId);
-        setLocalRoomState(state);
-      } catch {
-        // Refetch failed; local optimistic update stands and WebSocket will reconcile
+    setBudgetPending(true);
+    try {
+      const result = await setVoteBudget(roomId, participantId, budget);
+      if (result.success) {
+        setBudgetMsg("Vote budget updated.");
+        // Refetch authoritative state to handle any missed WebSocket broadcasts during reconnect
+        try {
+          const state = await getRoomState(roomId);
+          setLocalRoomState(state);
+        } catch {
+          // Refetch failed; local optimistic update stands and WebSocket will reconcile
+        }
+      } else {
+        setBudgetMsg(result.error ?? "Failed to update budget.");
       }
-    } else {
-      setBudgetMsg(result.error ?? "Failed to update budget.");
+    } finally {
+      setBudgetPending(false);
     }
   }
 
   async function handleAdvancePhase() {
-    if (!roomId || !roomState) return;
+    if (!roomId || !roomState || phasePending) return;
     setPhaseMsg(null);
     const currentIdx = PHASE_ORDER.indexOf(roomState.phase);
     const nextPhase = PHASE_ORDER[currentIdx + 1] as Phase | undefined;
     if (!nextPhase) return;
-    const result = await setPhase(roomId, participantId, nextPhase);
-    if (result.success) {
-      setPhaseMsg(`Advanced to ${nextPhase}.`);
-      // Refetch authoritative state so the UI updates even if the WebSocket broadcast
-      // was missed during a post-reload reconnect window
-      try {
-        const state = await getRoomState(roomId);
-        setLocalRoomState(state);
-      } catch {
-        // Refetch failed; local optimistic update stands and WebSocket will reconcile
+    setPhasePending(true);
+    try {
+      const result = await setPhase(roomId, participantId, nextPhase);
+      if (result.success) {
+        setPhaseMsg(`Advanced to ${nextPhase}.`);
+        // Refetch authoritative state so the UI updates even if the WebSocket broadcast
+        // was missed during a post-reload reconnect window
+        try {
+          const state = await getRoomState(roomId);
+          setLocalRoomState(state);
+        } catch {
+          // Refetch failed; local optimistic update stands and WebSocket will reconcile
+        }
+      } else {
+        setPhaseMsg(result.error ?? "Failed to change phase.");
       }
-    } else {
-      setPhaseMsg(result.error ?? "Failed to change phase.");
+    } finally {
+      setPhasePending(false);
     }
   }
 
   function handleSetTimer() {
-    if (!roomState) return;
+    if (!roomState || timerPending) return;
     setTimerMsg(null);
     setTimerInputError(null);
     const raw = timerMinutesInput.trim();
@@ -589,7 +665,11 @@ export function RoomPage() {
       return;
     }
     const durationSeconds = minutes * 60;
-    send({ type: "set-timer", durationSeconds });
+    if (!send({ type: "set-timer", durationSeconds })) {
+      setTimerInputError("Reconnecting. Please try again once the room is connected.");
+      return;
+    }
+    setTimerPending(true);
     setTimerMsg("Timer started.");
   }
 
@@ -600,7 +680,10 @@ export function RoomPage() {
       setItemError("Item text cannot be blank.");
       return;
     }
-    send({ type: "add-item", text: sanitizeItemText(itemInput), columnId: effectiveSelectedColumnId });
+    if (!send({ type: "add-item", text: sanitizeItemText(itemInput), columnId: effectiveSelectedColumnId })) {
+      setItemError("Reconnecting. Please try again once the room is connected.");
+      return;
+    }
     setItemInput("");
   }
 
@@ -746,7 +829,14 @@ export function RoomPage() {
                 aria-describedby={budgetMsg && budgetMsg.includes("must be") ? "budget-error" : undefined}
                 aria-invalid={budgetMsg && budgetMsg.includes("must be") ? "true" : undefined}
               />
-              <button className="btn btn--secondary btn--sm" onClick={handleSetBudget}>Set</button>
+              <button
+                className="btn btn--secondary btn--sm"
+                onClick={handleSetBudget}
+                disabled={budgetPending}
+                aria-busy={budgetPending}
+              >
+                {budgetPending ? "Saving…" : "Set"}
+              </button>
               {budgetMsg && budgetMsg.includes("must be") ? (
                 <span id="budget-error" className="status-msg status-msg--error" style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }} role="alert">
                   {budgetMsg}
@@ -761,10 +851,11 @@ export function RoomPage() {
               <button
                 className="btn btn--primary"
                 onClick={handleAdvancePhase}
-                disabled={roomState?.phase === "review"}
+                disabled={roomState?.phase === "review" || phasePending}
+                aria-busy={phasePending}
                 aria-label="Advance to next phase"
               >
-                Advance to Next Phase
+                {phasePending ? "Advancing…" : "Advance to Next Phase"}
               </button>
               {phaseMsg && (
                 <span className="status-msg status-msg--info" style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }} role="status">
@@ -789,7 +880,14 @@ export function RoomPage() {
                 aria-describedby={timerInputError ? "timer-error" : undefined}
                 aria-invalid={timerInputError ? "true" : undefined}
               />
-              <button className="btn btn--secondary btn--sm" onClick={handleSetTimer}>Start Timer</button>
+              <button
+                className="btn btn--secondary btn--sm"
+                onClick={handleSetTimer}
+                disabled={timerPending}
+                aria-busy={timerPending}
+              >
+                {timerPending ? "Starting…" : "Start Timer"}
+              </button>
               {timerInputError && (
                 <span id="timer-error" className="status-msg status-msg--error" style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }} role="alert">
                   {timerInputError}
@@ -889,7 +987,7 @@ export function RoomPage() {
               )}
               {!connected && (
                 <div className="status-msg status-msg--muted write-composer__offline" role="status" aria-live="polite">
-                  <span aria-hidden="true">⏳</span> Your changes are queued. Reconnecting…
+                  <span aria-hidden="true">⏳</span> Reconnect to add items. Existing room content remains readable.
                 </div>
               )}
             </form>
