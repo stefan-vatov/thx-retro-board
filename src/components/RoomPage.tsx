@@ -3,7 +3,7 @@ import { useParams } from "react-router-dom";
 import { joinRoom, getRoomState, setVoteBudget, setPhase } from "../api";
 import { useRoom } from "../hooks";
 import type { RoomState, Phase, Column, RetroItem } from "../domain";
-import { sanitizeItemText, isValidItemText, PHASE_ORDER, sanitizeColumnName, isValidColumnName, MAX_COLUMN_NAME_LENGTH, MAX_COLUMNS, getGroupedItems } from "../domain";
+import { sanitizeItemText, isValidItemText, PHASE_ORDER, sanitizeColumnName, isValidColumnName, MAX_COLUMN_NAME_LENGTH, MAX_COLUMNS } from "../domain";
 import { OrganiseBoard } from "./OrganiseBoard";
 import { VoteBoard } from "./VoteBoard";
 import { ReviewBoard } from "./ReviewBoard";
@@ -310,6 +310,25 @@ function ColumnConfiguration({
     setColumnMsg("Column reorder sent.");
   }
 
+  function deleteColumn(column: Column) {
+    clearFeedback();
+    if (!canMutate) {
+      setColumnError("Columns can be configured during write and organise phases.");
+      return;
+    }
+    if (!send({ type: "delete-column", columnId: column.id })) {
+      setColumnError("Reconnecting. Please try again once the room is connected.");
+      return;
+    }
+    if (editingColumnId === column.id) {
+      setEditingColumnId(null);
+      setEditingName("");
+    }
+    pendingColumnVersionRef.current = roomState.version;
+    setPendingColumnMutation(true);
+    setColumnMsg(`Column "${column.name}" deletion sent.`);
+  }
+
   return (
     <section className="column-config" aria-label="Column configuration">
       <button
@@ -414,6 +433,7 @@ function ColumnConfiguration({
                   )}
                   <button type="button" className="reorder-btn" onClick={() => moveColumn(index, index - 1)} disabled={!canMutate || pendingColumnMutation || index === 0} aria-label={`Move ${column.name} column left`}>↑</button>
                   <button type="button" className="reorder-btn" onClick={() => moveColumn(index, index + 1)} disabled={!canMutate || pendingColumnMutation || index === columns.length - 1} aria-label={`Move ${column.name} column right`}>↓</button>
+                  <button type="button" className="reorder-btn reorder-btn--danger" onClick={() => deleteColumn(column)} disabled={!canMutate || pendingColumnMutation} aria-label={`Delete ${column.name} column`}>🗑</button>
                 </span>
               </li>
             ))}
@@ -449,20 +469,34 @@ function WriteColumnBoard({ roomState }: { roomState: RoomState }) {
     );
   }
 
+  if (columns.length === 0) {
+    return (
+      <div className="write-empty-state empty-state" role="status" aria-live="polite">
+        <div className="empty-state__icon" aria-hidden="true">🧱</div>
+        <h3 className="empty-state__title">Create your first column</h3>
+        <p className="empty-state__text">
+          This room starts with an empty kanban board. Ask the facilitator to configure list-style columns before adding retro items.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="column-board" aria-label="Write phase columns">
       {columns.map((column) => {
-        const items = getGroupedItems(roomState.items, column.id);
+        const items = roomState.items
+          .filter((item) => item.columnId === column.id && item.groupId === null)
+          .sort((a, b) => a.order - b.order);
         return (
-          <section key={column.id} className="column-board__column" aria-labelledby={`write-column-${column.id}`}>
+          <section key={column.id} className="column-board__column" aria-labelledby={`write-column-${column.id}`} data-column-id={column.id}>
             <div className="column-board__header">
               <h3 id={`write-column-${column.id}`} className="column-board__title" title={column.name}>{column.name}</h3>
-              <span className="column-board__count">{items.length}</span>
+              <span className="column-board__count" aria-label={`${items.length} items`}>{items.length}</span>
             </div>
             {items.length === 0 ? (
-              <p className="text-muted column-board__empty">No items in this column yet.</p>
+              <p className="text-muted column-board__empty">No items in this lane yet. Choose “{column.name}” above to add one.</p>
             ) : (
-              <ul className="item-list">
+              <ul className="item-list" aria-label={`${column.name} items`}>
                 {items.map((item, index) => renderItem(item, index))}
               </ul>
             )}
@@ -519,6 +553,7 @@ export function RoomPage() {
   const charCountId = "item-char-count";
   const itemErrorId = "item-error";
   const sortedRoomColumns = roomState ? getSortedColumns(roomState) : [];
+  const hasConfiguredColumns = sortedRoomColumns.length > 0;
   const effectiveSelectedColumnId = selectedColumnId && sortedRoomColumns.some((column) => column.id === selectedColumnId)
     ? selectedColumnId
     : sortedRoomColumns[0]?.id ?? null;
@@ -704,6 +739,10 @@ export function RoomPage() {
     setItemError(null);
     if (!isValidItemText(itemInput)) {
       setItemError("Item text cannot be blank.");
+      return;
+    }
+    if (!effectiveSelectedColumnId) {
+      setItemError("Create a column before adding items.");
       return;
     }
     if (!send({ type: "add-item", text: sanitizeItemText(itemInput), columnId: effectiveSelectedColumnId })) {
@@ -961,9 +1000,12 @@ export function RoomPage() {
                   className="input write-composer__column-select"
                   value={effectiveSelectedColumnId ?? ""}
                   onChange={(event) => setSelectedColumnId(event.target.value)}
-                  disabled={!connected}
+                  disabled={!connected || !hasConfiguredColumns}
                   aria-label="Column for new item"
                 >
+                  {!hasConfiguredColumns && (
+                    <option value="">No columns yet</option>
+                  )}
                   {sortedRoomColumns.map((column) => (
                     <option key={column.id} value={column.id}>{column.name}</option>
                   ))}
@@ -983,7 +1025,7 @@ export function RoomPage() {
                     aria-required="true"
                     aria-describedby={[itemError ? itemErrorId : "", isNearCharLimit ? charCountId : ""].filter(Boolean).join(" ") || undefined}
                     aria-invalid={itemError ? "true" : undefined}
-                    disabled={!connected}
+                    disabled={!connected || !hasConfiguredColumns}
                   />
                   {isNearCharLimit && (
                     <span
@@ -999,7 +1041,7 @@ export function RoomPage() {
                 <button
                   type="submit"
                   className="btn btn--primary write-composer__submit"
-                  disabled={!connected || !itemInput.trim()}
+                  disabled={!connected || !hasConfiguredColumns || !itemInput.trim()}
                   aria-label="Add item"
                 >
                   <span aria-hidden="true">+</span>
@@ -1014,6 +1056,11 @@ export function RoomPage() {
               {!connected && (
                 <div className="status-msg status-msg--muted write-composer__offline" role="status" aria-live="polite">
                   <span aria-hidden="true">⏳</span> Reconnect to add items. Existing room content remains readable.
+                </div>
+              )}
+              {connected && !hasConfiguredColumns && (
+                <div className="status-msg status-msg--muted write-composer__offline" role="status" aria-live="polite">
+                  <span aria-hidden="true">🧱</span> No columns yet. Facilitators can use Configure columns to create lanes.
                 </div>
               )}
             </form>

@@ -1387,6 +1387,17 @@ body {
   color: var(--text-primary);
 }
 
+.reorder-btn--danger {
+  color: var(--status-error);
+  border-color: rgba(241, 96, 96, 0.22);
+}
+
+.reorder-btn--danger:hover:not(:disabled) {
+  background: var(--status-error-muted);
+  border-color: rgba(241, 96, 96, 0.44);
+  color: #ffb0b0;
+}
+
 .reorder-btn:focus-visible {
   box-shadow: var(--focus-ring);
 }
