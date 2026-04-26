@@ -842,9 +842,9 @@ test.describe("Retro Board E2E", () => {
       await expect(emptyPage.locator("[data-vote-item-id]", { hasText: "Ungrouped only" }).getByText(/1 vote/)).toBeVisible({ timeout: 5000 });
       await emptyPage.getByRole("button", { name: /advance to next phase/i }).click();
       await expect(emptyPage.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
-      await expect(emptyPage.getByText("No groups to review.")).toBeVisible({ timeout: 5000 });
-      await expect(emptyPage.getByText("Create groups during organise to produce review slides.")).toBeVisible();
-      await expect(emptyPage.getByText("Ungrouped only")).toHaveCount(0);
+      await expect(emptyPage.getByText("Slide 1 of 1")).toBeVisible({ timeout: 5000 });
+      await expect(emptyPage.locator("[data-review-item-id]", { hasText: "Ungrouped only" }).getByLabel(/1 vote/)).toBeVisible();
+      await expect(emptyPage.locator("[data-review-item-id]", { hasText: "Ungrouped only" }).getByText("Topics")).toBeVisible();
       await emptyCtx.close();
     });
 

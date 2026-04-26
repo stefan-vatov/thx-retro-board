@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { RoomState, Column, Group, RetroItem } from "../domain";
+import { groupVoteTarget, itemVoteTarget } from "../domain";
 import { ReviewBoard } from "./ReviewBoard";
 
 function makeRoomState(groups: Group[], items: RetroItem[] = [], votes: RoomState["votes"] = []): RoomState {
@@ -26,7 +27,7 @@ function makeRoomState(groups: Group[], items: RetroItem[] = [], votes: RoomStat
 }
 
 describe("ReviewBoard slideshow", () => {
-  it("renders one active group slide sorted by group votes descending", () => {
+  it("renders one active mixed target slide sorted by votes descending", () => {
     const groups: Group[] = [
       { id: "group-low", name: "Low vote group", columnId: "column-1", order: 0 },
       { id: "group-high", name: "High vote group", columnId: "column-2", order: 0 },
@@ -34,50 +35,60 @@ describe("ReviewBoard slideshow", () => {
     const items: RetroItem[] = [
       { id: "item-low", text: "Less important", authorId: "fac1", columnId: "column-1", groupId: "group-low", order: 0 },
       { id: "item-high", text: "Most important", authorId: "fac1", columnId: "column-2", groupId: "group-high", order: 0 },
+      { id: "item-top", text: "Ungrouped winner", authorId: "fac1", columnId: "column-1", groupId: null, order: 1 },
     ];
 
     const markup = renderToStaticMarkup(
       createElement(ReviewBoard, {
         roomState: makeRoomState(groups, items, [
-          { participantId: "fac1", groupId: "group-low", count: 1 },
-          { participantId: "fac1", groupId: "group-high", count: 3 },
+          { participantId: "fac1", target: groupVoteTarget("group-low"), count: 1 },
+          { participantId: "fac1", target: groupVoteTarget("group-high"), count: 3 },
+          { participantId: "fac1", target: itemVoteTarget("item-top"), count: 4 },
         ]),
       }),
     );
 
-    expect(markup).toContain("Slide 1 of 2");
-    expect(markup).toContain("High vote group");
-    expect(markup).toContain("Most important");
-    expect(markup).toContain("3 votes");
+    expect(markup).toContain("Slide 1 of 3");
+    expect(markup).toContain("Ungrouped winner");
+    expect(markup).toContain("Item result");
+    expect(markup).toContain("Column 1");
+    expect(markup).toContain("4 votes");
+    expect(markup).not.toContain("High vote group");
+    expect(markup).not.toContain("Most important");
     expect(markup).not.toContain("Low vote group");
     expect(markup).not.toContain("Less important");
-    expect(markup).toContain("Previous group");
-    expect(markup).toContain("Next group");
+    expect(markup).toContain("Previous review target");
+    expect(markup).toContain("Next review target");
     expect(markup).not.toContain("Add a vote");
     expect(markup).not.toContain("Create group");
   });
 
-  it("uses deterministic tie ordering and includes zero-vote groups", () => {
+  it("uses deterministic tie ordering and includes zero-vote groups and items", () => {
     const groups: Group[] = [
       { id: "group-b", name: "Second tied group", columnId: "column-2", order: 0 },
       { id: "group-a", name: "First tied group", columnId: "column-1", order: 0 },
       { id: "group-c", name: "Later zero group", columnId: "column-2", order: 1 },
     ];
+    const items: RetroItem[] = [
+      { id: "item-a", text: "First ungrouped item", authorId: "fac1", columnId: "column-1", groupId: null, order: 1 },
+      { id: "item-b", text: "Second ungrouped item", authorId: "fac1", columnId: "column-2", groupId: null, order: 0 },
+    ];
 
     const markup = renderToStaticMarkup(
       createElement(ReviewBoard, {
-        roomState: makeRoomState(groups),
+        roomState: makeRoomState(groups, items),
       }),
     );
 
-    expect(markup).toContain("Slide 1 of 3");
+    expect(markup).toContain("Slide 1 of 5");
     expect(markup).toContain("First tied group");
     expect(markup).toContain("0 votes");
     expect(markup).not.toContain("Second tied group");
+    expect(markup).not.toContain("First ungrouped item");
     expect(markup).not.toContain("Later zero group");
   });
 
-  it("shows a stable no-group review state without slides", () => {
+  it("shows ungrouped item slides even when there are no groups", () => {
     const items: RetroItem[] = [
       { id: "item-1", text: "Ungrouped topic", authorId: "fac1", columnId: "column-1", groupId: null, order: 0 },
     ];
@@ -88,9 +99,21 @@ describe("ReviewBoard slideshow", () => {
       }),
     );
 
-    expect(markup).toContain("No groups to review.");
-    expect(markup).toContain("Create groups during organise to produce review slides.");
+    expect(markup).toContain("Slide 1 of 1");
+    expect(markup).toContain("Ungrouped topic");
+    expect(markup).toContain("Column 1");
+    expect(markup).not.toContain("No review targets yet.");
+  });
+
+  it("shows a stable empty review state only when there are no targets", () => {
+    const markup = renderToStaticMarkup(
+      createElement(ReviewBoard, {
+        roomState: makeRoomState([]),
+      }),
+    );
+
+    expect(markup).toContain("No review targets yet.");
+    expect(markup).toContain("Add ungrouped items or create groups before review to produce slides.");
     expect(markup).not.toContain("Slide 1");
-    expect(markup).not.toContain("Ungrouped topic");
   });
 });
