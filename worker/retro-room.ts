@@ -24,6 +24,7 @@ import {
   validateFullColumnPermutation,
   applyReorderItems,
   validateItemReorderPayload,
+  validateExistingColumnId,
   applyMoveItemToGroup,
   applyCastVote,
   applyRemoveVote,
@@ -112,8 +113,8 @@ function normalizeColumns(stored: Pick<StoredState, "columns" | "groups">): Colu
 function isV2StoredState(stored: Partial<StoredState>): boolean {
   if (stored.schemaVersion !== 2) return false;
   if (!Array.isArray(stored.columns) || !Array.isArray(stored.groups)) return false;
-  const columnIds = new Set(stored.columns.map((column) => column.id));
-  return stored.groups.every((group) => typeof group.columnId === "string" && columnIds.has(group.columnId));
+  if (!Array.isArray(stored.items) || !Array.isArray(stored.votes)) return false;
+  return true;
 }
 
 function normalizeGroups(groups: Group[], columns: Column[]): Group[] {
@@ -139,17 +140,26 @@ function normalizeGroups(groups: Group[], columns: Column[]): Group[] {
 function normalizeItems(items: RetroItem[], columns: Column[], groups: Group[]): RetroItem[] {
   const validColumnIds = new Set(columns.map((column) => column.id));
   const groupsById = new Map(groups.map((group) => [group.id, group]));
-  return items.flatMap((item, index) => {
+  return items.flatMap((item) => {
+    if (
+      !item
+      || typeof item.id !== "string"
+      || typeof item.text !== "string"
+      || typeof item.authorId !== "string"
+    ) {
+      return [];
+    }
     const columnId = item.columnId;
-    if (columnId !== null && (typeof columnId !== "string" || !validColumnIds.has(columnId))) return [];
-    const groupId = typeof item.groupId === "string" && (columnId === null || groupsById.get(item.groupId)?.columnId === columnId) ? item.groupId : null;
+    if (typeof columnId !== "string" || !validColumnIds.has(columnId)) return [];
+    const groupId = typeof item.groupId === "string" && groupsById.get(item.groupId)?.columnId === columnId ? item.groupId : null;
     return {
       ...item,
       columnId,
       groupId,
-      order: Number.isInteger(item.order) ? item.order : index,
+      order: Number.isInteger(item.order) ? item.order : 0,
     };
-  });
+  }).sort((a, b) => a.order - b.order)
+    .map((item, index) => ({ ...item, order: index }));
 }
 
 function normalizeVotes(votes: VoteAllocation[], groups: Group[]): VoteAllocation[] {
@@ -368,7 +378,7 @@ export class RetroRoom extends DurableObject<Env> {
     return { success: true };
   }
 
-  async addItem(participantId: string, rawText: string, columnId: string | null = null): Promise<{ success: boolean; error?: string; item?: RetroItem }> {
+  async addItem(participantId: string, rawText: string, columnId?: unknown): Promise<{ success: boolean; error?: string; item?: RetroItem }> {
     const s = await this.loadState();
 
     if (s.phase !== "write") {
@@ -382,15 +392,16 @@ export class RetroRoom extends DurableObject<Env> {
     if (!s.participants.some((participant) => participant.id === participantId)) {
       return { success: false, error: "Participant not found" };
     }
-    if (columnId !== null && !s.columns?.some((column) => column.id === columnId)) {
-      return { success: false, error: "Column not found" };
+    const columnValidation = validateExistingColumnId(s.columns ?? [], columnId);
+    if (!columnValidation.valid) {
+      return { success: false, error: columnValidation.error };
     }
 
     const item: RetroItem = {
       id: crypto.randomUUID(),
       text: sanitized,
       authorId: participantId,
-      columnId,
+      columnId: columnValidation.columnId,
       groupId: null,
       order: s.items.length,
     };

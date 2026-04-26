@@ -30,7 +30,7 @@ export function createParticipant(id: string, displayName: string, isFacilitator
   return { id, displayName, isFacilitator };
 }
 
-export function createItem(id: string, text: string, authorId: string, order: number, columnId: string | null = null, groupId: string | null = null): RetroItem {
+export function createItem(id: string, text: string, authorId: string, order: number, columnId: string, groupId: string | null = null): RetroItem {
   return { id, text, authorId, columnId, groupId, order };
 }
 
@@ -115,6 +115,19 @@ export function isValidGroupName(name: string): boolean {
 export const sanitizeColumnName = sanitizeGroupName;
 export const isValidColumnName = isValidGroupName;
 
+export function validateExistingColumnId(
+  columns: Column[],
+  columnId: unknown,
+): { valid: true; columnId: string } | { valid: false; error: string } {
+  if (typeof columnId !== "string" || columnId.trim().length === 0) {
+    return { valid: false, error: "Column is required" };
+  }
+  if (!columns.some((column) => column.id === columnId)) {
+    return { valid: false, error: "Column not found" };
+  }
+  return { valid: true, columnId };
+}
+
 export function getUngroupedItems(items: RetroItem[]): RetroItem[] {
   return items
     .filter((item) => item.groupId === null)
@@ -162,7 +175,7 @@ export function validateItemReorderPayload(
 
   const itemsById = new Map(items.map((item) => [item.id, item]));
   const seen = new Set<string>();
-  let targetColumnId: string | null | undefined;
+  let targetColumnId: string | undefined;
   let targetGroupId: string | null | undefined;
   let targetColumnIdSet = false;
 
@@ -259,7 +272,7 @@ export function applyMoveItemToGroup(
   if (itemIndex === -1) return items;
 
   const source = items[itemIndex]!;
-  const moved: RetroItem = { ...source, columnId: source.columnId ?? targetGroupId, groupId: targetGroupId };
+  const moved: RetroItem = { ...source, groupId: targetGroupId };
   const otherItems = items.filter((i) => i.id !== itemId);
 
   const sameGroup = otherItems

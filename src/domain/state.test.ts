@@ -29,6 +29,7 @@ import {
   applyMoveItemToGroup,
   applyCastVote,
   applyRemoveVote,
+  validateExistingColumnId,
 } from "./state";
 import type { RetroItem, Group, RoomState } from "./types";
 
@@ -77,9 +78,27 @@ describe("createParticipant", () => {
 });
 
 describe("createItem", () => {
-  it("creates an item with null groupId", () => {
-    const item = createItem("i1", "Improve standups", "p1", 0);
-    expect(item).toEqual({ id: "i1", text: "Improve standups", authorId: "p1", columnId: null, groupId: null, order: 0 });
+  it("creates an item with a required original column ID and null groupId", () => {
+    const item = createItem("i1", "Improve standups", "p1", 0, "col-1");
+    expect(item).toEqual({ id: "i1", text: "Improve standups", authorId: "p1", columnId: "col-1", groupId: null, order: 0 });
+  });
+});
+
+describe("validateExistingColumnId", () => {
+  const columns = [
+    { id: "col-1", name: "Went well", order: 0 },
+    { id: "col-2", name: "Could improve", order: 1 },
+  ];
+
+  it("accepts valid configured column IDs", () => {
+    expect(validateExistingColumnId(columns, "col-1")).toEqual({ valid: true, columnId: "col-1" });
+  });
+
+  it("rejects missing, null, malformed, and unknown column IDs", () => {
+    expect(validateExistingColumnId(columns, undefined)).toEqual({ valid: false, error: "Column is required" });
+    expect(validateExistingColumnId(columns, null)).toEqual({ valid: false, error: "Column is required" });
+    expect(validateExistingColumnId(columns, 12)).toEqual({ valid: false, error: "Column is required" });
+    expect(validateExistingColumnId(columns, "missing")).toEqual({ valid: false, error: "Column not found" });
   });
 });
 
@@ -238,9 +257,9 @@ describe("isValidItemText", () => {
 
 describe("reorderList", () => {
   const items: RetroItem[] = [
-    { id: "a", text: "A", authorId: "p1", groupId: null, order: 0 },
-    { id: "b", text: "B", authorId: "p1", groupId: null, order: 1 },
-    { id: "c", text: "C", authorId: "p1", groupId: null, order: 2 },
+    { id: "a", text: "A", authorId: "p1", columnId: "col-1", groupId: null, order: 0 },
+    { id: "b", text: "B", authorId: "p1", columnId: "col-1", groupId: null, order: 1 },
+    { id: "c", text: "C", authorId: "p1", columnId: "col-1", groupId: null, order: 2 },
   ];
 
   it("reorders items by ID list", () => {
@@ -323,9 +342,9 @@ describe("isValidGroupName", () => {
 
 describe("getUngroupedItems", () => {
   const items: RetroItem[] = [
-    { id: "a", text: "A", authorId: "p1", groupId: null, order: 2 },
-    { id: "b", text: "B", authorId: "p1", groupId: "g1", order: 0 },
-    { id: "c", text: "C", authorId: "p1", groupId: null, order: 1 },
+    { id: "a", text: "A", authorId: "p1", columnId: "col-1", groupId: null, order: 2 },
+    { id: "b", text: "B", authorId: "p1", columnId: "col-1", groupId: "g1", order: 0 },
+    { id: "c", text: "C", authorId: "p1", columnId: "col-1", groupId: null, order: 1 },
   ];
 
   it("returns items with null groupId sorted by order", () => {
@@ -335,7 +354,7 @@ describe("getUngroupedItems", () => {
 
   it("returns empty array when all items are grouped", () => {
     const grouped: RetroItem[] = [
-      { id: "a", text: "A", authorId: "p1", groupId: "g1", order: 0 },
+      { id: "a", text: "A", authorId: "p1", columnId: "col-1", groupId: "g1", order: 0 },
     ];
     expect(getUngroupedItems(grouped)).toEqual([]);
   });
@@ -343,10 +362,10 @@ describe("getUngroupedItems", () => {
 
 describe("getGroupedItems", () => {
   const items: RetroItem[] = [
-    { id: "a", text: "A", authorId: "p1", groupId: "g1", order: 1 },
-    { id: "b", text: "B", authorId: "p1", groupId: null, order: 0 },
-    { id: "c", text: "C", authorId: "p1", groupId: "g1", order: 0 },
-    { id: "d", text: "D", authorId: "p1", groupId: "g2", order: 0 },
+    { id: "a", text: "A", authorId: "p1", columnId: "col-1", groupId: "g1", order: 1 },
+    { id: "b", text: "B", authorId: "p1", columnId: "col-1", groupId: null, order: 0 },
+    { id: "c", text: "C", authorId: "p1", columnId: "col-1", groupId: "g1", order: 0 },
+    { id: "d", text: "D", authorId: "p1", columnId: "col-1", groupId: "g2", order: 0 },
   ];
 
   it("returns items in specified group sorted by order", () => {
@@ -361,9 +380,9 @@ describe("getGroupedItems", () => {
 
 describe("applyReorderItems", () => {
   const items: RetroItem[] = [
-    { id: "a", text: "A", authorId: "p1", groupId: null, order: 0 },
-    { id: "b", text: "B", authorId: "p1", groupId: null, order: 1 },
-    { id: "c", text: "C", authorId: "p1", groupId: null, order: 2 },
+    { id: "a", text: "A", authorId: "p1", columnId: "col-1", groupId: null, order: 0 },
+    { id: "b", text: "B", authorId: "p1", columnId: "col-1", groupId: null, order: 1 },
+    { id: "c", text: "C", authorId: "p1", columnId: "col-1", groupId: null, order: 2 },
   ];
 
   it("reorders items and reassigns order indices", () => {
@@ -380,11 +399,11 @@ describe("applyReorderItems", () => {
 
   it("reordering items within one group preserves items in other groups", () => {
     const multiGroupItems: RetroItem[] = [
-      { id: "a1", text: "A1", authorId: "p1", groupId: "g1", order: 0 },
-      { id: "a2", text: "A2", authorId: "p1", groupId: "g1", order: 1 },
-      { id: "b1", text: "B1", authorId: "p1", groupId: "g2", order: 0 },
-      { id: "b2", text: "B2", authorId: "p1", groupId: "g2", order: 1 },
-      { id: "u1", text: "U1", authorId: "p1", groupId: null, order: 0 },
+      { id: "a1", text: "A1", authorId: "p1", columnId: "col-1", groupId: "g1", order: 0 },
+      { id: "a2", text: "A2", authorId: "p1", columnId: "col-1", groupId: "g1", order: 1 },
+      { id: "b1", text: "B1", authorId: "p1", columnId: "col-1", groupId: "g2", order: 0 },
+      { id: "b2", text: "B2", authorId: "p1", columnId: "col-1", groupId: "g2", order: 1 },
+      { id: "u1", text: "U1", authorId: "p1", columnId: "col-1", groupId: null, order: 0 },
     ];
     // Reorder only g1 items (a2, a1)
     const result = applyReorderItems(multiGroupItems, ["a2", "a1"]);
@@ -399,9 +418,9 @@ describe("applyReorderItems", () => {
 
   it("reordering ungrouped items preserves grouped items", () => {
     const mixedItems: RetroItem[] = [
-      { id: "u1", text: "U1", authorId: "p1", groupId: null, order: 0 },
-      { id: "u2", text: "U2", authorId: "p1", groupId: null, order: 1 },
-      { id: "g1a", text: "G1A", authorId: "p1", groupId: "g1", order: 0 },
+      { id: "u1", text: "U1", authorId: "p1", columnId: "col-1", groupId: null, order: 0 },
+      { id: "u2", text: "U2", authorId: "p1", columnId: "col-1", groupId: null, order: 1 },
+      { id: "g1a", text: "G1A", authorId: "p1", columnId: "col-1", groupId: "g1", order: 0 },
     ];
     // Reorder only ungrouped items
     const result = applyReorderItems(mixedItems, ["u2", "u1"]);
@@ -412,9 +431,9 @@ describe("applyReorderItems", () => {
 
   it("reorders items correctly with target-list contiguous order indices", () => {
     const multiGroupItems: RetroItem[] = [
-      { id: "a1", text: "A1", authorId: "p1", groupId: "g1", order: 0 },
-      { id: "a2", text: "A2", authorId: "p1", groupId: "g1", order: 1 },
-      { id: "b1", text: "B1", authorId: "p1", groupId: "g2", order: 2 },
+      { id: "a1", text: "A1", authorId: "p1", columnId: "col-1", groupId: "g1", order: 0 },
+      { id: "a2", text: "A2", authorId: "p1", columnId: "col-1", groupId: "g1", order: 1 },
+      { id: "b1", text: "B1", authorId: "p1", columnId: "col-1", groupId: "g2", order: 2 },
     ];
     const result = applyReorderItems(multiGroupItems, ["a2", "a1"]);
     expect(result.filter((item) => item.groupId === "g1").map((i) => i.order)).toEqual([0, 1]);
@@ -433,7 +452,7 @@ describe("validateItemReorderPayload", () => {
     { id: "a1", text: "A1", authorId: "p1", columnId: "g1", groupId: "g1", order: 0 },
     { id: "a2", text: "A2", authorId: "p1", columnId: "g1", groupId: "g1", order: 1 },
     { id: "b1", text: "B1", authorId: "p1", columnId: "g2", groupId: "g2", order: 0 },
-    { id: "u1", text: "U1", authorId: "p1", columnId: null, groupId: null, order: 0 },
+    { id: "u1", text: "U1", authorId: "p1", columnId: "g1", groupId: null, order: 0 },
   ];
 
   it("accepts a complete single-list item permutation", () => {
@@ -475,9 +494,9 @@ describe("applyReorderGroups", () => {
 
 describe("applyMoveItemToGroup", () => {
   const items: RetroItem[] = [
-    { id: "a", text: "A", authorId: "p1", groupId: null, order: 0 },
-    { id: "b", text: "B", authorId: "p1", groupId: null, order: 1 },
-    { id: "c", text: "C", authorId: "p1", groupId: "g1", order: 0 },
+    { id: "a", text: "A", authorId: "p1", columnId: "col-1", groupId: null, order: 0 },
+    { id: "b", text: "B", authorId: "p1", columnId: "col-1", groupId: null, order: 1 },
+    { id: "c", text: "C", authorId: "p1", columnId: "col-1", groupId: "g1", order: 0 },
   ];
 
   it("moves item to a group at specified index", () => {
@@ -500,8 +519,8 @@ describe("applyMoveItemToGroup", () => {
 
   it("keeps duplicate text items distinct when moving one", () => {
     const dupItems: RetroItem[] = [
-      { id: "x1", text: "Same", authorId: "p1", groupId: null, order: 0 },
-      { id: "x2", text: "Same", authorId: "p1", groupId: null, order: 1 },
+      { id: "x1", text: "Same", authorId: "p1", columnId: "col-1", groupId: null, order: 0 },
+      { id: "x2", text: "Same", authorId: "p1", columnId: "col-1", groupId: null, order: 1 },
     ];
     const result = applyMoveItemToGroup(dupItems, "x1", "g1", 0);
     expect(result).toHaveLength(2);
@@ -517,7 +536,7 @@ describe("applyMoveItemToGroup", () => {
       { id: "b1", text: "B1", authorId: "p2", columnId: "g2", groupId: "g2", order: 0 },
       { id: "a2", text: "A2", authorId: "p1", columnId: "g1", groupId: "g1", order: 1 },
       { id: "b2", text: "B2", authorId: "p2", columnId: "g2", groupId: "g2", order: 1 },
-      { id: "u1", text: "U1", authorId: "p3", columnId: null, groupId: null, order: 0 },
+      { id: "u1", text: "U1", authorId: "p3", columnId: "g1", groupId: null, order: 0 },
     ];
 
     const result = applyMoveItemToGroup(interleaved, "a2", "g2", 1);
@@ -533,7 +552,7 @@ describe("applyMoveItemToGroup", () => {
 
     expect(moved.text).toBe("A");
     expect(moved.authorId).toBe("p1");
-    expect(moved.columnId).toBe("g1");
+    expect(moved.columnId).toBe("col-1");
     expect(moved.groupId).toBe("g1");
   });
 });

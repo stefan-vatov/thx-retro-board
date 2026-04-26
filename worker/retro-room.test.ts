@@ -101,6 +101,78 @@ describe("RetroRoom Durable Object v2 schema", () => {
     expect(state.votes).toEqual([{ participantId: "fac1", groupId: group.group!.id, itemId: group.group!.id, count: 2 }]);
   });
 
+  it("rejects item adds without a valid existing column without changing state", async () => {
+    const stub = await init("test-v2-add-item-column-required");
+    await stub.join("fac1", "Facilitator");
+    const column = await stub.createColumn("fac1", "Valid lane");
+    const beforeMissing = await stub.getRoomState();
+
+    const missing = await stub.addItem("fac1", "No column");
+    expect(missing.success).toBe(false);
+    expect(missing.error).toBe("Column is required");
+    expect(await stub.getRoomState()).toEqual(beforeMissing);
+
+    const nullColumn = await stub.addItem("fac1", "Null column", null);
+    expect(nullColumn.success).toBe(false);
+    expect(nullColumn.error).toBe("Column is required");
+    expect(await stub.getRoomState()).toEqual(beforeMissing);
+
+    const malformed = await stub.addItem("fac1", "Malformed column", 123 as never);
+    expect(malformed.success).toBe(false);
+    expect(malformed.error).toBe("Column is required");
+    expect(await stub.getRoomState()).toEqual(beforeMissing);
+
+    const unknown = await stub.addItem("fac1", "Unknown column", "missing-column");
+    expect(unknown.success).toBe(false);
+    expect(unknown.error).toBe("Column not found");
+    expect(await stub.getRoomState()).toEqual(beforeMissing);
+
+    const valid = await stub.addItem("fac1", "Valid item", column.column!.id);
+    expect(valid.success).toBe(true);
+    expect(valid.item).toMatchObject({ text: "Valid item", columnId: column.column!.id, groupId: null });
+  });
+
+  it("normalizes persisted v2 state by dropping invalid columnless and orphaned items and related votes", async () => {
+    const roomId = "test-v2-normalize-invalid-item-columns";
+    const id = env.RETRO_ROOM.idFromName(roomId);
+    const stub = env.RETRO_ROOM.get(id);
+    await stub.seedStoredStateForTest({
+      roomId,
+      participants: [{ id: "fac1", displayName: "Facilitator", isFacilitator: true }],
+      facilitatorId: "fac1",
+      columns: [
+        { id: "col-1", name: "Keep", order: 0 },
+        { id: "col-2", name: "Other", order: 1 },
+      ],
+      groups: [
+        { id: "group-1", name: "Kept group", columnId: "col-1", order: 0 },
+        { id: "orphan-group", name: "Orphan group", columnId: "missing-column", order: 1 },
+      ],
+      items: [
+        { id: "valid-item", text: "Valid", authorId: "fac1", columnId: "col-1", groupId: "group-1", order: 0 },
+        { id: "null-column", text: "Null", authorId: "fac1", columnId: null, groupId: null, order: 1 },
+        { id: "missing-column", text: "Missing", authorId: "fac1", groupId: null, order: 2 },
+        { id: "malformed-column", text: "Malformed", authorId: "fac1", columnId: 42, groupId: null, order: 3 },
+        { id: "unknown-column", text: "Unknown", authorId: "fac1", columnId: "missing-column", groupId: null, order: 4 },
+        { id: "cross-group", text: "Cross group", authorId: "fac1", columnId: "col-2", groupId: "group-1", order: 5 },
+      ],
+      votes: [
+        { participantId: "fac1", groupId: "group-1", itemId: "group-1", count: 2 },
+        { participantId: "fac1", groupId: "orphan-group", itemId: "orphan-group", count: 3 },
+      ],
+      version: 12,
+    } as never);
+
+    const state = await stub.getRoomState();
+    expect(state.columns.map((column) => column.id)).toEqual(["col-1", "col-2"]);
+    expect(state.groups).toEqual([{ id: "group-1", name: "Kept group", columnId: "col-1", order: 0 }]);
+    expect(state.items).toEqual([
+      expect.objectContaining({ id: "valid-item", columnId: "col-1", groupId: "group-1", order: 0 }),
+      expect.objectContaining({ id: "cross-group", columnId: "col-2", groupId: null, order: 1 }),
+    ]);
+    expect(state.votes).toEqual([{ participantId: "fac1", groupId: "group-1", count: 2 }]);
+  });
+
   it("rejects cross-column item moves without changing state", async () => {
     const stub = await init("test-v2-cross-column-reject");
     await stub.join("fac1", "Facilitator");

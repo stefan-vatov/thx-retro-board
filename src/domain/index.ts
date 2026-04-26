@@ -34,6 +34,7 @@ export {
   applyReorderColumns,
   applyEditColumn,
   validateFullColumnPermutation,
+  validateExistingColumnId,
   applyMoveItemToGroup,
   applyCastVote,
   applyRemoveVote,

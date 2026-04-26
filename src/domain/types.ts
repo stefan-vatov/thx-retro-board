@@ -11,7 +11,7 @@ export interface RetroItem {
   text: string;
   authorId: string;
   /** Original configured column association. */
-  columnId: string | null;
+  columnId: string;
   /** Current nested group membership; null means ungrouped within the item's original column. */
   groupId: string | null;
   order: number;
