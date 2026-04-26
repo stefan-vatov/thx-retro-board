@@ -22,6 +22,21 @@ describe("RetroRoom Durable Object v2 schema", () => {
     };
   }
 
+  async function freshItemReorderPreconditions(stub: { getRoomState: () => Promise<RoomState> }, itemId: string) {
+    const state = await stub.getRoomState();
+    const item = state.items.find((candidate) => candidate.id === itemId);
+    if (!item) throw new Error(`Missing item ${itemId}`);
+    return {
+      expectedVersion: state.version,
+      sourceColumnId: item.columnId,
+      sourceGroupId: item.groupId,
+    };
+  }
+
+  async function freshGroupReorderVersion(stub: { getRoomState: () => Promise<RoomState> }) {
+    return (await stub.getRoomState()).version;
+  }
+
   it("initializes new rooms as v2 with no fixed default columns", async () => {
     const stub = await init("test-v2-empty-room");
 
@@ -206,7 +221,7 @@ describe("RetroRoom Durable Object v2 schema", () => {
     const firstB = await stub.createGroup("fac1", "First B", first.column!.id);
     const secondA = await stub.createGroup("fac1", "Second A", second.column!.id);
 
-    const accepted = await stub.reorderGroups("fac1", [firstB.group!.id, firstA.group!.id]);
+    const accepted = await stub.reorderGroups("fac1", [firstB.group!.id, firstA.group!.id], await freshGroupReorderVersion(stub));
     expect(accepted.success).toBe(true);
     const afterAccepted = await stub.getRoomState();
     expect(afterAccepted.groups
@@ -224,7 +239,7 @@ describe("RetroRoom Durable Object v2 schema", () => {
       [firstB.group!.id, secondA.group!.id],
     ]) {
       const before = await stub.getRoomState();
-      const rejected = await stub.reorderGroups("fac1", groupIds);
+      const rejected = await stub.reorderGroups("fac1", groupIds, await freshGroupReorderVersion(stub));
       expect(rejected.success).toBe(false);
       expect(await stub.getRoomState()).toEqual(before);
     }
@@ -266,18 +281,58 @@ describe("RetroRoom Durable Object v2 schema", () => {
       [firstA.item!.id, secondA.item!.id],
     ]) {
       const before = await stub.getRoomState();
-      const rejected = await stub.reorderItems("fac1", itemIds);
+      const rejected = await stub.reorderItems("fac1", itemIds, await freshItemReorderPreconditions(stub, firstA.item!.id));
       expect(rejected.success).toBe(false);
       expect(await stub.getRoomState()).toEqual(before);
     }
 
-    const accepted = await stub.reorderItems("fac1", [firstB.item!.id, firstA.item!.id]);
+    const accepted = await stub.reorderItems("fac1", [firstB.item!.id, firstA.item!.id], await freshItemReorderPreconditions(stub, firstA.item!.id));
     expect(accepted.success).toBe(true);
     const afterAccepted = await stub.getRoomState();
     expect(afterAccepted.items
       .filter((item) => item.columnId === first.column!.id && item.groupId === null)
       .sort((a, b) => a.order - b.order)
       .map((item) => item.id)).toEqual([firstB.item!.id, firstA.item!.id]);
+  });
+
+  it("rejects stale complete item reorders without changing state or version", async () => {
+    const stub = await init("test-v2-stale-item-reorder-reject");
+    await stub.join("fac1", "Facilitator");
+    const column = await stub.createColumn("fac1", "Lane");
+    const first = await stub.addItem("fac1", "First", column.column!.id);
+    const second = await stub.addItem("fac1", "Second", column.column!.id);
+    await stub.setPhase("fac1", "organise");
+
+    const stalePreconditions = await freshItemReorderPreconditions(stub, first.item!.id);
+    const group = await stub.createGroup("fac1", "Later group", column.column!.id);
+    expect(group.success).toBe(true);
+
+    const before = await stub.getRoomState();
+    const stale = await stub.reorderItems("fac1", [second.item!.id, first.item!.id], stalePreconditions);
+
+    expect(stale.success).toBe(false);
+    expect(stale.error).toContain("Stale");
+    expect(await stub.getRoomState()).toEqual(before);
+  });
+
+  it("rejects stale complete group reorders without changing state or version", async () => {
+    const stub = await init("test-v2-stale-group-reorder-reject");
+    await stub.join("fac1", "Facilitator");
+    const column = await stub.createColumn("fac1", "Lane");
+    await stub.setPhase("fac1", "organise");
+    const first = await stub.createGroup("fac1", "First", column.column!.id);
+    const second = await stub.createGroup("fac1", "Second", column.column!.id);
+
+    const staleVersion = await freshGroupReorderVersion(stub);
+    const third = await stub.createGroup("fac1", "Third", column.column!.id);
+    expect(third.success).toBe(true);
+
+    const before = await stub.getRoomState();
+    const stale = await stub.reorderGroups("fac1", [second.group!.id, first.group!.id, third.group!.id], staleVersion);
+
+    expect(stale.success).toBe(false);
+    expect(stale.error).toContain("Stale");
+    expect(await stub.getRoomState()).toEqual(before);
   });
 
   it("creates, renames, and deletes nested groups while preserving parent column invariants", async () => {

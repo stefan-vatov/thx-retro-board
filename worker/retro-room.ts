@@ -64,6 +64,12 @@ interface MoveItemPreconditions {
   sourceIndex: number;
 }
 
+interface ItemReorderPreconditions {
+  expectedVersion: number;
+  sourceColumnId: string;
+  sourceGroupId: string | null;
+}
+
 function validateMoveItemPreconditions(
   preconditions: Partial<MoveItemPreconditions> | undefined,
 ): { success: true; preconditions: MoveItemPreconditions } | { success: false; error: string } {
@@ -97,6 +103,43 @@ function validateMoveItemPreconditions(
       sourceIndex,
     },
   };
+}
+
+function validateItemReorderPreconditions(
+  preconditions: Partial<ItemReorderPreconditions> | undefined,
+): { success: true; preconditions: ItemReorderPreconditions } | { success: false; error: string } {
+  const hasExpectedVersion = Object.prototype.hasOwnProperty.call(preconditions ?? {}, "expectedVersion");
+  const hasSourceColumnId = Object.prototype.hasOwnProperty.call(preconditions ?? {}, "sourceColumnId");
+  const hasSourceGroupId = Object.prototype.hasOwnProperty.call(preconditions ?? {}, "sourceGroupId");
+
+  if (!hasExpectedVersion || !hasSourceColumnId || !hasSourceGroupId) {
+    return { success: false, error: "Item reorder preconditions are required" };
+  }
+
+  const expectedVersion = preconditions?.expectedVersion;
+  const sourceColumnId = preconditions?.sourceColumnId;
+  const sourceGroupId = preconditions?.sourceGroupId;
+
+  if (typeof expectedVersion !== "number" || !Number.isFinite(expectedVersion) || !Number.isInteger(expectedVersion)) {
+    return { success: false, error: "Expected version must be a finite integer" };
+  }
+  if (typeof sourceColumnId !== "string" || sourceColumnId.trim().length === 0) {
+    return { success: false, error: "Source column precondition is required" };
+  }
+  if (sourceGroupId !== null && typeof sourceGroupId !== "string") {
+    return { success: false, error: "Source group precondition must be a string or null" };
+  }
+
+  return { success: true, preconditions: { expectedVersion, sourceColumnId, sourceGroupId } };
+}
+
+function validateExpectedVersion(
+  expectedVersion: unknown,
+): { success: true; expectedVersion: number } | { success: false; error: string } {
+  if (typeof expectedVersion !== "number" || !Number.isFinite(expectedVersion) || !Number.isInteger(expectedVersion)) {
+    return { success: false, error: "Expected version must be a finite integer" };
+  }
+  return { success: true, expectedVersion };
 }
 
 function normalizeColumns(stored: Pick<StoredState, "columns" | "groups">): Column[] {
@@ -610,7 +653,11 @@ export class RetroRoom extends DurableObject<Env> {
     return { success: true, group };
   }
 
-  async reorderItems(participantId: string, orderedIds: unknown): Promise<{ success: boolean; error?: string }> {
+  async reorderItems(
+    participantId: string,
+    orderedIds: unknown,
+    preconditions?: Partial<ItemReorderPreconditions>,
+  ): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
 
     if (s.phase !== "organise") {
@@ -621,9 +668,27 @@ export class RetroRoom extends DurableObject<Env> {
       return { success: false, error: "Participant not found" };
     }
 
+    const validatedPreconditions = validateItemReorderPreconditions(preconditions);
+    if (!validatedPreconditions.success) {
+      return validatedPreconditions;
+    }
+
+    if (validatedPreconditions.preconditions.expectedVersion !== s.version) {
+      return { success: false, error: "Stale item reorder rejected: room version changed" };
+    }
+
     const validation = validateItemReorderPayload(s.items, orderedIds);
     if (!validation.valid) {
       return { success: false, error: validation.error };
+    }
+
+    const firstItem = s.items.find((item) => item.id === validation.ids[0]);
+    if (
+      !firstItem
+      || firstItem.columnId !== validatedPreconditions.preconditions.sourceColumnId
+      || firstItem.groupId !== validatedPreconditions.preconditions.sourceGroupId
+    ) {
+      return { success: false, error: "Stale item reorder rejected: source list changed" };
     }
 
     s.items = applyReorderItems(s.items, validation.ids);
@@ -683,10 +748,18 @@ export class RetroRoom extends DurableObject<Env> {
     return { success: true };
   }
 
-  async reorderGroups(participantId: string, orderedIds: unknown): Promise<{ success: boolean; error?: string }> {
+  async reorderGroups(participantId: string, orderedIds: unknown, expectedVersion?: unknown): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
     const allowed = this.canMutateGroups(s, participantId);
     if (!allowed.success) return allowed;
+
+    const validatedVersion = validateExpectedVersion(expectedVersion);
+    if (!validatedVersion.success) {
+      return validatedVersion;
+    }
+    if (validatedVersion.expectedVersion !== s.version) {
+      return { success: false, error: "Stale group reorder rejected: room version changed" };
+    }
 
     const validation = validateGroupReorderPayload(s.groups, orderedIds);
     if (!validation.valid) {
@@ -1049,7 +1122,11 @@ export class RetroRoom extends DurableObject<Env> {
         break;
       }
       case "reorder-items": {
-        const result = await this.reorderItems(participantId, msg.itemIds);
+        const result = await this.reorderItems(participantId, msg.itemIds, {
+          expectedVersion: msg.expectedVersion,
+          sourceColumnId: msg.sourceColumnId,
+          sourceGroupId: msg.sourceGroupId,
+        });
         if (!result.success) {
           const ws = this.sessions.get(participantId);
           ws?.send(JSON.stringify({ type: "error", message: result.error }));
@@ -1057,7 +1134,7 @@ export class RetroRoom extends DurableObject<Env> {
         break;
       }
       case "reorder-groups": {
-        const result = await this.reorderGroups(participantId, msg.groupIds);
+        const result = await this.reorderGroups(participantId, msg.groupIds, msg.expectedVersion);
         if (!result.success) {
           const ws = this.sessions.get(participantId);
           ws?.send(JSON.stringify({ type: "error", message: result.error }));

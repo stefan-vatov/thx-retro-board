@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import type { RoomState, RetroItem, Group, Column } from "../domain";
 import {
   getGroupedItems,
@@ -15,6 +16,14 @@ interface OrganiseBoardProps {
   clearServerError?: () => void;
 }
 
+interface DragStart {
+  itemId: string;
+  columnId: string;
+  expectedVersion: number;
+  sourceGroupId: string | null;
+  sourceIndex: number;
+}
+
 export function OrganiseBoard({ roomState, send, serverError = null, clearServerError }: OrganiseBoardProps) {
   const [newGroupNames, setNewGroupNames] = useState<Record<string, string>>({});
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
@@ -23,9 +32,9 @@ export function OrganiseBoard({ roomState, send, serverError = null, clearServer
   const [pendingMutation, setPendingMutation] = useState(false);
   const pendingVersionRef = useRef<number | null>(null);
   const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
-  const [dragStart, setDragStart] = useState<{ itemId: string; columnId: string; expectedVersion: number; sourceGroupId: string | null; sourceIndex: number } | null>(null);
   const [activeDrop, setActiveDrop] = useState<DropTarget | null>(null);
   const [organiseActionError, setOrganiseActionError] = useState<string | null>(null);
+  const activeDragCleanupRef = useRef<(() => void) | null>(null);
 
   const isOrganise = roomState.phase === "organise";
 
@@ -81,11 +90,11 @@ export function OrganiseBoard({ roomState, send, serverError = null, clearServer
       const [moved] = reordered.splice(fromIdx, 1);
       if (!moved) return;
       reordered.splice(toIdx, 0, moved);
-      if (!send({ type: "reorder-groups", groupIds: reordered.map((g) => g.id) })) {
+      if (!send({ type: "reorder-groups", groupIds: reordered.map((g) => g.id), expectedVersion: roomState.version })) {
         setOrganiseActionError("Column order not sent. Please try again once the room is connected.");
       }
     },
-    [clearServerError, send, sortedGroups],
+    [clearServerError, roomState.version, send, sortedGroups],
   );
 
   function startEditGroup(group: Group) {
@@ -127,120 +136,100 @@ export function OrganiseBoard({ roomState, send, serverError = null, clearServer
   }
 
   const cancelDrag = useCallback(() => {
+    activeDragCleanupRef.current?.();
+    activeDragCleanupRef.current = null;
     setDraggingItemId(null);
-    setDragStart(null);
     setActiveDrop(null);
   }, []);
 
-  useEffect(() => {
-    if (!draggingItemId) return;
+  const readDropTarget = useCallback((event: PointerEvent): DropTarget | null => {
+    const eventTarget = (event.target as Element | null)?.closest<HTMLElement>("[data-drop-zone='true']");
+    const target = eventTarget ?? document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-drop-zone='true']");
+    if (!target) return null;
+    const groupId = target.dataset.groupId === "__ungrouped__" ? null : target.dataset.groupId ?? null;
+    const columnId = target.dataset.dropColumnId ?? null;
+    const index = Number(target.dataset.index);
+    if (!Number.isInteger(index) || !columnId) return null;
+    return { groupId, columnId, index };
+  }, []);
 
-    function updateActiveDrop(event: PointerEvent) {
-      const eventTarget = (event.target as Element | null)?.closest<HTMLElement>("[data-drop-zone='true']");
-      const target = eventTarget ?? document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-drop-zone='true']");
-      if (!target) {
-        setActiveDrop(null);
-        return;
-      }
-      const groupId = target.dataset.groupId === "__ungrouped__" ? null : target.dataset.groupId ?? null;
-      const columnId = target.dataset.dropColumnId ?? null;
-      const index = Number(target.dataset.index);
-      if (!Number.isInteger(index) || !columnId) {
-        setActiveDrop(null);
-        return;
-      }
-      setActiveDrop({ groupId, columnId, index });
-    }
+  const updateActiveDrop = useCallback((event: PointerEvent): DropTarget | null => {
+    const target = readDropTarget(event);
+    setActiveDrop(target);
+    return target;
+  }, [readDropTarget]);
 
-    function onPointerMove(event: PointerEvent) {
-      updateActiveDrop(event);
-    }
-
-    function onPointerUp(event: PointerEvent) {
-      updateActiveDrop(event);
-      const target = (event.target as Element | null)?.closest<HTMLElement>("[data-drop-zone='true']")
-        ?? document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-drop-zone='true']");
-      if (target) {
-        const groupId = target.dataset.groupId === "__ungrouped__" ? null : target.dataset.groupId ?? null;
-        const targetColumnId = target.dataset.dropColumnId ?? null;
-        const index = Number(target.dataset.index);
-        if (Number.isInteger(index) && targetColumnId && dragStart?.itemId === draggingItemId) {
-          setOrganiseActionError(null);
-          clearServerError?.();
-          if (targetColumnId !== dragStart.columnId) {
-            setOrganiseActionError("Items can only be moved within their original column.");
-            cancelDrag();
-            return;
-          }
-          const sent = send({
-            type: "move-item-to-group",
-            itemId: draggingItemId,
-            groupId,
-            index,
-            expectedVersion: dragStart.expectedVersion,
-            sourceGroupId: dragStart.sourceGroupId,
-            sourceIndex: dragStart.sourceIndex,
-          });
-          if (!sent) {
-            setOrganiseActionError("Item move not sent. Please try again once the room is connected.");
-          }
-        }
-      }
-      cancelDrag();
-    }
-
-    function onPointerCancel() {
-      cancelDrag();
-    }
-
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        cancelDrag();
-      }
-    }
-
-    window.addEventListener("pointermove", onPointerMove);
-    window.addEventListener("pointerup", onPointerUp);
-    window.addEventListener("pointercancel", onPointerCancel);
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
-      window.removeEventListener("pointercancel", onPointerCancel);
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [cancelDrag, clearServerError, dragStart, draggingItemId, send]);
-
-  function startDrag(itemId: string) {
+  const startDrag = useCallback((itemId: string): DragStart | null => {
     setOrganiseActionError(null);
     clearServerError?.();
     const item = roomState.items.find((candidate) => candidate.id === itemId);
-    if (!item) return;
-    setDraggingItemId(itemId);
-    setDragStart({
+    if (!item) return null;
+    const nextDragStart = {
       itemId,
       columnId: item.columnId,
       expectedVersion: roomState.version,
       sourceGroupId: item.groupId,
       sourceIndex: item.order,
-    });
+    };
+    setDraggingItemId(itemId);
     setActiveDrop(null);
-  }
+    return nextDragStart;
+  }, [clearServerError, roomState.items, roomState.version]);
 
-  useEffect(() => {
-    function onNativePointerDown(event: PointerEvent) {
-      if (event.button !== 0) return;
-      const row = (event.target as Element | null)?.closest<HTMLElement>("[data-drag-item-id]");
-      const itemId = row?.dataset.dragItemId;
-      if (itemId) {
-        event.preventDefault();
-        startDrag(itemId);
+  const finishPointerDrag = useCallback((event: PointerEvent, currentDragStart: DragStart) => {
+    const target = updateActiveDrop(event);
+    if (target) {
+      setOrganiseActionError(null);
+      clearServerError?.();
+      if (target.columnId !== currentDragStart.columnId) {
+        setOrganiseActionError("Items can only be moved within their original column.");
+        cancelDrag();
+        return;
+      }
+      const sent = send({
+        type: "move-item-to-group",
+        itemId: currentDragStart.itemId,
+        groupId: target.groupId,
+        index: target.index,
+        expectedVersion: currentDragStart.expectedVersion,
+        sourceGroupId: currentDragStart.sourceGroupId,
+        sourceIndex: currentDragStart.sourceIndex,
+      });
+      if (!sent) {
+        setOrganiseActionError("Item move not sent. Please try again once the room is connected.");
       }
     }
+    cancelDrag();
+  }, [cancelDrag, clearServerError, send, updateActiveDrop]);
 
-    document.addEventListener("pointerdown", onNativePointerDown);
-    return () => document.removeEventListener("pointerdown", onNativePointerDown);
-  });
+  const beginPointerDrag = useCallback((event: ReactPointerEvent, itemId: string) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const currentDragStart = startDrag(itemId);
+    if (!currentDragStart) return;
+
+    const onPointerMove = (pointerEvent: PointerEvent) => updateActiveDrop(pointerEvent);
+    const onPointerUp = (pointerEvent: PointerEvent) => finishPointerDrag(pointerEvent, currentDragStart);
+    const onPointerCancel = () => cancelDrag();
+    const onKeyDown = (keyEvent: KeyboardEvent) => {
+      if (keyEvent.key === "Escape") cancelDrag();
+    };
+    const cleanup = () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerCancel);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+
+    activeDragCleanupRef.current?.();
+    activeDragCleanupRef.current = cleanup;
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp, { once: true });
+    window.addEventListener("pointercancel", onPointerCancel, { once: true });
+    window.addEventListener("keydown", onKeyDown);
+  }, [cancelDrag, finishPointerDrag, startDrag, updateActiveDrop]);
+
+  useEffect(() => () => cancelDrag(), [cancelDrag]);
 
   return (
     <div>
@@ -319,7 +308,7 @@ export function OrganiseBoard({ roomState, send, serverError = null, clearServer
                     onReorderGroups={(fromIdx, toIdx) => handleReorderGroups(column.id, fromIdx, toIdx)}
                     draggingItemId={draggingItemId}
                     activeDrop={activeDrop}
-                    onDragStart={startDrag}
+                    onDragStart={beginPointerDrag}
                     editingGroupId={editingGroupId}
                     editingGroupName={editingGroupName}
                     onEditNameChange={setEditingGroupName}
@@ -341,7 +330,7 @@ export function OrganiseBoard({ roomState, send, serverError = null, clearServer
                   isOrganise={isOrganise}
                   draggingItemId={draggingItemId}
                   activeDrop={activeDrop}
-                  onDragStart={startDrag}
+                  onDragStart={beginPointerDrag}
                   className="ungrouped-section"
                 />
               </section>
@@ -368,7 +357,7 @@ interface GroupSectionProps {
   onReorderGroups: (fromIdx: number, toIdx: number) => void;
   draggingItemId: string | null;
   activeDrop: DropTarget | null;
-  onDragStart: (itemId: string) => void;
+  onDragStart: (event: ReactPointerEvent, itemId: string) => void;
   editingGroupId: string | null;
   editingGroupName: string;
   onEditNameChange: (name: string) => void;
@@ -459,7 +448,7 @@ interface DragListProps {
   isOrganise: boolean;
   draggingItemId: string | null;
   activeDrop: DropTarget | null;
-  onDragStart: (itemId: string) => void;
+  onDragStart: (event: ReactPointerEvent, itemId: string) => void;
   className?: string;
 }
 
@@ -503,16 +492,8 @@ function DragList({ title, columnId, groupId, items, emptyText, isOrganise, drag
               aria-grabbed={draggingItemId === item.id}
               onPointerDown={(event) => {
                 if (event.button !== 0) return;
-                event.preventDefault();
-                onDragStart(item.id);
+                onDragStart(event, item.id);
               }}
-              onMouseDown={(event) => {
-                if (event.button !== 0) return;
-                event.preventDefault();
-                onDragStart(item.id);
-              }}
-              onTouchStart={() => onDragStart(item.id)}
-              onClick={() => onDragStart(item.id)}
             >
               <button
                 type="button"
@@ -520,16 +501,14 @@ function DragList({ title, columnId, groupId, items, emptyText, isOrganise, drag
                 aria-label={`Drag ${item.text}`}
                 onPointerDown={(event) => {
                   if (event.button !== 0) return;
-                  event.preventDefault();
-                  onDragStart(item.id);
+                  event.stopPropagation();
+                  onDragStart(event, item.id);
                 }}
-                onMouseDown={(event) => {
-                  if (event.button !== 0) return;
-                  event.preventDefault();
-                  onDragStart(item.id);
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                  }
                 }}
-                onTouchStart={() => onDragStart(item.id)}
-                onClick={() => onDragStart(item.id)}
               >
                 ⋮⋮
               </button>

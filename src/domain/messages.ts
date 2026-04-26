@@ -16,7 +16,7 @@ export type ServerToClientMessage =
 export type ClientToServerMessage =
   | { type: "join"; participantId: string; displayName: string }
   | { type: "add-item"; text: string; columnId?: string | null }
-  | { type: "reorder-items"; itemIds: string[] }
+  | { type: "reorder-items"; itemIds: string[]; expectedVersion: number; sourceColumnId: string; sourceGroupId: string | null }
   | { type: "create-group"; name: string; columnId: string }
   | { type: "edit-group"; groupId: string; name: string }
   | { type: "delete-group"; groupId: string }
@@ -24,7 +24,7 @@ export type ClientToServerMessage =
   | { type: "edit-column"; columnId: string; name: string }
   | { type: "delete-column"; columnId: string }
   | { type: "reorder-columns"; columnIds: string[] }
-  | { type: "reorder-groups"; groupIds: string[] }
+  | { type: "reorder-groups"; groupIds: string[]; expectedVersion: number }
   | {
       type: "move-item-to-group";
       itemId: string;

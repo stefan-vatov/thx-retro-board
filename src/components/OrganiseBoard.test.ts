@@ -106,4 +106,20 @@ describe("OrganiseBoard column-scoped group layout", () => {
     expect(markup).toContain("Rename Editable group");
     expect(markup).toContain("Delete Editable group");
   });
+
+  it("keeps item drag handles explicitly labelled for pointer-only drag lifecycle tests", () => {
+    const columns = makeColumns(1);
+    const items: RetroItem[] = [
+      { id: "item-1", text: "Clickable item", authorId: "fac1", columnId: "column-0", groupId: null, order: 0 },
+    ];
+    const markup = renderToStaticMarkup(
+      createElement(OrganiseBoard, {
+        roomState: makeRoomState(columns, "organise", [], items),
+        isFacilitator: true,
+        send: () => true,
+      }),
+    );
+
+    expect(markup).toContain("<button type=\"button\" class=\"drag-handle\" aria-label=\"Drag Clickable item\"");
+  });
 });
