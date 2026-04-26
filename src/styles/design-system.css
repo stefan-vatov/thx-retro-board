@@ -1,3 +1,33 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
 /* =====================================================================
    Retro Board — Premium Dark Glassmorphism Design System
    Design tokens, shared classes, glass panels, controls, and utilities.
@@ -7,6 +37,28 @@
    1. Design Tokens
    --------------------------------------------------------------------- */
 :root {
+  color-scheme: dark;
+
+  /* --- shadcn/Tailwind v4 theme tokens --- */
+  --radius: 0.875rem;
+  --background: #07070f;
+  --foreground: #eef0f6;
+  --card: rgba(22, 22, 36, 0.88);
+  --card-foreground: #eef0f6;
+  --popover: #161624;
+  --popover-foreground: #eef0f6;
+  --primary: #6284f1;
+  --primary-foreground: #ffffff;
+  --secondary: rgba(255, 255, 255, 0.08);
+  --secondary-foreground: #eef0f6;
+  --muted: rgba(99, 102, 120, 0.16);
+  --muted-foreground: #a8aab8;
+  --accent-foreground: #ffffff;
+  --destructive: #f16060;
+  --border: rgba(255, 255, 255, 0.08);
+  --input: rgba(255, 255, 255, 0.12);
+  --ring: rgba(99, 132, 241, 0.55);
+
   /* --- Color Palette --- */
   --color-bg-deep:       #07070f;
   --color-bg-layer:      #0f0f1a;
@@ -123,6 +175,8 @@ html {
   font-size: 16px;
   -webkit-text-size-adjust: 100%;
   scroll-behavior: smooth;
+  width: 100%;
+  min-height: 100%;
 }
 
 body {
@@ -135,8 +189,14 @@ body {
     radial-gradient(ellipse 80% 50% at 50% -20%, rgba(98, 132, 241, 0.09) 0%, transparent 60%),
     radial-gradient(ellipse 60% 40% at 80% 100%, rgba(52, 200, 122, 0.05) 0%, transparent 50%);
   min-height: 100vh;
+  width: 100%;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  min-height: 100vh;
+  width: 100%;
 }
 
 /* Text selection */
@@ -180,22 +240,31 @@ body {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  width: 100%;
+  min-width: 0;
 }
 
 /* --- Centered Content Shell --- */
 .content-shell {
-  max-width: 1120px;
+  max-width: none;
   width: 100%;
-  margin: 0 auto;
-  padding: var(--space-8) var(--space-4);
+  min-width: 0;
+  margin: 0;
+  padding: clamp(var(--space-4), 2.5vw, var(--space-8));
 }
 
 .content-shell--narrow {
-  max-width: 480px;
+  max-width: none;
+  margin: 0;
+  align-items: center;
+}
+
+.content-shell--narrow > .glass-panel {
+  width: min(100%, 480px);
 }
 
 .content-shell--wide {
-  max-width: 960px;
+  max-width: none;
 }
 
 /* --- Page Header --- */
@@ -231,6 +300,8 @@ body {
   -webkit-backdrop-filter: blur(16px);
   margin-bottom: var(--space-5);
   flex-wrap: wrap;
+  width: 100%;
+  min-width: 0;
 }
 
 .room-header__left {
@@ -383,6 +454,8 @@ body {
   -webkit-backdrop-filter: blur(12px);
   margin-bottom: var(--space-5);
   flex-wrap: wrap;
+  width: 100%;
+  min-width: 0;
 }
 
 .phase-status__label {
@@ -409,6 +482,8 @@ body {
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   margin-bottom: var(--space-5);
+  width: 100%;
+  min-width: 0;
 }
 
 .facilitator-panel__title {
@@ -436,6 +511,8 @@ body {
 /* --- Board Area --- */
 .board-area {
   margin-bottom: var(--space-5);
+  width: 100%;
+  min-width: 0;
 }
 
 /* ---------------------------------------------------------------------
@@ -1186,9 +1263,11 @@ body {
 
 .column-board {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(18rem, 100%), 1fr));
   gap: var(--space-4);
   align-items: stretch;
+  width: 100%;
+  min-width: 0;
 }
 
 .column-board__column {

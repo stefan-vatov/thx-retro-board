@@ -4,10 +4,12 @@ import { RoomPage } from "./components/RoomPage";
 
 function App() {
   return (
-    <Routes>
-      <Route path="/" element={<HomePage />} />
-      <Route path="/room/:roomId" element={<RoomPage />} />
-    </Routes>
+    <div className="app-shell">
+      <Routes>
+        <Route path="/" element={<HomePage />} />
+        <Route path="/room/:roomId" element={<RoomPage />} />
+      </Routes>
+    </div>
   );
 }
 
