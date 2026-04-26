@@ -25,6 +25,31 @@ async function dragItemToDropZone(page: Page, itemText: string, groupId: string 
   await dropZone.dispatchEvent("pointerup", { pointerId: 3, pointerType: "mouse", button: 0, clientX: x, clientY: y });
 }
 
+async function dragItemIdToDropZone(page: Page, itemId: string, groupId: string | null, index: number) {
+  const item = page.locator(`[data-drag-item-id="${itemId}"]`).first();
+  await expect(item).toBeVisible();
+  const handle = item.getByRole("button", { name: /drag/i });
+  const handleBox = await handle.boundingBox();
+  expect(handleBox).not.toBeNull();
+  await handle.dispatchEvent("pointerdown", {
+    pointerId: 11,
+    pointerType: "mouse",
+    button: 0,
+    clientX: handleBox!.x + handleBox!.width / 2,
+    clientY: handleBox!.y + handleBox!.height / 2,
+  });
+  const groupKey = groupId ?? "__ungrouped__";
+  const dropZone = page.locator(`[data-drop-zone="true"][data-group-id="${groupKey}"][data-index="${index}"]`).first();
+  await expect(dropZone).toBeVisible();
+  const dropBox = await dropZone.boundingBox();
+  expect(dropBox).not.toBeNull();
+  const x = dropBox!.x + dropBox!.width / 2;
+  const y = dropBox!.y + dropBox!.height / 2;
+  await dropZone.dispatchEvent("pointermove", { pointerId: 11, pointerType: "mouse", button: 0, clientX: x, clientY: y });
+  await expect(dropZone).toHaveAttribute("data-active", "true");
+  await dropZone.dispatchEvent("pointerup", { pointerId: 11, pointerType: "mouse", button: 0, clientX: x, clientY: y });
+}
+
 async function createJoinedRoom(page: Page, displayName = "Alice") {
   await page.goto("/");
   await page.getByRole("button", { name: /create room/i }).click();
@@ -597,6 +622,127 @@ test.describe("Retro Board E2E", () => {
       await expect(emptyPage.getByText("Create groups during organise to produce review slides.")).toBeVisible();
       await expect(emptyPage.getByText("Ungrouped only")).toHaveCount(0);
       await emptyCtx.close();
+    });
+
+    test("full dynamic-column flow preserves duplicate identities, realtime sync, and phase locks", async ({ browser }) => {
+      const ctx1 = await browser.newContext();
+      const alice = await ctx1.newPage();
+      await createJoinedRoom(alice);
+      const roomUrl = alice.url();
+      const roomId = new URL(roomUrl).pathname.split("/").pop()!;
+
+      const ctx2 = await browser.newContext();
+      const bob = await ctx2.newPage();
+      await bob.goto(roomUrl);
+      await bob.getByLabel(/display name/i).fill("Bob");
+      await bob.getByRole("button", { name: /join/i }).click();
+      await expect(bob.getByText(/Phase: WRITE/i)).toBeVisible();
+      await expect(bob.getByRole("button", { name: /configure columns/i })).toHaveCount(0);
+      await expect(bob.getByRole("button", { name: /advance to next phase/i })).toHaveCount(0);
+
+      await createWriteColumn(alice, "Same");
+      await createWriteColumn(alice, "Other");
+      const writeState = await alice.evaluate(async (id) => {
+        const response = await fetch(`/api/rooms/${id}`);
+        return response.json();
+      }, roomId) as { columns: { id: string; name: string; order: number }[] };
+      const sameColumnId = writeState.columns.find((column) => column.name === "Same")!.id;
+      const otherColumnId = writeState.columns.find((column) => column.name === "Other")!.id;
+
+      await alice.locator(".column-config__item", { hasText: "Same" }).getByRole("button", { name: "Edit" }).click();
+      await alice.getByLabel(/edit Same column name/i).fill("Primary");
+      await alice.getByRole("button", { name: "Save" }).click();
+      await expect(bob.getByRole("heading", { name: "Primary" })).toBeVisible({ timeout: 5000 });
+      await alice.locator(".column-config__item", { hasText: "Primary" }).getByRole("button", { name: /move Primary column right/i }).click();
+      await expect(bob.locator(".column-board__column").first()).toContainText("Other", { timeout: 5000 });
+
+      for (const [page, columnName] of [
+        [alice, "Primary"],
+        [bob, "Primary"],
+        [alice, "Other"],
+      ] as const) {
+        await page.getByLabel(/column for new item/i).selectOption({ label: columnName });
+        await page.getByPlaceholder(/add a retro item/i).fill("Duplicate item");
+        await page.getByRole("button", { name: /add item/i }).click();
+      }
+      await expect(alice.locator(".column-board__column", { hasText: "Primary" }).getByText("Duplicate item")).toHaveCount(2, { timeout: 5000 });
+      await expect(bob.locator(".column-board__column", { hasText: "Other" }).getByText("Duplicate item")).toBeVisible({ timeout: 5000 });
+
+      const afterWrite = await alice.evaluate(async (id) => {
+        const response = await fetch(`/api/rooms/${id}`);
+        return response.json();
+      }, roomId) as { columns: { id: string; name: string; order: number }[]; items: { id: string; text: string; authorId: string; columnId: string; groupId: string | null }[] };
+      expect(afterWrite.columns.find((column) => column.id === sameColumnId)).toMatchObject({ name: "Primary", order: 1 });
+      expect(afterWrite.columns.find((column) => column.id === otherColumnId)).toMatchObject({ name: "Other", order: 0 });
+      expect(afterWrite.items.filter((item) => item.text === "Duplicate item")).toHaveLength(3);
+      expect(afterWrite.items.filter((item) => item.columnId === sameColumnId)).toHaveLength(2);
+      expect(afterWrite.items.filter((item) => item.columnId === otherColumnId)).toHaveLength(1);
+
+      await alice.getByRole("button", { name: /advance to next phase/i }).click();
+      await expect(bob.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
+      for (const columnName of ["Primary", "Other"] as const) {
+        const lane = alice.locator(".column-board__column", { hasText: columnName });
+        await lane.getByPlaceholder(/new group name/i).fill("Duplicate theme");
+        await lane.getByRole("button", { name: /create group/i }).click();
+        await expect(bob.locator(".column-board__column", { hasText: columnName }).getByText("Duplicate theme")).toBeVisible({ timeout: 5000 });
+      }
+      const organiseState = await alice.evaluate(async (id) => {
+        const response = await fetch(`/api/rooms/${id}`);
+        return response.json();
+      }, roomId) as { groups: { id: string; name: string; columnId: string }[]; items: { id: string; text: string; columnId: string; groupId: string | null }[] };
+      const primaryGroup = organiseState.groups.find((group) => group.columnId === sameColumnId)!;
+      const otherGroup = organiseState.groups.find((group) => group.columnId === otherColumnId)!;
+      const primaryItems = organiseState.items.filter((item) => item.columnId === sameColumnId);
+      const otherItem = organiseState.items.find((item) => item.columnId === otherColumnId)!;
+
+      await dragItemIdToDropZone(alice, primaryItems[0]!.id, primaryGroup.id, 0);
+      await expect(bob.locator(`[data-drop-list="${primaryGroup.id}"] [data-drag-item-id="${primaryItems[0]!.id}"]`)).toBeVisible({ timeout: 5000 });
+      await dragItemIdToDropZone(alice, otherItem.id, otherGroup.id, 0);
+      await expect(bob.locator(`[data-drop-list="${otherGroup.id}"] [data-drag-item-id="${otherItem.id}"]`)).toBeVisible({ timeout: 5000 });
+
+      await alice.getByRole("button", { name: /advance to next phase/i }).click();
+      await expect(alice.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
+      await expect(bob.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
+      const columnConfigToggle = alice.getByRole("button", { name: /configure columns/i });
+      if ((await columnConfigToggle.getAttribute("aria-expanded")) !== "true") {
+        await columnConfigToggle.click();
+      }
+      await expect(alice.getByText(/column configuration is locked in vote phase/i)).toBeVisible();
+      await expect(alice.getByRole("button", { name: /add column/i })).toBeDisabled();
+      await expect(alice.getByRole("button", { name: /create group/i })).toHaveCount(0);
+      await expect(alice.locator(".item-row", { hasText: "Duplicate item" }).getByRole("button", { name: /add a vote/i })).toHaveCount(0);
+
+      await alice.locator(`[data-vote-group-id="${primaryGroup.id}"]`).getByRole("button", { name: /add a vote/i }).click();
+      await alice.locator(`[data-vote-group-id="${primaryGroup.id}"]`).getByRole("button", { name: /add a vote/i }).click();
+      await bob.locator(`[data-vote-group-id="${otherGroup.id}"]`).getByRole("button", { name: /add a vote/i }).click();
+      await expect(bob.locator(`[data-vote-group-id="${primaryGroup.id}"]`).getByText(/2 votes?/)).toBeVisible({ timeout: 5000 });
+      await expect(alice.locator(`[data-vote-group-id="${otherGroup.id}"]`).getByText(/1 vote/)).toBeVisible({ timeout: 5000 });
+
+      const voteState = await alice.evaluate(async (id) => {
+        const response = await fetch(`/api/rooms/${id}`);
+        return response.json();
+      }, roomId) as { items: { id: string; text: string; authorId: string; columnId: string; groupId: string | null }[]; votes: { participantId: string; groupId: string; count: number }[] };
+      expect(voteState.items.find((item) => item.id === primaryItems[0]!.id)).toMatchObject({ columnId: sameColumnId, groupId: primaryGroup.id, text: "Duplicate item" });
+      expect(voteState.items.find((item) => item.id === primaryItems[1]!.id)).toMatchObject({ columnId: sameColumnId, groupId: null, text: "Duplicate item" });
+      expect(voteState.items.find((item) => item.id === otherItem.id)).toMatchObject({ columnId: otherColumnId, groupId: otherGroup.id, text: "Duplicate item" });
+      expect(voteState.votes.map((vote) => ({ groupId: vote.groupId, count: vote.count })).sort((a, b) => a.groupId.localeCompare(b.groupId))).toEqual([
+        { groupId: otherGroup.id, count: 1 },
+        { groupId: primaryGroup.id, count: 2 },
+      ].sort((a, b) => a.groupId.localeCompare(b.groupId)));
+
+      await alice.getByRole("button", { name: /advance to next phase/i }).click();
+      await expect(alice.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
+      await expect(bob.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
+      await expect(alice.locator("[data-review-group-id]").first()).toHaveAttribute("data-review-group-id", primaryGroup.id);
+      await expect(bob.locator(`[data-review-group-id="${primaryGroup.id}"]`).getByLabel(/2 votes?/)).toBeVisible({ timeout: 5000 });
+      await expect(alice.getByRole("button", { name: /add a vote/i })).toHaveCount(0);
+      await expect(alice.getByPlaceholder(/add a retro item/i)).toHaveCount(0);
+      await alice.reload();
+      await expect(alice.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
+      await expect(alice.locator("[data-review-group-id]").first()).toHaveAttribute("data-review-group-id", primaryGroup.id);
+
+      await ctx1.close();
+      await ctx2.close();
     });
 
     test.skip("organise create-column form blocks maximum columns with visible feedback", async ({ page }) => {

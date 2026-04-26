@@ -167,7 +167,7 @@ function isV2StoredState(stored: Partial<StoredState>): boolean {
 
 function normalizeGroups(groups: Group[], columns: Column[]): Group[] {
   const validColumnIds = new Set(columns.map((column) => column.id));
-  return groups
+  const normalized = groups
     .filter((group): group is Group =>
       Boolean(group)
       && typeof group.id === "string"
@@ -181,14 +181,20 @@ function normalizeGroups(groups: Group[], columns: Column[]): Group[] {
       columnId: group.columnId,
       order: Number.isInteger(group.order) ? group.order : index,
     }))
-    .sort((a, b) => a.order - b.order)
-    .map((group, index) => ({ ...group, order: index }));
+    .sort((a, b) => a.order - b.order);
+
+  const nextOrderByColumn = new Map<string, number>();
+  return normalized.map((group) => {
+    const order = nextOrderByColumn.get(group.columnId) ?? 0;
+    nextOrderByColumn.set(group.columnId, order + 1);
+    return { ...group, order };
+  });
 }
 
 function normalizeItems(items: RetroItem[], columns: Column[], groups: Group[]): RetroItem[] {
   const validColumnIds = new Set(columns.map((column) => column.id));
   const groupsById = new Map(groups.map((group) => [group.id, group]));
-  return items.flatMap((item) => {
+  const normalized = items.flatMap((item) => {
     if (
       !item
       || typeof item.id !== "string"
@@ -207,7 +213,15 @@ function normalizeItems(items: RetroItem[], columns: Column[], groups: Group[]):
       order: Number.isInteger(item.order) ? item.order : 0,
     };
   }).sort((a, b) => a.order - b.order)
-    .map((item, index) => ({ ...item, order: index }));
+    .map((item) => item);
+
+  const nextOrderByList = new Map<string, number>();
+  return normalized.map((item) => {
+    const listKey = `${item.columnId}:${item.groupId ?? "__ungrouped__"}`;
+    const order = nextOrderByList.get(listKey) ?? 0;
+    nextOrderByList.set(listKey, order + 1);
+    return { ...item, order };
+  });
 }
 
 function normalizeVotes(votes: VoteAllocation[], groups: Group[]): VoteAllocation[] {
@@ -458,6 +472,7 @@ export class RetroRoom extends DurableObject<Env> {
 
     const broadcast: ServerToClientMessage = { type: "item-added", item };
     this.broadcast(broadcast);
+    this.broadcastState(s);
 
     return { success: true, item };
   }
@@ -522,6 +537,7 @@ export class RetroRoom extends DurableObject<Env> {
       timer: s.timer,
     };
     this.broadcast(timerBroadcast);
+    this.broadcastState(s);
 
     return { success: true };
   }
@@ -696,6 +712,7 @@ export class RetroRoom extends DurableObject<Env> {
 
     const broadcast: ServerToClientMessage = { type: "items-reordered", items: s.items };
     this.broadcast(broadcast);
+    this.broadcastState(s);
 
     return { success: true };
   }

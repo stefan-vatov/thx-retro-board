@@ -116,6 +116,73 @@ describe("RetroRoom Durable Object v2 schema", () => {
     expect(state.votes).toEqual([{ participantId: "fac1", groupId: group.group!.id, count: 2 }]);
   });
 
+  it("normalizes persisted v2 ordering per column and per item list while preserving duplicate-looking identities", async () => {
+    const stub = await init("test-v2-normalize-scoped-duplicate-identities");
+    await stub.seedStoredStateForTest({
+      roomId: "test-v2-normalize-scoped-duplicate-identities",
+      participants: [
+        { id: "fac1", displayName: "Facilitator", isFacilitator: true },
+        { id: "p2", displayName: "Participant", isFacilitator: false },
+      ],
+      facilitatorId: "fac1",
+      columns: [
+        { id: "col-b", name: "Same", order: 20 },
+        { id: "col-a", name: "Same", order: 10 },
+      ],
+      groups: [
+        { id: "group-a-2", name: "Duplicate", columnId: "col-a", order: 30 },
+        { id: "group-b-1", name: "Duplicate", columnId: "col-b", order: 40 },
+        { id: "group-a-1", name: "Duplicate", columnId: "col-a", order: 10 },
+      ],
+      items: [
+        { id: "item-a-2", text: "Same text", authorId: "fac1", columnId: "col-a", groupId: "group-a-1", order: 99 },
+        { id: "item-b-1", text: "Same text", authorId: "p2", columnId: "col-b", groupId: "group-b-1", order: 5 },
+        { id: "item-a-1", text: "Same text", authorId: "fac1", columnId: "col-a", groupId: "group-a-1", order: 1 },
+        { id: "item-a-free", text: "Same text", authorId: "p2", columnId: "col-a", groupId: null, order: 7 },
+      ],
+      votes: [
+        { participantId: "fac1", groupId: "group-a-1", count: 2 },
+        { participantId: "p2", groupId: "group-b-1", count: 1 },
+      ],
+    });
+
+    const state = await stub.getRoomState();
+
+    expect(state.columns.map((column) => [column.id, column.order])).toEqual([
+      ["col-a", 0],
+      ["col-b", 1],
+    ]);
+    expect(state.groups
+      .filter((group) => group.columnId === "col-a")
+      .sort((a, b) => a.order - b.order)
+      .map((group) => [group.id, group.order])).toEqual([
+      ["group-a-1", 0],
+      ["group-a-2", 1],
+    ]);
+    expect(state.groups
+      .filter((group) => group.columnId === "col-b")
+      .map((group) => [group.id, group.order])).toEqual([
+      ["group-b-1", 0],
+    ]);
+    expect(state.items
+      .filter((item) => item.groupId === "group-a-1")
+      .sort((a, b) => a.order - b.order)
+      .map((item) => [item.id, item.order])).toEqual([
+      ["item-a-1", 0],
+      ["item-a-2", 1],
+    ]);
+    expect(state.items.find((item) => item.id === "item-b-1")).toMatchObject({
+      text: "Same text",
+      columnId: "col-b",
+      groupId: "group-b-1",
+      order: 0,
+    });
+    expect(state.votes).toEqual([
+      { participantId: "fac1", groupId: "group-a-1", count: 2 },
+      { participantId: "p2", groupId: "group-b-1", count: 1 },
+    ]);
+  });
+
   it("enforces vote budget against group IDs without item-level allocations", async () => {
     const stub = await init("test-v2-group-vote-budget");
     await stub.join("fac1", "Facilitator");
@@ -210,7 +277,7 @@ describe("RetroRoom Durable Object v2 schema", () => {
     expect(state.groups).toEqual([{ id: "group-1", name: "Kept group", columnId: "col-1", order: 0 }]);
     expect(state.items).toEqual([
       expect.objectContaining({ id: "valid-item", columnId: "col-1", groupId: "group-1", order: 0 }),
-      expect.objectContaining({ id: "cross-group", columnId: "col-2", groupId: null, order: 1 }),
+      expect.objectContaining({ id: "cross-group", columnId: "col-2", groupId: null, order: 0 }),
     ]);
     expect(state.votes).toEqual([{ participantId: "fac1", groupId: "group-1", count: 2 }]);
   });
