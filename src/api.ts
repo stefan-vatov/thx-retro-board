@@ -1,5 +1,15 @@
 import type { RoomState, Phase } from "./domain";
 
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status?: number,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 export async function createRoom(): Promise<{ roomId: string }> {
   const res = await fetch("/api/rooms", { method: "POST" });
   if (!res.ok) throw new Error("Failed to create room");
@@ -8,7 +18,10 @@ export async function createRoom(): Promise<{ roomId: string }> {
 
 export async function getRoomState(roomId: string): Promise<RoomState> {
   const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}`);
-  if (!res.ok) throw new Error("Room not found");
+  if (!res.ok) {
+    const message = res.status === 404 ? "Room not found" : "Failed to load room";
+    throw new ApiError(message, res.status);
+  }
   return res.json() as Promise<RoomState>;
 }
 

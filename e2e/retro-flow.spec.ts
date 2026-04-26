@@ -70,6 +70,22 @@ async function createWriteColumn(page: Page, name: string) {
   await expect(page.getByRole("heading", { name })).toBeVisible({ timeout: 5000 });
 }
 
+function makeInitialRoomState(roomId: string) {
+  return {
+    schemaVersion: 2,
+    roomId,
+    phase: "write",
+    participants: [],
+    columns: [],
+    items: [],
+    groups: [],
+    votes: [],
+    timer: { startedAt: null, durationSeconds: null, expired: false },
+    voteBudget: 5,
+    version: 1,
+  };
+}
+
 async function advanceToPhase(page: Page, phase: "organise" | "vote" | "review") {
   const order = ["write", "organise", "vote", "review"];
   const targetIndex = order.indexOf(phase);
@@ -237,6 +253,46 @@ test.describe("Retro Board E2E", () => {
       await page.goto(`/room/missing-${Date.now()}`);
       await expect(page.getByRole("heading", { name: /room not found/i })).toBeVisible();
       await expect(page.getByText(/check the invite link/i)).toBeVisible();
+      await expect(page.getByRole("link", { name: /return home/i })).toHaveAttribute("href", "/");
+    });
+
+    test("initial room network failure shows retryable error and recovers without not-found", async ({ page }) => {
+      const roomId = `retry-${Date.now()}`;
+      let attempts = 0;
+      await page.route(`**/api/rooms/${roomId}`, async (route) => {
+        attempts += 1;
+        if (attempts === 1) {
+          await route.abort("internetdisconnected");
+          return;
+        }
+        await route.fulfill({ json: makeInitialRoomState(roomId) });
+      });
+
+      await page.goto(`/room/${roomId}`);
+      await expect(page.getByRole("heading", { name: /could not load room|offline/i })).toBeVisible();
+      await expect(page.getByRole("heading", { name: /room not found/i })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: /retry loading room/i })).toBeVisible();
+
+      await page.getByRole("button", { name: /retry loading room/i }).click();
+      await expect(page.getByRole("heading", { name: /join room/i })).toBeVisible();
+      await expect(page.getByLabel(/display name/i)).toBeVisible();
+      expect(attempts).toBe(2);
+    });
+
+    test("initial room server failure shows generic recoverable error instead of not-found", async ({ page }) => {
+      const roomId = `server-error-${Date.now()}`;
+      await page.route(`**/api/rooms/${roomId}`, async (route) => {
+        await route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "Internal server error" }),
+        });
+      });
+
+      await page.goto(`/room/${roomId}`);
+      await expect(page.getByRole("heading", { name: /room temporarily unavailable/i })).toBeVisible();
+      await expect(page.getByText(/retry in a moment/i)).toBeVisible();
+      await expect(page.getByRole("heading", { name: /room not found/i })).toHaveCount(0);
       await expect(page.getByRole("link", { name: /return home/i })).toHaveAttribute("href", "/");
     });
 

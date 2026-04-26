@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams } from "react-router-dom";
-import { AlertTriangle, ClipboardCheck, Copy, DoorOpen, Loader2, Radar, ShieldCheck } from "lucide-react";
-import { joinRoom, getRoomState, setVoteBudget, setPhase } from "../api";
+import { AlertTriangle, ClipboardCheck, Copy, DoorOpen, Loader2, Radar, RefreshCw, ShieldCheck } from "lucide-react";
+import { ApiError, joinRoom, getRoomState, setVoteBudget, setPhase } from "../api";
 import { useRoom } from "../hooks";
 import type { RoomState, Phase, Column, RetroItem } from "../domain";
 import { sanitizeItemText, isValidItemText, PHASE_ORDER, sanitizeColumnName, isValidColumnName, MAX_COLUMN_NAME_LENGTH, MAX_COLUMNS } from "../domain";
@@ -14,7 +14,12 @@ import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { Input } from "./ui/input";
 
-type PageState = "loading" | "join" | "room" | "not-found";
+type PageState = "loading" | "join" | "room" | "not-found" | "load-error";
+type RoomLoadError = {
+  title: string;
+  description: string;
+  detail: string;
+};
 
 function mergeRoomState(local: RoomState | null, ws: RoomState | null): RoomState | null {
   if (!local && !ws) return null;
@@ -61,6 +66,30 @@ function getStoredIdentity(roomId: string): { participantId: string; displayName
     localStorage.setItem(pidKey, participantId);
   }
   return { participantId, displayName, connectionToken };
+}
+
+function classifyRoomLoadError(error: unknown): RoomLoadError {
+  if (error instanceof ApiError && error.status && error.status >= 500) {
+    return {
+      title: "Room temporarily unavailable",
+      description: "The room service returned an error while checking this invite.",
+      detail: "Retry in a moment. If the problem continues, return home and create a fresh room.",
+    };
+  }
+
+  if (typeof navigator !== "undefined" && !navigator.onLine) {
+    return {
+      title: "You appear to be offline",
+      description: "We could not check this room because your browser is offline.",
+      detail: "Reconnect to the internet, then retry loading the room.",
+    };
+  }
+
+  return {
+    title: "Could not load room",
+    description: "We could not check this invite because the network request failed.",
+    detail: "Check your connection and retry. Your participant credentials are not included in the room link.",
+  };
 }
 
 function ConnectionStatus({ connected }: { connected: boolean }) {
@@ -529,6 +558,7 @@ export function RoomPage() {
   const [displayName, setDisplayName] = useState(() => identity.displayName);
   const [joinError, setJoinError] = useState<string | null>(null);
   const [joinLoading, setJoinLoading] = useState(false);
+  const [roomLoadError, setRoomLoadError] = useState<RoomLoadError | null>(null);
   const [localRoomState, setLocalRoomState] = useState<RoomState | null>(null);
   const [connectionToken, setConnectionToken] = useState<string | undefined>(() => identity.connectionToken);
   const [voteBudgetInput, setVoteBudgetInput] = useState("5");
@@ -542,6 +572,7 @@ export function RoomPage() {
   const [timerPending, setTimerPending] = useState(false);
   const phaseStatusRef = useRef<HTMLDivElement>(null);
   const previousRoomUpdateRef = useRef<{ phase: Phase; version: number } | null>(null);
+  const initialLoadStartedRef = useRef(false);
 
   const { state: wsState, connected, lastError, clearError, send } = useRoom(roomId ?? "", participantId, connectionToken);
 
@@ -587,37 +618,52 @@ export function RoomPage() {
     }
   }, [pageState, roomState?.phase, roomState?.version, roomState]);
 
-  useEffect(() => {
+  const loadInitialRoom = useCallback(async () => {
     if (!roomId) return;
-    (async () => {
-      try {
-        const state = await getRoomState(roomId);
-        setLocalRoomState(state);
-        const existing = state.participants.find((p) => p.id === participantId);
-        if (existing) {
-          const name = identity.displayName || existing.displayName;
-          try {
-            const result = await joinRoom(roomId, participantId, name);
-            if (result.success) {
-              localStorage.setItem(`retro-name-${roomId}`, name);
-              setLocalRoomState(result.state ?? state);
-              if (result.connectionToken) {
-                localStorage.setItem(`retro-token-${roomId}`, result.connectionToken);
-                setConnectionToken(result.connectionToken);
-              }
+    setPageState("loading");
+    setRoomLoadError(null);
+    try {
+      const state = await getRoomState(roomId);
+      setLocalRoomState(state);
+      const existing = state.participants.find((p) => p.id === participantId);
+      if (existing) {
+        const name = identity.displayName || existing.displayName;
+        try {
+          const result = await joinRoom(roomId, participantId, name);
+          if (result.success) {
+            localStorage.setItem(`retro-name-${roomId}`, name);
+            setLocalRoomState(result.state ?? state);
+            if (result.connectionToken) {
+              localStorage.setItem(`retro-token-${roomId}`, result.connectionToken);
+              setConnectionToken(result.connectionToken);
             }
-          } catch {
-            // Re-join failed; still show room with stale token if available
           }
-          setPageState("room");
-        } else {
-          setPageState("join");
+        } catch {
+          // Re-join failed; still show room with stale token if available
         }
-      } catch {
-        setPageState("not-found");
+        setPageState("room");
+      } else {
+        setPageState("join");
       }
-    })();
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) {
+        setPageState("not-found");
+        return;
+      }
+      setRoomLoadError(classifyRoomLoadError(error));
+      setPageState("load-error");
+    }
   }, [roomId, participantId, identity.displayName]);
+
+  useEffect(() => {
+    if (initialLoadStartedRef.current) return undefined;
+    const timeout = window.setTimeout(() => {
+      if (initialLoadStartedRef.current) return;
+      initialLoadStartedRef.current = true;
+      void loadInitialRoom();
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [loadInitialRoom]);
 
   const displayBudget = roomState ? String(roomState.voteBudget) : voteBudgetInput;
 
@@ -787,6 +833,39 @@ export function RoomPage() {
             <Button asChild>
               <a href="/">Return Home</a>
             </Button>
+          </CardContent>
+        </Card>
+      </main>
+    );
+  }
+
+  if (pageState === "load-error") {
+    const errorState = roomLoadError ?? classifyRoomLoadError(null);
+    return (
+      <main className="state-surface" aria-labelledby="room-load-error-title">
+        <Card className="state-card empty-state" role="alert">
+          <CardHeader className="items-center text-center">
+            <div className="state-card__icon" role="img" aria-label="Room load error">
+              <AlertTriangle aria-hidden="true" />
+            </div>
+            <CardTitle id="room-load-error-title" role="heading" aria-level={1} className="text-2xl">
+              {errorState.title}
+            </CardTitle>
+            <CardDescription>
+              {errorState.description}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col items-center gap-4 text-center">
+            <p className="text-muted">{errorState.detail}</p>
+            <div className="flex flex-wrap justify-center gap-3">
+              <Button type="button" onClick={() => void loadInitialRoom()}>
+                <RefreshCw aria-hidden="true" />
+                Retry loading room
+              </Button>
+              <Button asChild variant="secondary">
+                <a href="/">Return Home</a>
+              </Button>
+            </div>
           </CardContent>
         </Card>
       </main>
