@@ -6,8 +6,11 @@ export type ServerToClientMessage =
   | { type: "item-added"; item: import("./types").RetroItem }
   | { type: "items-reordered"; items: import("./types").RetroItem[] }
   | { type: "groups-changed"; groups: import("./types").Group[] }
+  | { type: "actions-changed"; actions: import("./types").ActionItem[] }
   | { type: "columns-changed"; columns: import("./types").Column[]; version: number }
   | { type: "vote-changed"; target?: import("./types").VoteTarget; groupId: string; itemId?: string; participantId: string; delta: number; totalForGroup: number; totalForItem?: number }
+  | { type: "ranking-method-changed"; rankingMethod: import("./types").RankingMethod }
+  | { type: "pairwise-choice-changed"; choice: import("./types").PairwiseChoice }
   // delta > 0 for cast-vote (always +count), delta < 0 for remove-vote (always -1).
   // The vote-changed message is informational; authoritative state arrives via snapshot broadcast.
   | { type: "timer-updated"; timer: import("./types").TimerState }
@@ -16,6 +19,8 @@ export type ServerToClientMessage =
 export type ClientToServerMessage =
   | { type: "join"; participantId: string; displayName: string }
   | { type: "add-item"; text: string; columnId?: string | null }
+  | { type: "edit-item"; itemId: string; text: string }
+  | { type: "delete-item"; itemId: string }
   | { type: "reorder-items"; itemIds: string[]; expectedVersion: number; sourceColumnId: string; sourceGroupId: string | null }
   | { type: "create-group"; name: string; columnId: string }
   | { type: "edit-group"; groupId: string; name: string }
@@ -36,6 +41,12 @@ export type ClientToServerMessage =
     }
   | { type: "set-phase"; phase: import("./types").Phase }
   | { type: "set-vote-budget"; budget: number }
+  | { type: "set-ranking-method"; rankingMethod: import("./types").RankingMethod }
   | { type: "cast-vote"; groupId?: string; itemId?: string; count: number }
   | { type: "remove-vote"; groupId?: string; itemId?: string }
+  | { type: "choose-pairwise"; winner: import("./types").VoteTarget; loser: import("./types").VoteTarget }
+  | { type: "toggle-reaction"; target: import("./types").ReactionTarget; emoji: string }
+  | { type: "create-action"; text: string }
+  | { type: "edit-action"; actionId: string; text: string }
+  | { type: "delete-action"; actionId: string }
   | { type: "set-timer"; durationSeconds: number };

@@ -1,4 +1,4 @@
-import type { RoomState, Phase } from "./domain";
+import type { RoomState, Phase, RetroItem, RankingMethod } from "./domain";
 
 export class ApiError extends Error {
   constructor(
@@ -51,6 +51,19 @@ export async function setVoteBudget(
   return res.json() as Promise<{ success: boolean; error?: string }>;
 }
 
+export async function setRankingMethod(
+  roomId: string,
+  participantId: string,
+  rankingMethod: RankingMethod,
+): Promise<{ success: boolean; error?: string }> {
+  const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/ranking-method`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ participantId, rankingMethod }),
+  });
+  return res.json() as Promise<{ success: boolean; error?: string }>;
+}
+
 export async function setPhase(
   roomId: string,
   participantId: string,
@@ -60,6 +73,60 @@ export async function setPhase(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ participantId, phase }),
+  });
+  return res.json() as Promise<{ success: boolean; error?: string }>;
+}
+
+export async function addItem(
+  roomId: string,
+  participantId: string,
+  text: string,
+  columnId: string,
+): Promise<{ success: boolean; error?: string; item?: RetroItem }> {
+  const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/items`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ participantId, text, columnId }),
+  });
+  return res.json() as Promise<{ success: boolean; error?: string; item?: RetroItem }>;
+}
+
+export async function editItem(
+  roomId: string,
+  participantId: string,
+  itemId: string,
+  text: string,
+): Promise<{ success: boolean; error?: string; item?: RetroItem }> {
+  const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/items/${encodeURIComponent(itemId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ participantId, text }),
+  });
+  return res.json() as Promise<{ success: boolean; error?: string; item?: RetroItem }>;
+}
+
+export async function deleteItem(
+  roomId: string,
+  participantId: string,
+  itemId: string,
+): Promise<{ success: boolean; error?: string }> {
+  const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/items/${encodeURIComponent(itemId)}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ participantId }),
+  });
+  return res.json() as Promise<{ success: boolean; error?: string }>;
+}
+
+export async function setTimer(
+  roomId: string,
+  participantId: string,
+  durationSeconds: number,
+): Promise<{ success: boolean; error?: string }> {
+  const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/timer`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ participantId, durationSeconds }),
   });
   return res.json() as Promise<{ success: boolean; error?: string }>;
 }

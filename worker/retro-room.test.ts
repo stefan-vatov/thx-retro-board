@@ -1,15 +1,50 @@
 // @ts-expect-error -- cloudflare:workers vitest module
 import { env } from "cloudflare:workers";
 import { describe, it, expect } from "vitest";
-import { groupVoteTarget, itemVoteTarget } from "../src/domain";
+import { getDefaultColumns, groupVoteTarget, itemVoteTarget } from "../src/domain";
 import type { RoomState } from "../src/domain";
 
 describe("RetroRoom Durable Object v2 schema", () => {
-  async function init(roomId: string) {
+  async function initRaw(roomId: string) {
     const id = env.RETRO_ROOM.idFromName(roomId);
     const stub = env.RETRO_ROOM.get(id);
     await stub.initRoom(roomId);
     return stub;
+  }
+
+  async function init(roomId: string) {
+    const stub = await initRaw(roomId);
+    await stub.setPhaseForTest("write");
+    return withWritePhaseColumnSetup(stub);
+  }
+
+  function withWritePhaseColumnSetup<T extends {
+    getRoomState: () => Promise<RoomState>;
+    setPhaseForTest: (phase: RoomState["phase"]) => Promise<void>;
+    createColumn: (...args: never[]) => Promise<unknown>;
+    editColumn: (...args: never[]) => Promise<unknown>;
+    reorderColumns: (...args: never[]) => Promise<unknown>;
+    deleteColumn: (...args: never[]) => Promise<unknown>;
+  }>(stub: T): T {
+    async function runColumnSetup(method: keyof Pick<T, "createColumn" | "editColumn" | "reorderColumns" | "deleteColumn">, args: never[]) {
+      const phase = (await stub.getRoomState()).phase;
+      if (phase !== "write" || args[0] !== "fac1") {
+        return stub[method](...args);
+      }
+      await stub.setPhaseForTest("setup");
+      const result = await stub[method](...args);
+      await stub.setPhaseForTest("write");
+      return result;
+    }
+
+    return new Proxy(stub, {
+      get(target, prop, receiver) {
+        if (prop === "createColumn" || prop === "editColumn" || prop === "reorderColumns" || prop === "deleteColumn") {
+          return (...args: never[]) => runColumnSetup(prop, args);
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
   }
 
   async function freshMovePreconditions(stub: { getRoomState: () => Promise<RoomState> }, itemId: string) {
@@ -38,18 +73,33 @@ describe("RetroRoom Durable Object v2 schema", () => {
     return (await stub.getRoomState()).version;
   }
 
-  it("initializes new rooms as v2 with no fixed default columns", async () => {
-    const stub = await init("test-v2-empty-room");
+  async function deleteAllColumns(stub: {
+    getRoomState: () => Promise<RoomState>;
+    deleteColumn: (participantId: string, columnId: string) => Promise<{ success: boolean; error?: string }>;
+  }, participantId = "fac1") {
+    const state = await stub.getRoomState();
+    for (const column of state.columns) {
+      const result = await stub.deleteColumn(participantId, column.id);
+      expect(result.success).toBe(true);
+    }
+  }
+
+  it("initializes new rooms as v2 with customer-ready default columns", async () => {
+    const stub = await initRaw("test-v2-empty-room");
 
     const state = await stub.getRoomState();
     expect(state.schemaVersion).toBe(2);
     expect(state.roomId).toBe("test-v2-empty-room");
-    expect(state.phase).toBe("write");
-    expect(state.columns).toEqual([]);
+    expect(state.phase).toBe("setup");
+    expect(state.columns).toEqual(getDefaultColumns());
     expect(state.groups).toEqual([]);
     expect(state.items).toEqual([]);
     expect(state.votes).toEqual([]);
-    expect(state.columns.map((column) => column.name)).not.toEqual(expect.arrayContaining(["Start", "Stop", "Continue"]));
+    expect(state.rankingMethod).toBe("score");
+    expect(state.pairwiseChoices).toEqual([]);
+    expect(state.actions).toEqual([]);
+    expect(state.reactions).toEqual([]);
+    expect(state.columns.map((column) => column.name)).toEqual(["Mad", "Glad", "Sad"]);
   });
 
   it("resets incompatible legacy board content on load", async () => {
@@ -69,12 +119,120 @@ describe("RetroRoom Durable Object v2 schema", () => {
 
     const state = await stub.getRoomState();
     expect(state.schemaVersion).toBe(2);
-    expect(state.phase).toBe("write");
+    expect(state.phase).toBe("setup");
     expect(state.participants).toEqual([{ id: "fac1", displayName: "Facilitator", isFacilitator: true }]);
-    expect(state.columns).toEqual([]);
+    expect(state.columns).toEqual(getDefaultColumns());
     expect(state.groups).toEqual([]);
     expect(state.items).toEqual([]);
     expect(state.votes).toEqual([]);
+    expect(state.actions).toEqual([]);
+    expect(state.reactions).toEqual([]);
+  });
+
+  it("toggles realtime reactions on cards and groups while validating targets", async () => {
+    const stub = await init("test-v2-reactions");
+    await stub.join("fac1", "Facilitator");
+    await stub.join("p2", "Participant");
+    const columnId = (await stub.getRoomState()).columns[0]!.id;
+    const item = await stub.addItem("fac1", "Reactable card", columnId);
+    expect(item.success).toBe(true);
+
+    await expect(stub.toggleReaction("p2", itemVoteTarget(item.item!.id), "👍")).resolves.toMatchObject({ success: true });
+    await expect(stub.toggleReaction("fac1", itemVoteTarget(item.item!.id), "👍")).resolves.toMatchObject({ success: true });
+    let state = await stub.getRoomState();
+    expect(state.reactions).toEqual([
+      { participantId: "p2", target: itemVoteTarget(item.item!.id), emoji: "👍" },
+      { participantId: "fac1", target: itemVoteTarget(item.item!.id), emoji: "👍" },
+    ]);
+
+    await expect(stub.toggleReaction("p2", itemVoteTarget(item.item!.id), "👍")).resolves.toMatchObject({ success: true });
+    state = await stub.getRoomState();
+    expect(state.reactions).toEqual([{ participantId: "fac1", target: itemVoteTarget(item.item!.id), emoji: "👍" }]);
+
+    await stub.setPhase("fac1", "organise");
+    const group = await stub.createGroup("fac1", "Reactable group", columnId);
+    expect(group.success).toBe(true);
+    await expect(stub.toggleReaction("p2", groupVoteTarget(group.group!.id), "🔥")).resolves.toMatchObject({ success: true });
+    await expect(stub.toggleReaction("p2", groupVoteTarget(group.group!.id), "not-emoji")).resolves.toMatchObject({ success: false });
+    await expect(stub.toggleReaction("p2", itemVoteTarget("missing-item"), "👍")).resolves.toMatchObject({ success: false });
+
+    state = await stub.getRoomState();
+    expect(state.reactions).toEqual([
+      { participantId: "fac1", target: itemVoteTarget(item.item!.id), emoji: "👍" },
+      { participantId: "p2", target: groupVoteTarget(group.group!.id), emoji: "🔥" },
+    ]);
+  });
+
+  it("creates, edits, and deletes collaborative action items only during review", async () => {
+    const stub = await init("test-v2-review-actions");
+    await stub.join("fac1", "Facilitator");
+    await stub.join("p2", "Participant");
+
+    const beforeReview = await stub.getRoomState();
+    await expect(stub.createAction("p2", "Follow up before review")).resolves.toMatchObject({ success: false });
+    expect(await stub.getRoomState()).toEqual(beforeReview);
+
+    await stub.setPhase("fac1", "organise");
+    await stub.setPhase("fac1", "vote");
+    await stub.setPhase("fac1", "review");
+
+    const created = await stub.createAction("p2", "  Book incident follow-up  ");
+    expect(created.success).toBe(true);
+    expect(created.action).toMatchObject({
+      text: "Book incident follow-up",
+      authorId: "p2",
+      order: 0,
+    });
+
+    const edited = await stub.editAction("fac1", created.action!.id, "Confirm owner for rollout checklist");
+    expect(edited.success).toBe(true);
+
+    let state = await stub.getRoomState();
+    expect(state.actions).toEqual([
+      {
+        id: created.action!.id,
+        text: "Confirm owner for rollout checklist",
+        authorId: "p2",
+        order: 0,
+      },
+    ]);
+
+    const second = await stub.createAction("fac1", "Second action");
+    expect(second.success).toBe(true);
+    const deletedByOtherParticipant = await stub.deleteAction("p2", second.action!.id);
+    expect(deletedByOtherParticipant.success).toBe(true);
+
+    state = await stub.getRoomState();
+    expect(state.actions).toEqual([
+      {
+        id: created.action!.id,
+        text: "Confirm owner for rollout checklist",
+        authorId: "p2",
+        order: 0,
+      },
+    ]);
+
+    await stub.setPhase("fac1", "finalize");
+    const beforeLateDelete = await stub.getRoomState();
+    await expect(stub.deleteAction("fac1", created.action!.id)).resolves.toMatchObject({ success: false });
+    expect(await stub.getRoomState()).toEqual(beforeLateDelete);
+  });
+
+  it("locks setup-only decisions after setup and requires at least one column before write", async () => {
+    const stub = await initRaw("test-v2-setup-locks");
+    await stub.join("fac1", "Facilitator");
+
+    expect(await stub.setVoteBudget("fac1", 8)).toMatchObject({ success: true });
+    await deleteAllColumns(stub);
+    const blocked = await stub.setPhase("fac1", "write");
+    expect(blocked).toMatchObject({ success: false, error: "Add at least one column before starting write phase" });
+    expect((await stub.getRoomState()).phase).toBe("setup");
+
+    const column = await stub.createColumn("fac1", "Only lane");
+    expect(column.success).toBe(true);
+    expect(await stub.setPhase("fac1", "write")).toMatchObject({ success: true });
+    expect(await stub.setVoteBudget("fac1", 3)).toMatchObject({ success: false, error: "Vote budget can only be changed during setup" });
+    expect((await stub.getRoomState()).voteBudget).toBe(8);
   });
 
   it("stores distinct columns, column-scoped groups, original item column IDs, and group votes", async () => {
@@ -109,12 +267,38 @@ describe("RetroRoom Durable Object v2 schema", () => {
     expect(vote.success).toBe(true);
 
     const state = await stub.getRoomState();
-    expect(state.columns).toEqual([{ id: columnId, name: "Went well", order: 0 }]);
+    expect(state.columns).toEqual([...getDefaultColumns(), { id: columnId, name: "Went well", order: 3 }]);
     expect(state.groups).toEqual([{ id: group.group!.id, name: "Release wins", columnId, order: 0 }]);
     expect(state.items).toEqual([
       expect.objectContaining({ id: item.item!.id, text: "Shipping was smooth", columnId, groupId: group.group!.id, order: 0 }),
     ]);
     expect(state.votes).toEqual([{ participantId: "fac1", target: groupVoteTarget(group.group!.id), count: 2 }]);
+  });
+
+  it("lets authors edit and delete only their own write-phase items", async () => {
+    const stub = await init("test-v2-item-author-controls");
+    await stub.join("fac1", "Facilitator");
+    await stub.join("p2", "Participant");
+    const columnId = (await stub.getRoomState()).columns[0]!.id;
+
+    const authored = await stub.addItem("p2", "Original text", columnId);
+    expect(authored.success).toBe(true);
+    const itemId = authored.item!.id;
+
+    expect(await stub.editItem("fac1", itemId, "Facilitator edit")).toMatchObject({
+      success: false,
+      error: "Only the author can edit this item",
+    });
+    expect(await stub.deleteItem("fac1", itemId)).toMatchObject({
+      success: false,
+      error: "Only the author can delete this item",
+    });
+
+    const edited = await stub.editItem("p2", itemId, "Updated text");
+    expect(edited).toMatchObject({ success: true, item: expect.objectContaining({ text: "Updated text" }) });
+
+    expect(await stub.deleteItem("p2", itemId)).toMatchObject({ success: true });
+    expect((await stub.getRoomState()).items).toEqual([]);
   });
 
   it("normalizes persisted v2 ordering per column and per item list while preserving duplicate-looking identities", async () => {
@@ -233,6 +417,35 @@ describe("RetroRoom Durable Object v2 schema", () => {
 
     expect(await stub.castVote("p2", itemVoteTarget(ungroupedItem.item!.id), 1)).toMatchObject({ success: false, error: expect.stringContaining("Over budget") });
     expect(await stub.getRoomState()).toEqual(beforeOverBudget);
+  });
+
+  it("accepts pairwise choices between grouped and ungrouped targets across columns", async () => {
+    const stub = await initRaw("test-v2-pairwise-cross-board-targets");
+    await stub.join("fac1", "Facilitator");
+    await stub.join("p2", "Participant");
+    await expect(stub.setRankingMethod("fac1", "pairwise")).resolves.toMatchObject({ success: true });
+
+    const setupState = await stub.getRoomState();
+    const mad = setupState.columns[0]!;
+    const glad = setupState.columns[1]!;
+    await stub.setPhase("fac1", "write");
+    const groupedItem = await stub.addItem("fac1", "Grouped topic", mad.id);
+    const ungroupedItem = await stub.addItem("fac1", "Other-column topic", glad.id);
+    await stub.setPhase("fac1", "organise");
+    const group = await stub.createGroup("fac1", "Group target", mad.id);
+    await stub.moveItemToGroup("fac1", groupedItem.item!.id, group.group!.id, 0, await freshMovePreconditions(stub, groupedItem.item!.id));
+    await stub.setPhase("fac1", "vote");
+
+    await expect(stub.choosePairwise("p2", groupVoteTarget(group.group!.id), itemVoteTarget(ungroupedItem.item!.id))).resolves.toMatchObject({ success: true });
+    await expect(stub.choosePairwise("p2", itemVoteTarget(groupedItem.item!.id), itemVoteTarget(ungroupedItem.item!.id))).resolves.toMatchObject({
+      success: false,
+      error: "Cannot vote directly on a grouped item",
+    });
+
+    const state = await stub.getRoomState();
+    expect(state.pairwiseChoices).toEqual([
+      { participantId: "p2", winner: groupVoteTarget(group.group!.id), loser: itemVoteTarget(ungroupedItem.item!.id) },
+    ]);
   });
 
   it("rejects invalid mixed vote targets and counts without mutating state or version", async () => {
@@ -633,9 +846,10 @@ describe("RetroRoom Durable Object v2 schema", () => {
     expect(await stub.getRoomState()).toEqual(beforeDuplicate);
   });
 
-  it("allows the facilitator to create, rename, reorder, and delete columns in write and organise", async () => {
+  it("allows the facilitator to create, rename, reorder, and delete columns during setup", async () => {
     const stub = await init("test-v2-column-crud-facilitator-phases");
     await stub.join("fac1", "Facilitator");
+    await deleteAllColumns(stub);
 
     const first = await stub.createColumn("fac1", "First");
     const second = await stub.createColumn("fac1", "Second");
@@ -653,7 +867,6 @@ describe("RetroRoom Durable Object v2 schema", () => {
       [first.column!.id, 1],
     ]);
 
-    await stub.setPhase("fac1", "organise");
     const third = await stub.createColumn("fac1", "Third");
     expect(third.success).toBe(true);
 
@@ -665,6 +878,7 @@ describe("RetroRoom Durable Object v2 schema", () => {
   it("deletes a column with contained groups, items, and votes while preserving unrelated columns", async () => {
     const stub = await init("test-v2-column-delete-cascade");
     await stub.join("fac1", "Facilitator");
+    await deleteAllColumns(stub);
     const keep = await stub.createColumn("fac1", "Keep");
     const remove = await stub.createColumn("fac1", "Remove");
     const keepItem = await stub.addItem("fac1", "Keep item", keep.column!.id);
@@ -683,7 +897,7 @@ describe("RetroRoom Durable Object v2 schema", () => {
     await stub.castVote("fac1", removeGroup.group!.id, 2);
     await stub.castVote("fac1", itemVoteTarget(keepFreeItem.item!.id), 1);
     await stub.castVote("fac1", itemVoteTarget(removeFreeItem.item!.id), 1);
-    await stub.setPhaseForTest("organise");
+    await stub.setPhaseForTest("setup");
 
     const before = await stub.getRoomState();
     expect(before.votes.map((vote) => vote.target?.id).sort()).toEqual([
@@ -713,6 +927,7 @@ describe("RetroRoom Durable Object v2 schema", () => {
   it("deletes the final column without recreating defaults or allowing invalid item adds", async () => {
     const stub = await init("test-v2-column-delete-last");
     await stub.join("fac1", "Facilitator");
+    await deleteAllColumns(stub);
     const last = await stub.createColumn("fac1", "Last");
     await stub.addItem("fac1", "Only item", last.column!.id);
 

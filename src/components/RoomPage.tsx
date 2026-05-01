@@ -16,20 +16,22 @@ import {
   Radar,
   RefreshCw,
   Save,
-  Send,
   ShieldCheck,
   Trash2,
   Users,
   Vote,
   X,
 } from "lucide-react";
-import { ApiError, joinRoom, getRoomState, setVoteBudget, setPhase } from "../api";
+import { ApiError, addItem, deleteItem, editItem, joinRoom, getRoomState, setVoteBudget, setRankingMethod, setPhase, setTimer } from "../api";
 import { useRoom } from "../hooks";
-import type { RoomState, Phase, Column, RetroItem } from "../domain";
-import { sanitizeItemText, isValidItemText, PHASE_ORDER, sanitizeColumnName, isValidColumnName, MAX_COLUMN_NAME_LENGTH, MAX_COLUMNS } from "../domain";
+import type { RoomState, Phase, Column, RetroItem, RankingMethod } from "../domain";
+import { sanitizeItemText, isValidItemText, PHASE_ORDER, sanitizeColumnName, isValidColumnName, MAX_COLUMN_NAME_LENGTH, MAX_COLUMNS, itemVoteTarget } from "../domain";
 import { OrganiseBoard } from "./OrganiseBoard";
 import { VoteBoard } from "./VoteBoard";
 import { ReviewBoard } from "./ReviewBoard";
+import { FinalBoard } from "./FinalBoard";
+import { ReactionBar } from "./Reactions";
+import { submitFormOnModEnter } from "./form-shortcuts";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -41,6 +43,15 @@ type RoomLoadError = {
   title: string;
   description: string;
   detail: string;
+};
+
+const PHASE_LABELS: Record<Phase, string> = {
+  setup: "Setup",
+  write: "Write",
+  organise: "Organise",
+  vote: "Vote",
+  review: "Review",
+  finalize: "Finalize",
 };
 
 function mergeRoomState(local: RoomState | null, ws: RoomState | null): RoomState | null {
@@ -72,9 +83,57 @@ function TimerDisplay({ timer }: { timer: RoomState["timer"] }) {
 
   return (
     <span className={`timer-display${expired ? " timer-display--expired" : " timer-display--running"}`}>
-      {expired ? "⏰ Timer expired" : `⏱ ${mins}:${secs.toString().padStart(2, "0")} remaining`}
+      {expired ? "Timer expired" : `${mins}:${secs.toString().padStart(2, "0")} remaining`}
     </span>
   );
+}
+
+function ElapsedRetroClock({ startedAt }: { startedAt: number }) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  return <span className="elapsed-clock">{formatElapsedTime(Math.max(0, now - startedAt))}</span>;
+}
+
+function PhaseProgress({ phase, startedAt }: { phase: Phase; startedAt: number }) {
+  const currentIndex = PHASE_ORDER.indexOf(phase);
+
+  return (
+    <Card className="retro-progress" role="region" aria-label="Retro progress">
+      <div className="retro-progress__header">
+        <span className="retro-progress__label">Retro progress</span>
+        <span className="retro-progress__elapsed" aria-label="Retro elapsed time">
+          Running for <ElapsedRetroClock startedAt={startedAt} />
+        </span>
+      </div>
+      <ol className="retro-steps" aria-label="Retro steps">
+        {PHASE_ORDER.map((step, index) => {
+          const state = index < currentIndex ? "complete" : index === currentIndex ? "current" : "upcoming";
+          return (
+            <li key={step} className={`retro-step retro-step--${state}`} aria-current={state === "current" ? "step" : undefined}>
+              <span className="retro-step__dot" aria-hidden="true">{index + 1}</span>
+              <span className="retro-step__label">{PHASE_LABELS[step]}</span>
+            </li>
+          );
+        })}
+      </ol>
+    </Card>
+  );
+}
+
+function formatElapsedTime(milliseconds: number): string {
+  const totalSeconds = Math.floor(milliseconds / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+  }
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
 function getStoredIdentity(roomId: string): { participantId: string; displayName: string; connectionToken?: string } {
@@ -232,7 +291,7 @@ function ParticipantList({ participants, currentId }: { participants: RoomState[
           <span className="participant-chip__name">{p.displayName}</span>
           {p.isFacilitator && (
             <span className="facilitator-badge facilitator-badge--sm" aria-label={`${p.displayName} is facilitator`}>
-              ⭐ Facilitator
+              Facilitator
             </span>
           )}
         </Badge>
@@ -257,7 +316,7 @@ function ColumnConfiguration({
   serverError: string | null;
   clearServerError: () => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(() => roomState.phase === "setup");
   const [newColumnName, setNewColumnName] = useState("");
   const [editingColumnId, setEditingColumnId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
@@ -265,7 +324,7 @@ function ColumnConfiguration({
   const [columnError, setColumnError] = useState<string | null>(null);
   const [pendingColumnMutation, setPendingColumnMutation] = useState(false);
   const pendingColumnVersionRef = useRef<number | null>(null);
-  const canMutate = roomState.phase === "write" || roomState.phase === "organise";
+  const canMutate = roomState.phase === "setup";
   const columns = getSortedColumns(roomState);
   const isAtMax = columns.length >= MAX_COLUMNS;
   const displayedError = columnError ?? (serverError && /column/i.test(serverError) ? serverError : null);
@@ -305,7 +364,7 @@ function ColumnConfiguration({
     e.preventDefault();
     clearFeedback();
     if (!canMutate) {
-      setColumnError("Columns can be configured during write and organise phases.");
+      setColumnError("Columns can only be configured during setup.");
       return;
     }
     if (isAtMax) {
@@ -369,7 +428,7 @@ function ColumnConfiguration({
   function deleteColumn(column: Column) {
     clearFeedback();
     if (!canMutate) {
-      setColumnError("Columns can be configured during write and organise phases.");
+      setColumnError("Columns can only be configured during setup.");
       return;
     }
     if (!send({ type: "delete-column", columnId: column.id })) {
@@ -407,7 +466,7 @@ function ColumnConfiguration({
             <div>
               <CardTitle className="column-config__title">Columns</CardTitle>
               <CardDescription className="column-config__hint">
-                Facilitators can configure columns during write and organise. Participants see changes live.
+                Facilitators configure columns during setup. They lock before writing starts so later votes and exports stay consistent.
               </CardDescription>
             </div>
             <Badge variant="secondary" className="column-config__count">{columns.length}/{MAX_COLUMNS}</Badge>
@@ -428,6 +487,7 @@ function ColumnConfiguration({
                 setNewColumnName(event.target.value);
                 if (columnError) setColumnError(null);
               }}
+              onKeyDown={submitFormOnModEnter}
               maxLength={MAX_COLUMN_NAME_LENGTH}
               placeholder="New column name…"
               aria-label="New column name"
@@ -516,13 +576,177 @@ function ColumnConfiguration({
   );
 }
 
-function WriteColumnBoard({ roomState }: { roomState: RoomState }) {
+function SetupBoard({
+  roomState,
+  send,
+  serverError,
+  clearServerError,
+  onRankingMethodChange,
+  rankingPending,
+  rankingMsg,
+}: {
+  roomState: RoomState;
+  send: (message: unknown) => boolean;
+  serverError: string | null;
+  clearServerError: () => void;
+  onRankingMethodChange: (rankingMethod: RankingMethod) => void;
+  rankingPending: boolean;
+  rankingMsg: string | null;
+}) {
+  const methods: Array<{
+    id: RankingMethod;
+    title: string;
+    eyebrow: string;
+    description: string;
+  }> = [
+    {
+      id: "score",
+      title: "Score voting",
+      eyebrow: "Best default",
+      description: "Each participant gets a small vote budget and spends points on the most important items within the vote board.",
+    },
+    {
+      id: "pairwise",
+      title: "Pairwise ranking",
+      eyebrow: "Small groups",
+      description: "Participants choose between two items at a time inside each column. Results rank by comparison wins.",
+    },
+  ];
+
+  return (
+    <div className="setup-board" aria-label="Setup retro board">
+      <section className="setup-panel setup-panel--ranking">
+        <div className="setup-panel__header">
+          <div>
+            <p className="review-slide__eyebrow">Step 1</p>
+            <h3>Set up the board</h3>
+          </div>
+          <Badge variant="secondary">Locks after setup</Badge>
+        </div>
+        <p className="setup-panel__copy">
+          Choose the board columns and the decision method before participants start writing. This keeps later grouping, ranking, review, and exports stable.
+        </p>
+        <div className="ranking-method-grid" role="radiogroup" aria-label="Ranking method">
+          {methods.map((method) => {
+            const selected = roomState.rankingMethod === method.id;
+            return (
+              <button
+                key={method.id}
+                type="button"
+                className={`ranking-method-card${selected ? " ranking-method-card--selected" : ""}`}
+                onClick={() => onRankingMethodChange(method.id)}
+                disabled={rankingPending}
+                role="radio"
+                aria-checked={selected}
+              >
+                <span className="ranking-method-card__eyebrow">{method.eyebrow}</span>
+                <span className="ranking-method-card__title">{method.title}</span>
+                <span className="ranking-method-card__description">{method.description}</span>
+              </button>
+            );
+          })}
+        </div>
+        {rankingMsg && (
+          <div className={`status-msg ${rankingMsg.includes("Failed") || rankingMsg.includes("only") ? "status-msg--error" : "status-msg--info"}`} role="status">
+            {rankingMsg}
+          </div>
+        )}
+      </section>
+
+      <ColumnConfiguration
+        roomState={roomState}
+        send={send}
+        serverError={serverError}
+        clearServerError={clearServerError}
+      />
+    </div>
+  );
+}
+
+interface WriteColumnBoardProps {
+  roomState: RoomState;
+  participantId: string;
+  connected: boolean;
+  columnInputs: Record<string, string>;
+  columnErrors: Record<string, string | undefined>;
+  pendingColumnId: string | null;
+  editingItemId: string | null;
+  editingItemText: string;
+  pendingItemId: string | null;
+  onColumnInputChange: (columnId: string, value: string) => void;
+  onAddItem: (event: React.FormEvent, columnId: string) => void;
+  onStartEdit: (item: RetroItem) => void;
+  onEditTextChange: (value: string) => void;
+  onSubmitEdit: (event: React.FormEvent, itemId: string) => void;
+  onCancelEdit: () => void;
+  onDeleteItem: (itemId: string) => void;
+  send: (message: unknown) => boolean;
+  columnInputRefs: React.MutableRefObject<Record<string, HTMLTextAreaElement | null>>;
+}
+
+function WriteColumnBoard({
+  roomState,
+  participantId,
+  connected,
+  columnInputs,
+  columnErrors,
+  pendingColumnId,
+  editingItemId,
+  editingItemText,
+  pendingItemId,
+  onColumnInputChange,
+  onAddItem,
+  onStartEdit,
+  onEditTextChange,
+  onSubmitEdit,
+  onCancelEdit,
+  onDeleteItem,
+  send,
+  columnInputRefs,
+}: WriteColumnBoardProps) {
   const columns = getSortedColumns(roomState);
   const unassigned = roomState.items.filter((item) => (item.columnId ?? item.groupId) === null).sort((a, b) => a.order - b.order);
 
   function renderItem(item: RetroItem, index: number) {
     const isLong = item.text.length > 400;
     const author = roomState.participants.find((p) => p.id === item.authorId);
+    const isOwner = item.authorId === participantId;
+    const isEditing = editingItemId === item.id;
+    const editErrorId = `edit-item-error-${item.id}`;
+
+    if (isEditing) {
+      return (
+        <li key={item.id} className={`item-card item-card--editing${isLong ? " item-card--long" : ""}`}>
+          <form className="item-card__edit-form" onSubmit={(event) => onSubmitEdit(event, item.id)}>
+            <label className="sr-only" htmlFor={`edit-item-${item.id}`}>Edit card</label>
+            <textarea
+              id={`edit-item-${item.id}`}
+              className="input write-card-composer__textarea item-card__edit-input"
+              value={editingItemText}
+              onChange={(event) => onEditTextChange(event.target.value)}
+              onKeyDown={submitFormOnModEnter}
+              maxLength={500}
+              rows={3}
+              aria-describedby={editErrorId}
+              autoFocus
+            />
+            <div className="item-card__edit-footer">
+              <span id={editErrorId} className="item-card__char-count">{editingItemText.length}/500</span>
+              <div className="item-card__actions">
+                <Button type="button" variant="ghost" size="sm" onClick={onCancelEdit} disabled={pendingItemId === item.id}>
+                  <X aria-hidden="true" /> Cancel
+                </Button>
+                <Button type="submit" size="sm" disabled={pendingItemId === item.id || !editingItemText.trim()} aria-busy={pendingItemId === item.id}>
+                  {pendingItemId === item.id ? <Loader2 className="loading-spinner" aria-hidden="true" /> : <Save aria-hidden="true" />}
+                  Save
+                </Button>
+              </div>
+            </div>
+          </form>
+        </li>
+      );
+    }
+
     return (
       <li key={item.id} className={`item-card${isLong ? " item-card--long" : ""}`}>
         <div className="item-card__content">
@@ -537,6 +761,26 @@ function WriteColumnBoard({ roomState }: { roomState: RoomState }) {
           <span className="item-card__author">{author?.displayName ?? "Unknown"}</span>
           <span className="item-card__index" aria-label={`Item ${index + 1}`}>#{index + 1}</span>
         </div>
+        <ReactionBar roomState={roomState} target={itemVoteTarget(item.id)} participantId={participantId} send={send} label={item.text} />
+        {isOwner && (
+          <div className="item-card__actions" aria-label={`Actions for ${item.text}`}>
+            <Button type="button" variant="ghost" size="sm" onClick={() => onStartEdit(item)} disabled={pendingItemId === item.id}>
+              <Pencil aria-hidden="true" /> Edit
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="item-card__delete"
+              onClick={() => onDeleteItem(item.id)}
+              disabled={pendingItemId === item.id}
+              aria-busy={pendingItemId === item.id}
+            >
+              {pendingItemId === item.id ? <Loader2 className="loading-spinner" aria-hidden="true" /> : <Trash2 aria-hidden="true" />}
+              Delete
+            </Button>
+          </div>
+        )}
       </li>
     );
   }
@@ -544,7 +788,9 @@ function WriteColumnBoard({ roomState }: { roomState: RoomState }) {
   if (columns.length === 0) {
     return (
       <div className="write-empty-state empty-state" role="status" aria-live="polite">
-        <div className="empty-state__icon" aria-hidden="true">🧱</div>
+        <div className="empty-state__icon empty-state__icon--block" aria-hidden="true">
+          <Columns3 size={28} />
+        </div>
         <h3 className="empty-state__title">Create your first column</h3>
         <p className="empty-state__text">
           This room starts with an empty kanban board. Ask the facilitator to configure list-style columns before adding retro items.
@@ -559,6 +805,12 @@ function WriteColumnBoard({ roomState }: { roomState: RoomState }) {
         const items = roomState.items
           .filter((item) => item.columnId === column.id && item.groupId === null)
           .sort((a, b) => a.order - b.order);
+        const inputValue = columnInputs[column.id] ?? "";
+        const columnError = columnErrors[column.id];
+        const composerId = `write-card-input-${column.id}`;
+        const errorId = `write-card-error-${column.id}`;
+        const isPending = pendingColumnId === column.id;
+        const isNearLimit = inputValue.length > 400;
         return (
           <Card key={column.id} className="column-board__column" role="region" aria-labelledby={`write-column-${column.id}`} data-column-id={column.id}>
               <CardHeader className="column-board__header px-0">
@@ -566,8 +818,47 @@ function WriteColumnBoard({ roomState }: { roomState: RoomState }) {
                 <Badge variant="secondary" className="column-board__count" aria-label={`${items.length} items`}>{items.length}</Badge>
               </CardHeader>
               <CardContent className="px-0">
+                <form className="write-card-composer" onSubmit={(event) => onAddItem(event, column.id)} aria-label={`Add card to ${column.name}`}>
+                  <label className="sr-only" htmlFor={composerId}>Add a card to {column.name}</label>
+                  <textarea
+                    ref={(element) => {
+                      columnInputRefs.current[column.id] = element;
+                    }}
+                    id={composerId}
+                    className={`input write-card-composer__textarea${columnError ? " input--error" : ""}`}
+                    value={inputValue}
+                    onChange={(event) => onColumnInputChange(column.id, event.target.value)}
+                    onKeyDown={submitFormOnModEnter}
+                    maxLength={500}
+                    rows={3}
+                    placeholder={`Write a ${column.name} card…`}
+                    aria-describedby={[columnError ? errorId : "", isNearLimit ? `${composerId}-count` : ""].filter(Boolean).join(" ") || undefined}
+                    aria-invalid={columnError ? "true" : undefined}
+                    disabled={isPending}
+                  />
+                  <div className="write-card-composer__footer">
+                    <span id={`${composerId}-count`} className="write-card-composer__count" aria-live="polite">
+                      {isNearLimit ? `${inputValue.length}/500` : connected ? "Visible to the room after adding" : "Reconnect to add"}
+                    </span>
+                    <Button
+                      type="submit"
+                      size="sm"
+                      className="write-card-composer__submit"
+                      disabled={isPending || !connected || !inputValue.trim()}
+                      aria-busy={isPending}
+                    >
+                      {isPending ? <Loader2 className="loading-spinner" aria-hidden="true" /> : <Plus aria-hidden="true" />}
+                      Add card
+                    </Button>
+                  </div>
+                  {columnError && (
+                    <div id={errorId} className="status-msg status-msg--error write-card-composer__error" role="alert">
+                      {columnError}
+                    </div>
+                  )}
+                </form>
                 {items.length === 0 ? (
-                  <p className="text-muted column-board__empty">No items in this lane yet. Choose “{column.name}” above to add one.</p>
+                  <p className="text-muted column-board__empty">No cards in this lane yet. Add one directly above.</p>
                 ) : (
                   <ul className="item-list" aria-label={`${column.name} items`}>
                     {items.map((item, index) => renderItem(item, index))}
@@ -613,9 +904,13 @@ export function RoomPage() {
   const [timerMsg, setTimerMsg] = useState<string | null>(null);
   const [timerInputError, setTimerInputError] = useState<string | null>(null);
   const [phaseMsg, setPhaseMsg] = useState<string | null>(null);
+  const [rankingMsg, setRankingMsg] = useState<string | null>(null);
   const [budgetPending, setBudgetPending] = useState(false);
+  const [rankingPending, setRankingPending] = useState(false);
   const [phasePending, setPhasePending] = useState(false);
   const [timerPending, setTimerPending] = useState(false);
+  const [pendingColumnId, setPendingColumnId] = useState<string | null>(null);
+  const [pendingItemId, setPendingItemId] = useState<string | null>(null);
   const phaseStatusRef = useRef<HTMLDivElement>(null);
   const previousRoomUpdateRef = useRef<{ phase: Phase; version: number } | null>(null);
   const initialLoadStartedRef = useRef(false);
@@ -625,18 +920,15 @@ export function RoomPage() {
 
   const roomState = mergeRoomState(localRoomState, wsState);
 
-  const [itemInput, setItemInput] = useState("");
-  const [itemError, setItemError] = useState<string | null>(null);
-  const [selectedColumnId, setSelectedColumnId] = useState<string | null>(null);
-
-  const isNearCharLimit = itemInput.length > 400;
-  const charCountId = "item-char-count";
-  const itemErrorId = "item-error";
+  const [columnInputs, setColumnInputs] = useState<Record<string, string>>({});
+  const [columnErrors, setColumnErrors] = useState<Record<string, string | undefined>>({});
+  const columnInputRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
+  const restoreColumnFocusRef = useRef<string | null>(null);
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
+  const [editingItemText, setEditingItemText] = useState("");
   const sortedRoomColumns = roomState ? getSortedColumns(roomState) : [];
-  const hasConfiguredColumns = sortedRoomColumns.length > 0;
-  const effectiveSelectedColumnId = selectedColumnId && sortedRoomColumns.some((column) => column.id === selectedColumnId)
-    ? selectedColumnId
-    : sortedRoomColumns[0]?.id ?? null;
+  const currentPhaseIndex = roomState ? PHASE_ORDER.indexOf(roomState.phase) : -1;
+  const nextPhase = currentPhaseIndex >= 0 ? PHASE_ORDER[currentPhaseIndex + 1] : undefined;
 
   useEffect(() => {
     const timeout = window.setTimeout(() => setTimerPending(false), 0);
@@ -792,6 +1084,29 @@ export function RoomPage() {
     }
   }
 
+  async function handleSetRankingMethod(rankingMethod: RankingMethod) {
+    if (!roomId || !roomState || rankingPending || roomState.rankingMethod === rankingMethod) return;
+    setRankingMsg(null);
+    clearError();
+    setRankingPending(true);
+    try {
+      const result = await setRankingMethod(roomId, participantId, rankingMethod);
+      if (result.success) {
+        setRankingMsg(rankingMethod === "pairwise" ? "Pairwise ranking selected." : "Score voting selected.");
+        try {
+          const state = await getRoomState(roomId);
+          setLocalRoomState(state);
+        } catch {
+          // WebSocket snapshot will reconcile if the refetch misses.
+        }
+      } else {
+        setRankingMsg(result.error ?? "Failed to update ranking method.");
+      }
+    } finally {
+      setRankingPending(false);
+    }
+  }
+
   async function handleAdvancePhase() {
     if (!roomId || !roomState || phasePending) return;
     setPhaseMsg(null);
@@ -820,8 +1135,8 @@ export function RoomPage() {
     }
   }
 
-  function handleSetTimer() {
-    if (!roomState || timerPending) return;
+  async function handleSetTimer() {
+    if (!roomId || !roomState || timerPending) return;
     setTimerMsg(null);
     setTimerInputError(null);
     const raw = timerMinutesInput.trim();
@@ -839,30 +1154,152 @@ export function RoomPage() {
       return;
     }
     const durationSeconds = minutes * 60;
-    if (!send({ type: "set-timer", durationSeconds })) {
-      setTimerInputError("Reconnecting. Please try again once the room is connected.");
-      return;
-    }
     setTimerPending(true);
-    setTimerMsg("Timer started.");
+    try {
+      const result = await setTimer(roomId, participantId, durationSeconds);
+      if (!result.success) {
+        setTimerInputError(result.error ?? "Failed to start timer.");
+        return;
+      }
+      setTimerMsg("Timer started.");
+      try {
+        const state = await getRoomState(roomId);
+        setLocalRoomState(state);
+      } catch {
+        // WebSocket snapshot will reconcile if refetch misses.
+      }
+    } catch {
+      setTimerInputError("Failed to start timer. Check the room connection and try again.");
+    } finally {
+      setTimerPending(false);
+    }
   }
 
-  function handleAddItem(e: React.FormEvent) {
+  function handleColumnInputChange(columnId: string, value: string) {
+    setColumnInputs((current) => ({ ...current, [columnId]: value }));
+    setColumnErrors((current) => ({ ...current, [columnId]: undefined }));
+  }
+
+  async function handleAddItem(e: React.FormEvent, columnId: string) {
     e.preventDefault();
-    setItemError(null);
-    if (!isValidItemText(itemInput)) {
-      setItemError("Item text cannot be blank.");
+    if (!roomId || pendingColumnId) return;
+    const rawText = columnInputs[columnId] ?? "";
+    setColumnErrors((current) => ({ ...current, [columnId]: undefined }));
+    if (!isValidItemText(rawText)) {
+      setColumnErrors((current) => ({ ...current, [columnId]: "Card text cannot be blank." }));
       return;
     }
-    if (!effectiveSelectedColumnId) {
-      setItemError("Create a column before adding items.");
+    if (!sortedRoomColumns.some((column) => column.id === columnId)) {
+      setColumnErrors((current) => ({ ...current, [columnId]: "Column not found." }));
       return;
     }
-    if (!send({ type: "add-item", text: sanitizeItemText(itemInput), columnId: effectiveSelectedColumnId })) {
-      setItemError("Reconnecting. Please try again once the room is connected.");
-      return;
+    const nextText = sanitizeItemText(rawText);
+    setPendingColumnId(columnId);
+    try {
+      const result = await addItem(roomId, participantId, nextText, columnId);
+      if (!result.success) {
+        setColumnErrors((current) => ({ ...current, [columnId]: result.error ?? "Failed to add card." }));
+        return;
+      }
+      setColumnInputs((current) => ({ ...current, [columnId]: "" }));
+      restoreColumnFocusRef.current = columnId;
+      try {
+        const state = await getRoomState(roomId);
+        setLocalRoomState(state);
+      } catch {
+        if (result.item && roomState) {
+          setLocalRoomState({ ...roomState, items: [...roomState.items, result.item], version: roomState.version + 1 });
+        }
+      }
+    } catch {
+      setColumnErrors((current) => ({ ...current, [columnId]: "Failed to add card. Check the room connection and try again." }));
+    } finally {
+      setPendingColumnId(null);
     }
-    setItemInput("");
+  }
+
+  useEffect(() => {
+    const columnId = restoreColumnFocusRef.current;
+    if (!columnId || pendingColumnId !== null) return;
+    restoreColumnFocusRef.current = null;
+    window.requestAnimationFrame(() => {
+      columnInputRefs.current[columnId]?.focus();
+    });
+  }, [pendingColumnId, roomState?.version]);
+
+  function handleStartEditItem(item: RetroItem) {
+    setColumnErrors((current) => ({ ...current, __global: undefined }));
+    setEditingItemId(item.id);
+    setEditingItemText(item.text);
+  }
+
+  function handleCancelEditItem() {
+    setEditingItemId(null);
+    setEditingItemText("");
+  }
+
+  async function handleSubmitEditItem(e: React.FormEvent, itemId: string) {
+    e.preventDefault();
+    if (!roomId || pendingItemId) return;
+    if (!isValidItemText(editingItemText)) return;
+    setColumnErrors((current) => ({ ...current, __global: undefined }));
+    const nextText = sanitizeItemText(editingItemText);
+    setPendingItemId(itemId);
+    try {
+      const result = await editItem(roomId, participantId, itemId, nextText);
+      if (!result.success) {
+        setColumnErrors((current) => ({ ...current, __global: result.error ?? "Failed to edit card." }));
+        return;
+      }
+      setEditingItemId(null);
+      setEditingItemText("");
+      try {
+        const state = await getRoomState(roomId);
+        setLocalRoomState(state);
+      } catch {
+        if (result.item && roomState) {
+          setLocalRoomState({
+            ...roomState,
+            items: roomState.items.map((item) => item.id === itemId ? result.item! : item),
+            version: roomState.version + 1,
+          });
+        }
+      }
+    } catch {
+      setColumnErrors((current) => ({ ...current, __global: "Failed to edit card. Check the room connection and try again." }));
+    } finally {
+      setPendingItemId(null);
+    }
+  }
+
+  async function handleDeleteItem(itemId: string) {
+    if (!roomId || pendingItemId) return;
+    setColumnErrors((current) => ({ ...current, __global: undefined }));
+    setPendingItemId(itemId);
+    try {
+      const result = await deleteItem(roomId, participantId, itemId);
+      if (!result.success) {
+        setColumnErrors((current) => ({ ...current, __global: result.error ?? "Failed to delete card." }));
+        return;
+      }
+      if (editingItemId === itemId) handleCancelEditItem();
+      try {
+        const state = await getRoomState(roomId);
+        setLocalRoomState(state);
+      } catch {
+        if (roomState) {
+          setLocalRoomState({
+            ...roomState,
+            items: roomState.items.filter((item) => item.id !== itemId),
+            version: roomState.version + 1,
+          });
+        }
+      }
+    } catch {
+      setColumnErrors((current) => ({ ...current, __global: "Failed to delete card. Check the room connection and try again." }));
+    } finally {
+      setPendingItemId(null);
+    }
   }
 
   if (pageState === "loading") {
@@ -940,7 +1377,7 @@ export function RoomPage() {
   if (pageState === "join") {
     return (
       <main className="state-surface" aria-labelledby="join-title">
-        <Card className="state-card join-card">
+        <Card className="state-card join-card join-card--room">
           <CardHeader>
             <div className="join-card__badge">
               <DoorOpen aria-hidden="true" size={16} />
@@ -952,54 +1389,58 @@ export function RoomPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-          <form onSubmit={handleJoin} noValidate className="join-card__form">
-            <div className="input-group">
-              <label className="input-label" htmlFor="displayName">
-                Display Name
-              </label>
-              <Input
-                id="displayName"
-                className={joinError ? "input--error" : undefined}
-                type="text"
-                value={displayName}
-                onChange={(e) => {
-                  setDisplayName(e.target.value);
-                  if (joinError) setJoinError(null);
-                }}
-                maxLength={50}
-                placeholder="Your name"
-                autoComplete="nickname"
-                aria-required="true"
-                aria-describedby={joinError ? "join-error" : undefined}
-                aria-invalid={joinError ? "true" : undefined}
-              />
-            </div>
-            <Button
-              type="submit"
-              className="h-11 w-full"
-              disabled={joinLoading}
-              aria-busy={joinLoading}
-            >
-              {joinLoading ? (
-                <>
-                  <Loader2 className="loading-spinner" aria-hidden="true" />
-                  Joining…
-                </>
-              ) : "Join Room"}
-            </Button>
-            {joinLoading && (
-              <p className="join-card__status" role="status" aria-live="polite">
-                Joining room and establishing a private reconnect token…
+            <form onSubmit={handleJoin} noValidate className="join-card__form">
+              <div className="input-group">
+                <label className="input-label" htmlFor="displayName">
+                  Display name
+                </label>
+                <Input
+                  id="displayName"
+                  className={joinError ? "input--error" : undefined}
+                  type="text"
+                  value={displayName}
+                  onChange={(e) => {
+                    setDisplayName(e.target.value);
+                    if (joinError) setJoinError(null);
+                  }}
+                  onKeyDown={submitFormOnModEnter}
+                  maxLength={50}
+                  placeholder="Alex"
+                  autoComplete="nickname"
+                  aria-required="true"
+                  aria-describedby={joinError ? "join-error" : undefined}
+                  aria-invalid={joinError ? "true" : undefined}
+                />
+              </div>
+              <Button
+                type="submit"
+                className="join-card__submit"
+                disabled={joinLoading}
+                aria-busy={joinLoading}
+              >
+                {joinLoading ? (
+                  <>
+                    <Loader2 className="loading-spinner" aria-hidden="true" />
+                    Joining…
+                  </>
+                ) : "Join room"}
+              </Button>
+              <p className="join-card__privacy">
+                Your reconnect token stays in this browser. The invite link does not include participant credentials.
               </p>
-            )}
-            {joinError && (
-              <Alert id="join-error" variant="destructive">
-                <AlertTriangle aria-hidden="true" />
-                <AlertTitle>Could not join</AlertTitle>
-                <AlertDescription>{joinError}</AlertDescription>
-              </Alert>
-            )}
-          </form>
+              {joinLoading && (
+                <p className="join-card__status" role="status" aria-live="polite">
+                  Joining room and establishing a private reconnect token…
+                </p>
+              )}
+              {joinError && (
+                <Alert id="join-error" variant="destructive">
+                  <AlertTriangle aria-hidden="true" />
+                  <AlertTitle>Could not join</AlertTitle>
+                  <AlertDescription>{joinError}</AlertDescription>
+                </Alert>
+              )}
+            </form>
           </CardContent>
         </Card>
       </main>
@@ -1014,7 +1455,11 @@ export function RoomPage() {
       {/* Room Header */}
       <header className="room-header" role="banner">
         <div className="room-header__left">
-          <h1 className="room-header__title">Retro Board</h1>
+          <div className="room-header__brand" aria-hidden="true">RB</div>
+          <div>
+            <h1 className="room-header__title">Retro Board</h1>
+            <p className="room-header__subtitle">Timed team retrospective</p>
+          </div>
           <ConnectionStatus connected={connected} />
           {!connected && (
             <Badge variant="secondary" role="status" aria-live="polite" className="room-header__offline">
@@ -1032,16 +1477,26 @@ export function RoomPage() {
         </div>
       </header>
 
+      {roomState && (
+        <PhaseProgress phase={roomState.phase} startedAt={roomState.startedAt} />
+      )}
+
       {/* Phase Status Bar */}
       <Card ref={phaseStatusRef} className="phase-status" role="region" aria-label="Room status" tabIndex={-1}>
-        <span className="phase-status__label">Phase: </span>
-        <Badge
-          className="phase-status__value badge--phase"
-          data-phase={roomState?.phase?.toUpperCase() ?? "UNKNOWN"}
-        >
-          {roomState?.phase?.toUpperCase() ?? "UNKNOWN"}
-        </Badge>
-        <TimerDisplay timer={roomState?.timer ?? { startedAt: null, durationSeconds: null, expired: false }} />
+        <div className="phase-status__metric">
+          <span className="phase-status__label">Current phase</span>
+          <Badge className="phase-status__value badge--phase" data-phase={roomState?.phase ?? "unknown"}>
+            {roomState ? PHASE_LABELS[roomState.phase] : "Unknown"}
+          </Badge>
+        </div>
+        <div className="phase-status__metric">
+          <span className="phase-status__label">Timer</span>
+          <TimerDisplay timer={roomState?.timer ?? { startedAt: null, durationSeconds: null, expired: false }} />
+        </div>
+        <div className="phase-status__metric">
+          <span className="phase-status__label">Board</span>
+          <span className="phase-status__meta">{sortedRoomColumns.length} columns · {roomState?.items.length ?? 0} items</span>
+        </div>
       </Card>
 
       {/* Participants */}
@@ -1049,7 +1504,6 @@ export function RoomPage() {
         className="participants-bar"
         role="region"
         aria-label="Participants"
-        style={{ marginBottom: "var(--space-4)" }}
       >
         <h2 className="section-title">
           <Users aria-hidden="true" size={14} />
@@ -1062,15 +1516,18 @@ export function RoomPage() {
       {isFacilitator && (
         <Card className="facilitator-panel" role="region" aria-label="Facilitator controls">
           <CardHeader className="px-0">
-            <CardTitle className="facilitator-panel__title">
-              <ShieldCheck aria-hidden="true" size={14} />
-              Facilitator Controls
-            </CardTitle>
-            <CardDescription>
-              Server-authoritative controls for phase progression, timing, vote budget, and board columns.
-            </CardDescription>
+            <div className="facilitator-panel__heading">
+              <CardTitle className="facilitator-panel__title">
+                <ShieldCheck aria-hidden="true" size={14} />
+                Facilitator controls
+              </CardTitle>
+              <CardDescription>
+                Run the retro without exposing participant credentials.
+              </CardDescription>
+            </div>
           </CardHeader>
           <CardContent className="facilitator-panel__controls px-0">
+            {roomState?.rankingMethod !== "pairwise" && roomState?.phase === "setup" && (
             <div className="facilitator-panel__row">
               <label className="input-label" htmlFor="voteBudget">
                 <Vote aria-hidden="true" size={14} />
@@ -1078,7 +1535,6 @@ export function RoomPage() {
               </label>
               <Input
                 id="voteBudget"
-                className={`input${budgetMsg && budgetMsg.includes("must be") ? " input--error" : ""}`}
                 type="text"
                 inputMode="numeric"
                 pattern="[0-9]*"
@@ -1088,7 +1544,13 @@ export function RoomPage() {
                   setVoteBudgetDirty(true);
                   if (budgetMsg) setBudgetMsg(null);
                 }}
-                style={{ width: "5rem" }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                    event.preventDefault();
+                    void handleSetBudget();
+                  }
+                }}
+                className={`input facilitator-panel__number-input${budgetMsg && budgetMsg.includes("must be") ? " input--error" : ""}`}
                 aria-describedby={budgetMsg && budgetMsg.includes("must be") ? "budget-error" : undefined}
                 aria-invalid={budgetMsg && budgetMsg.includes("must be") ? "true" : undefined}
               />
@@ -1103,27 +1565,28 @@ export function RoomPage() {
                 {budgetPending ? "Saving…" : "Set"}
               </Button>
               {budgetMsg && budgetMsg.includes("must be") ? (
-                <span id="budget-error" className="status-msg status-msg--error" style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }} role="alert">
+                <span id="budget-error" className="status-msg status-msg--error facilitator-panel__message" role="alert">
                   {budgetMsg}
                 </span>
               ) : budgetMsg ? (
-                <span className="status-msg status-msg--info" style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }} role="status">
+                <span className="status-msg status-msg--info facilitator-panel__message" role="status">
                   {budgetMsg}
                 </span>
               ) : null}
             </div>
+            )}
             <div className="facilitator-panel__row">
               <Button
                 onClick={handleAdvancePhase}
-                disabled={roomState?.phase === "review" || phasePending}
+                disabled={roomState?.phase === "finalize" || phasePending}
                 aria-busy={phasePending}
-                aria-label="Advance to next phase"
+                aria-label={nextPhase ? `Advance to ${PHASE_LABELS[nextPhase]} phase` : "Advance phase"}
               >
                 {phasePending ? <Loader2 className="loading-spinner" aria-hidden="true" /> : <ArrowRight aria-hidden="true" />}
-                {phasePending ? "Advancing…" : "Advance to Next Phase"}
+                {phasePending ? "Advancing…" : nextPhase ? `Advance to ${PHASE_LABELS[nextPhase]}` : "Complete"}
               </Button>
               {phaseMsg && (
-                <span className="status-msg status-msg--info" style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }} role="status">
+                <span className="status-msg status-msg--info facilitator-panel__message" role="status">
                   {phaseMsg}
                 </span>
               )}
@@ -1135,7 +1598,6 @@ export function RoomPage() {
               </label>
               <Input
                 id="timerMinutes"
-                className={`input${timerInputError ? " input--error" : ""}`}
                 type="number"
                 min={1}
                 max={60}
@@ -1144,7 +1606,13 @@ export function RoomPage() {
                   setTimerMinutesInput(e.target.value);
                   if (timerInputError) setTimerInputError(null);
                 }}
-                style={{ width: "5rem" }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                    event.preventDefault();
+                    void handleSetTimer();
+                  }
+                }}
+                className={`input facilitator-panel__number-input${timerInputError ? " input--error" : ""}`}
                 aria-describedby={timerInputError ? "timer-error" : undefined}
                 aria-invalid={timerInputError ? "true" : undefined}
               />
@@ -1159,24 +1627,16 @@ export function RoomPage() {
                 {timerPending ? "Starting…" : "Start Timer"}
               </Button>
               {timerInputError && (
-                <span id="timer-error" className="status-msg status-msg--error" style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }} role="alert">
+                <span id="timer-error" className="status-msg status-msg--error facilitator-panel__message" role="alert">
                   {timerInputError}
                 </span>
               )}
               {timerMsg && !timerInputError && (
-                <span className="status-msg status-msg--info" style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }} role="status">
+                <span className="status-msg status-msg--info facilitator-panel__message" role="status">
                   {timerMsg}
                 </span>
               )}
             </div>
-            {roomState && (
-              <ColumnConfiguration
-                roomState={roomState}
-                send={send}
-                serverError={lastError}
-                clearServerError={clearError}
-              />
-            )}
           </CardContent>
         </Card>
       )}
@@ -1184,101 +1644,42 @@ export function RoomPage() {
       {/* Board Area */}
       <Card className="board-area glass-panel">
         <div className="board-header">
-          <h2 className="section-title">
-            <Columns3 aria-hidden="true" size={14} />
-            Board
-          </h2>
+          <div>
+            <h2 className="board-title">
+              <Columns3 aria-hidden="true" size={18} />
+              Board
+            </h2>
+            <p className="board-subtitle">Capture, sort, vote, and review feedback in one shared room.</p>
+          </div>
+          {roomState?.phase === "setup" && (
+            <span className="phase-hint" aria-hidden="true">Configure once, then lock</span>
+          )}
           {roomState?.phase === "write" && (
-            <span className="phase-hint" aria-hidden="true">Add your retro items</span>
+            <span className="phase-hint" aria-hidden="true">Write privately, discuss together</span>
           )}
         </div>
 
-        {/* Write Phase Composer */}
-        {roomState?.phase === "write" && (
-          <Card className="write-composer">
-            <form
-              onSubmit={handleAddItem}
-              className="write-composer__form"
-              aria-label="Add retro item"
-            >
-              <div className="write-composer__input-row">
-                <label className="sr-only" htmlFor="itemColumn">Column</label>
-                <select
-                  id="itemColumn"
-                  className="input write-composer__column-select"
-                  value={effectiveSelectedColumnId ?? ""}
-                  onChange={(event) => setSelectedColumnId(event.target.value)}
-                  disabled={!connected || !hasConfiguredColumns}
-                  aria-label="Column for new item"
-                >
-                  {!hasConfiguredColumns && (
-                    <option value="">No columns yet</option>
-                  )}
-                  {sortedRoomColumns.map((column) => (
-                    <option key={column.id} value={column.id}>{column.name}</option>
-                  ))}
-                </select>
-                <div className="write-composer__input-wrapper">
-                  <Input
-                    type="text"
-                    id="itemText"
-                    className={`input write-composer__input${itemError ? " input--error" : ""}`}
-                    value={itemInput}
-                    onChange={(e) => {
-                      setItemInput(e.target.value);
-                      if (itemError) setItemError(null);
-                    }}
-                    maxLength={500}
-                    placeholder="Add a retro item…"
-                    aria-required="true"
-                    aria-describedby={[itemError ? itemErrorId : "", isNearCharLimit ? charCountId : ""].filter(Boolean).join(" ") || undefined}
-                    aria-invalid={itemError ? "true" : undefined}
-                    disabled={!connected || !hasConfiguredColumns}
-                  />
-                  {isNearCharLimit && (
-                    <span
-                      id={charCountId}
-                      className="write-composer__char-count"
-                      aria-live="polite"
-                      aria-atomic="true"
-                    >
-                      {itemInput.length}/500
-                    </span>
-                  )}
-                </div>
-                <Button
-                  type="submit"
-                  className="write-composer__submit"
-                  disabled={!connected || !hasConfiguredColumns || !itemInput.trim()}
-                  aria-label="Add item"
-                >
-                  <Send aria-hidden="true" />
-                  Add
-                </Button>
-              </div>
-              {itemError && (
-                <div id={itemErrorId} className="status-msg status-msg--error write-composer__error" role="alert">
-                  {itemError}
-                </div>
-              )}
-              {!connected && (
-                <div className="status-msg status-msg--muted write-composer__offline" role="status" aria-live="polite">
-                  <span aria-hidden="true">⏳</span> Reconnect to add items. Existing room content remains readable.
-                </div>
-              )}
-              {connected && !hasConfiguredColumns && (
-                <div className="status-msg status-msg--muted write-composer__offline" role="status" aria-live="polite">
-                  <span aria-hidden="true">🧱</span> No columns yet. Facilitators can use Configure columns to create lanes.
-                </div>
-              )}
-            </form>
-          </Card>
+        {roomState?.phase === "write" && columnErrors.__global && (
+          <div className="status-msg status-msg--error write-global-error" role="alert">
+            {columnErrors.__global}
+          </div>
         )}
 
-        {roomState?.phase === "organise" ? (
+        {roomState?.phase === "setup" ? (
+          <SetupBoard
+            roomState={roomState}
+            send={send}
+            serverError={lastError}
+            clearServerError={clearError}
+            onRankingMethodChange={handleSetRankingMethod}
+            rankingPending={rankingPending}
+            rankingMsg={rankingMsg}
+          />
+        ) : roomState?.phase === "organise" ? (
           <OrganiseBoard
             roomState={roomState}
             isFacilitator={isFacilitator}
+            participantId={participantId}
             send={send}
             serverError={lastError}
             clearServerError={clearError}
@@ -1292,9 +1693,36 @@ export function RoomPage() {
             clearServerError={clearError}
           />
         ) : roomState?.phase === "review" ? (
-          <ReviewBoard roomState={roomState} />
+          <ReviewBoard
+            roomState={roomState}
+            participantId={participantId}
+            send={send}
+            serverError={lastError}
+            clearServerError={clearError}
+          />
+        ) : roomState?.phase === "finalize" ? (
+          <FinalBoard roomState={roomState} />
         ) : roomState?.phase === "write" ? (
-          <WriteColumnBoard roomState={roomState} />
+          <WriteColumnBoard
+            roomState={roomState}
+            participantId={participantId}
+            connected={connected}
+            columnInputs={columnInputs}
+            columnErrors={columnErrors}
+            pendingColumnId={pendingColumnId}
+            editingItemId={editingItemId}
+            editingItemText={editingItemText}
+            pendingItemId={pendingItemId}
+            onColumnInputChange={handleColumnInputChange}
+            onAddItem={handleAddItem}
+            onStartEdit={handleStartEditItem}
+            onEditTextChange={setEditingItemText}
+            onSubmitEdit={handleSubmitEditItem}
+            onCancelEdit={handleCancelEditItem}
+            onDeleteItem={handleDeleteItem}
+            send={send}
+            columnInputRefs={columnInputRefs}
+          />
         ) : null}
       </Card>
 

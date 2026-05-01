@@ -63,7 +63,7 @@ describe("GET /api/rooms/:roomId", () => {
     expect(getRes.status).toBe(200);
     const state = await getRes.json() as { roomId: string; phase: string; version: number };
     expect(state.roomId).toBe(roomId);
-    expect(state.phase).toBe("write");
+    expect(state.phase).toBe("setup");
     expect(typeof state.version).toBe("number");
   });
 

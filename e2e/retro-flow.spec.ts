@@ -1,1823 +1,288 @@
 import { test, expect, type Page } from "@playwright/test";
 
-async function dragItemToDropZone(page: Page, itemText: string, groupId: string | null, index: number) {
-  const item = page.locator("[data-drag-item-id]", { hasText: itemText }).first();
-  await expect(item).toBeVisible();
-  const handle = item.getByRole("button", { name: new RegExp(`drag ${itemText}`, "i") });
-  const handleBox = await handle.boundingBox();
-  expect(handleBox).not.toBeNull();
-  await handle.dispatchEvent("pointerdown", {
-    pointerId: 3,
-    pointerType: "mouse",
-    button: 0,
-    clientX: handleBox!.x + handleBox!.width / 2,
-    clientY: handleBox!.y + handleBox!.height / 2,
-  });
-  const groupKey = groupId ?? "__ungrouped__";
-  const dropZone = page.locator(`[data-drop-zone="true"][data-group-id="${groupKey}"][data-index="${index}"]`).first();
-  await expect(dropZone).toBeVisible();
-  const dropBox = await dropZone.boundingBox();
-  expect(dropBox).not.toBeNull();
-  const x = dropBox!.x + dropBox!.width / 2;
-  const y = dropBox!.y + dropBox!.height / 2;
-  await dropZone.dispatchEvent("pointermove", { pointerId: 3, pointerType: "mouse", button: 0, clientX: x, clientY: y });
-  await expect(dropZone).toHaveAttribute("data-active", "true");
-  await dropZone.dispatchEvent("pointerup", { pointerId: 3, pointerType: "mouse", button: 0, clientX: x, clientY: y });
-}
+const createRoomButton = /start a retro/i;
 
-async function dragItemIdToDropZone(page: Page, itemId: string, groupId: string | null, index: number) {
-  const item = page.locator(`[data-drag-item-id="${itemId}"]`).first();
-  await expect(item).toBeVisible();
-  const handle = item.getByRole("button", { name: /drag/i });
-  const handleBox = await handle.boundingBox();
-  expect(handleBox).not.toBeNull();
-  await handle.dispatchEvent("pointerdown", {
-    pointerId: 11,
-    pointerType: "mouse",
-    button: 0,
-    clientX: handleBox!.x + handleBox!.width / 2,
-    clientY: handleBox!.y + handleBox!.height / 2,
-  });
-  const groupKey = groupId ?? "__ungrouped__";
-  const dropZone = page.locator(`[data-drop-zone="true"][data-group-id="${groupKey}"][data-index="${index}"]`).first();
-  await expect(dropZone).toBeVisible();
-  const dropBox = await dropZone.boundingBox();
-  expect(dropBox).not.toBeNull();
-  const x = dropBox!.x + dropBox!.width / 2;
-  const y = dropBox!.y + dropBox!.height / 2;
-  await dropZone.dispatchEvent("pointermove", { pointerId: 11, pointerType: "mouse", button: 0, clientX: x, clientY: y });
-  await expect(dropZone).toHaveAttribute("data-active", "true");
-  await dropZone.dispatchEvent("pointerup", { pointerId: 11, pointerType: "mouse", button: 0, clientX: x, clientY: y });
+async function expectPhase(page: Page, phase: string) {
+  await expect(page.locator(".phase-status__value")).toHaveText(new RegExp(`^${phase}$`, "i"), { timeout: 5_000 });
 }
 
 async function createJoinedRoom(page: Page, displayName = "Alice") {
   await page.goto("/");
-  await page.getByRole("button", { name: /create room/i }).click();
+  await page.getByRole("button", { name: createRoomButton }).click();
   await page.waitForURL(/\/room\//);
   await page.getByLabel(/display name/i).fill(displayName);
-  await page.getByRole("button", { name: /join/i }).click();
-  await expect(page.getByText(/Phase: WRITE/i)).toBeVisible();
+  await page.getByRole("button", { name: /^join room$/i }).click();
+  await expect(page.getByText(/Set up the board/i)).toBeVisible({ timeout: 5_000 });
+  await expectPhase(page, "Setup");
   return new URL(page.url()).pathname.split("/").pop()!;
 }
 
-async function createWriteColumn(page: Page, name: string) {
-  const toggle = page.getByRole("button", { name: /configure columns/i });
-  if ((await toggle.getAttribute("aria-expanded")) !== "true") {
-    await toggle.click();
-  }
-  await page.locator(".column-config__form").getByLabel(/new column name/i).fill(name);
-  await page.getByRole("button", { name: /add column/i }).click();
-  await expect(page.getByRole("heading", { name })).toBeVisible({ timeout: 5000 });
+async function advanceTo(page: Page, phase: "Write" | "Organise" | "Vote" | "Review" | "Finalize") {
+  await page.getByRole("button", { name: new RegExp(`advance to ${phase}`, "i") }).click();
+  await expectPhase(page, phase);
 }
 
-function makeInitialRoomState(roomId: string) {
-  return {
-    schemaVersion: 2,
-    roomId,
-    phase: "write",
-    participants: [],
-    columns: [],
-    items: [],
-    groups: [],
-    votes: [],
-    timer: { startedAt: null, durationSeconds: null, expired: false },
-    voteBudget: 5,
-    version: 1,
-  };
+async function addItem(page: Page, text: string, column = "Mad") {
+  const composer = page.getByRole("form", { name: new RegExp(`add card to ${column}`, "i") });
+  const input = composer.getByLabel(new RegExp(`add a card to ${column}`, "i"));
+  await input.fill(text);
+  await input.press("ControlOrMeta+Enter");
+  await expect(page.getByLabel(new RegExp(`${column} items`, "i")).getByText(text)).toBeVisible({ timeout: 5_000 });
 }
 
-async function advanceToPhase(page: Page, phase: "organise" | "vote" | "review") {
-  const order = ["write", "organise", "vote", "review"];
-  const targetIndex = order.indexOf(phase);
-  for (let index = 0; index < targetIndex; index += 1) {
-    await page.getByRole("button", { name: /advance to next phase/i }).click();
-    await expect(page.getByText(new RegExp(`Phase: ${order[index + 1].toUpperCase()}`, "i"))).toBeVisible({ timeout: 5000 });
-  }
+async function expectFocused(locator: ReturnType<Page["locator"]>) {
+  await expect.poll(async () => locator.evaluate((element) => element === document.activeElement)).toBe(true);
 }
 
-async function expectNoHorizontalOverflow(page: Page) {
-  const metrics = await page.evaluate(() => ({
-    scrollWidth: document.documentElement.scrollWidth,
-    clientWidth: document.documentElement.clientWidth,
-    bodyScrollWidth: document.body.scrollWidth,
-  }));
-  expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth + 1);
-  expect(metrics.bodyScrollWidth).toBeLessThanOrEqual(metrics.clientWidth + 1);
+async function chooseVisiblePairwiseOption(page: Page) {
+  await page.locator(".pairwise-option").first().click();
 }
 
-async function expectNoCredentialLeaks(page: Page, consoleErrors: string[] = []) {
-  const visibleText = await page.locator("body").innerText();
-  expect(visibleText).not.toMatch(/token=|pid=|auth-[a-f0-9]{64}/i);
-  expect(page.url()).not.toMatch(/[?&](token|pid)=|auth-[a-f0-9]{64}/i);
-  const resourceUrls = await page.evaluate(() => performance.getEntriesByType("resource").map((entry) => entry.name).join("\n"));
-  expect(resourceUrls).not.toMatch(/[?&](token|pid)=|auth-[a-f0-9]{64}/i);
-  expect(consoleErrors.join("\n")).not.toMatch(/[?&](token|pid)=|auth-[a-f0-9]{64}/i);
-}
-
-async function touchDragItemToDropZone(page: Page, itemText: string, groupId: string | null, index: number) {
-  const item = page.locator("[data-drag-item-id]", { hasText: itemText }).first();
-  await expect(item).toBeVisible();
-  const groupKey = groupId ?? "__ungrouped__";
-  const handle = item.getByRole("button", { name: new RegExp(`drag ${itemText}`, "i") });
-  await handle.dispatchEvent("pointerdown", { pointerId: 7, pointerType: "touch", button: 0, clientX: 20, clientY: 20 });
-  const dropZone = page.locator(`[data-drop-zone="true"][data-group-id="${groupKey}"][data-index="${index}"]`).first();
-  await expect(dropZone).toBeVisible();
-  const dropBox = await dropZone.boundingBox();
-  expect(dropBox).not.toBeNull();
-  const x = dropBox!.x + dropBox!.width / 2;
-  const y = dropBox!.y + dropBox!.height / 2;
-  await dropZone.dispatchEvent("pointermove", { pointerId: 7, pointerType: "touch", button: 0, clientX: x, clientY: y });
-  await expect(dropZone).toHaveAttribute("data-active", "true");
-  await dropZone.dispatchEvent("pointerup", { pointerId: 7, pointerType: "touch", button: 0, clientX: x, clientY: y });
-}
-
-test.describe("Retro Board E2E", () => {
-  test.describe("Foundation", () => {
-    test("root page shows create room control", async ({ page }) => {
-      await page.goto("/");
-      await expect(page.locator("h1")).toContainText("Retro Board");
-      await expect(page.getByText(/clean, timed retrospectives/i)).toBeVisible();
-      await expect(page.getByRole("button", { name: /^create room$/i })).toHaveCount(1);
-      await expect(page.getByRole("button", { name: /^create room$/i })).toBeVisible();
-    });
-
-    test("creating a room exposes pending state and blocks duplicate submissions", async ({ page }) => {
-      let createRequests = 0;
-      await page.route("**/api/rooms**", async (route) => {
-        if (route.request().method() === "POST" && /\/api\/rooms$/.test(new URL(route.request().url()).pathname)) {
-          createRequests += 1;
-          await new Promise((resolve) => setTimeout(resolve, 1500));
-          await route.fulfill({ json: { roomId: `pending-${Date.now()}` } });
-          return;
-        }
-        await route.continue();
-      });
-
-      await page.goto("/");
-      const create = page.getByRole("button", { name: /^create room$/i });
-      const createHandle = await create.elementHandle();
-      expect(createHandle).not.toBeNull();
-      await createHandle!.evaluate((button) => {
-        window.setTimeout(() => button.click(), 0);
-        window.setTimeout(() => button.click(), 0);
-      });
-      const pendingCreate = page.getByRole("button", { name: /creating room/i });
-      await expect(pendingCreate).toBeDisabled();
-      await expect(pendingCreate).toHaveAttribute("aria-busy", "true");
-      await expect(page.getByRole("status")).toContainText(/creating a private room/i);
-      await page.waitForURL(/\/room\//);
-      expect(createRequests).toBe(1);
-    });
-
-    test("creating a room navigates to a room URL", async ({ page }) => {
-      await page.goto("/");
-      await page.getByRole("button", { name: /create room/i }).click();
-      await page.waitForURL(/\/room\//);
-      expect(page.url()).toMatch(/\/room\//);
-    });
-
-    test("direct room URL shows join flow", async ({ browser }) => {
-      // Create a room first
-      const page = await browser.newPage();
-      await page.goto("/");
-      await page.getByRole("button", { name: /create room/i }).click();
-      await page.waitForURL(/\/room\//);
-      const roomUrl = page.url();
-
-      // Open in a new context
-      const page2 = await browser.newPage();
-      await page2.goto(roomUrl);
-
-      // Should show join form (display name input)
-      await expect(page2.getByLabel(/display name/i)).toBeVisible();
-      await expect(page2.getByRole("button", { name: /join/i })).toBeVisible();
-      await expect(page2.getByText(/your name is stored only in this browser/i)).toBeVisible();
-      await page2.close();
-      await page.close();
-    });
-
-    test("blank display name is rejected", async ({ page }) => {
-      await page.goto("/");
-      await page.getByRole("button", { name: /create room/i }).click();
-      await page.waitForURL(/\/room\//);
-
-      await page.getByLabel(/display name/i).fill("   ");
-      await page.getByRole("button", { name: /join/i }).click();
-
-      // Should show validation error
-      await expect(page.getByText(/please enter a display name/i)).toBeVisible();
-    });
-
-    test("join trims names, exposes pending state, and blocks duplicate submissions", async ({ page }) => {
-      await page.goto("/");
-      await page.getByRole("button", { name: /create room/i }).click();
-      await page.waitForURL(/\/room\//);
-      const roomId = new URL(page.url()).pathname.split("/").pop()!;
-      let joinRequests = 0;
-      await page.route(`**/api/rooms/${roomId}/join`, async (route) => {
-        joinRequests += 1;
-        await new Promise((resolve) => setTimeout(resolve, 300));
-        await route.continue();
-      });
-
-      await page.getByLabel(/display name/i).fill("  Alice  ");
-      const join = page.locator("button[type='submit']");
-      await join.click();
-      await join.click({ force: true });
-      await expect(join).toBeDisabled();
-      await expect(join).toHaveAttribute("aria-busy", "true");
-      await expect(page.getByRole("status")).toContainText(/joining room/i);
-      await expect(page.getByText(/Phase: WRITE/i)).toBeVisible();
-      await expect(page.locator(".participant-chip__name")).toHaveText("Alice");
-      expect(joinRequests).toBe(1);
-    });
-
-    test("joining with a valid name enters the room", async ({ page }) => {
-      await page.goto("/");
-      await page.getByRole("button", { name: /create room/i }).click();
-      await page.waitForURL(/\/room\//);
-
-      await page.getByLabel(/display name/i).fill("Alice");
-      await page.getByRole("button", { name: /join/i }).click();
-
-      // Should show the board
-      await expect(page.getByText(/Phase: WRITE/i)).toBeVisible();
-      await expect(page.getByText(/Alice/i)).toBeVisible();
-      await expect(page.getByText(/⭐ Facilitator/)).toBeVisible();
-    });
-
-    test("stored identity reconnects without showing the join form", async ({ page }) => {
-      await page.goto("/");
-      await page.getByRole("button", { name: /create room/i }).click();
-      await page.waitForURL(/\/room\//);
-      const roomUrl = page.url();
-      await page.getByLabel(/display name/i).fill("Alice");
-      await page.getByRole("button", { name: /join/i }).click();
-      await expect(page.getByText(/Phase: WRITE/i)).toBeVisible();
-
-      await page.goto(roomUrl);
-      await expect(page.getByText(/Phase: WRITE/i)).toBeVisible();
-      await expect(page.getByLabel(/display name/i)).toHaveCount(0);
-    });
-
-    test("invite copy failure exposes only safe manual room URL", async ({ page }) => {
-      await page.addInitScript(() => {
-        Object.defineProperty(navigator, "clipboard", {
-          configurable: true,
-          value: { writeText: () => Promise.reject(new Error("denied")) },
-        });
-      });
-      await createJoinedRoom(page);
-      await page.getByRole("button", { name: /copy room invite link/i }).click();
-      const manualUrl = page.getByLabel(/room invite url/i);
-      await expect(manualUrl).toBeVisible();
-      await expect(manualUrl).toHaveValue(/\/room\/[A-Z0-9_-]+$/i);
-      const value = await manualUrl.inputValue();
-      expect(value).not.toMatch(/[?&](token|pid)=|auth-[a-f0-9]{64}/i);
-      await expect(page.locator("body")).not.toContainText(/token=|pid=|auth-[a-f0-9]{64}/i);
-    });
-
-    test("unknown room URL shows a polished recoverable not-found state", async ({ page }) => {
-      await page.goto(`/room/missing-${Date.now()}`);
-      await expect(page.getByRole("heading", { name: /room not found/i })).toBeVisible();
-      await expect(page.getByText(/check the invite link/i)).toBeVisible();
-      await expect(page.getByRole("link", { name: /return home/i })).toHaveAttribute("href", "/");
-    });
-
-    test("initial room network failure shows retryable error and recovers without not-found", async ({ page }) => {
-      const roomId = `retry-${Date.now()}`;
-      let attempts = 0;
-      await page.route(`**/api/rooms/${roomId}`, async (route) => {
-        attempts += 1;
-        if (attempts === 1) {
-          await route.abort("internetdisconnected");
-          return;
-        }
-        await route.fulfill({ json: makeInitialRoomState(roomId) });
-      });
-
-      await page.goto(`/room/${roomId}`);
-      await expect(page.getByRole("heading", { name: /could not load room|offline/i })).toBeVisible();
-      await expect(page.getByRole("heading", { name: /room not found/i })).toHaveCount(0);
-      await expect(page.getByRole("button", { name: /retry loading room/i })).toBeVisible();
-
-      await page.getByRole("button", { name: /retry loading room/i }).click();
-      await expect(page.getByRole("heading", { name: /join room/i })).toBeVisible();
-      await expect(page.getByLabel(/display name/i)).toBeVisible();
-      expect(attempts).toBe(2);
-    });
-
-    test("initial room server failure shows generic recoverable error instead of not-found", async ({ page }) => {
-      const roomId = `server-error-${Date.now()}`;
-      await page.route(`**/api/rooms/${roomId}`, async (route) => {
-        await route.fulfill({
-          status: 500,
-          contentType: "application/json",
-          body: JSON.stringify({ error: "Internal server error" }),
-        });
-      });
-
-      await page.goto(`/room/${roomId}`);
-      await expect(page.getByRole("heading", { name: /room temporarily unavailable/i })).toBeVisible();
-      await expect(page.getByText(/retry in a moment/i)).toBeVisible();
-      await expect(page.getByRole("heading", { name: /room not found/i })).toHaveCount(0);
-      await expect(page.getByRole("link", { name: /return home/i })).toHaveAttribute("href", "/");
-    });
-
-    test("phase mutation exposes pending state and blocks duplicate submissions", async ({ page }) => {
-      await page.goto("/");
-      await page.getByRole("button", { name: /create room/i }).click();
-      await page.waitForURL(/\/room\//);
-      const roomId = new URL(page.url()).pathname.split("/").pop()!;
-
-      await page.getByLabel(/display name/i).fill("Alice");
-      await page.getByRole("button", { name: /join/i }).click();
-      await expect(page.getByText(/Phase: WRITE/i)).toBeVisible();
-
-      let phaseRequests = 0;
-      await page.route(`**/api/rooms/${roomId}/phase`, async (route) => {
-        phaseRequests += 1;
-        await new Promise((resolve) => setTimeout(resolve, 300));
-        await route.continue();
-      });
-
-      const advance = page.getByRole("button", { name: /advance to next phase/i });
-      await advance.click();
-      await advance.click({ force: true });
-      await expect(advance).toBeDisabled();
-      await expect(advance).toHaveAttribute("aria-busy", "true");
-      await expect(page.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
-      expect(phaseRequests).toBe(1);
-    });
-
-    test("vote budget input shows typed value and submits the visible budget", async ({ page }) => {
-      await createJoinedRoom(page);
-      const budgetInput = page.getByLabel(/vote budget/i);
-      await expect(budgetInput).toHaveValue("5");
-
-      await budgetInput.fill("8");
-      await expect(budgetInput).toHaveValue("8");
-      await page.getByRole("button", { name: /^set$/i }).click();
-      await expect(page.getByRole("status").filter({ hasText: /vote budget updated/i })).toBeVisible({ timeout: 5000 });
-      await expect(budgetInput).toHaveValue("8");
-
-      const roomId = new URL(page.url()).pathname.split("/").pop()!;
-      const state = await page.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomId) as { voteBudget: number };
-      expect(state.voteBudget).toBe(8);
-
-      await page.reload();
-      await expect(page.getByText(/Phase: WRITE/i)).toBeVisible({ timeout: 5000 });
-      await expect(page.getByLabel(/vote budget/i)).toHaveValue("8");
-    });
-
-    test("vote budget rejects blank, non-numeric, non-integer, and out-of-range visible values without submitting", async ({ page }) => {
-      await createJoinedRoom(page);
-      const budgetInput = page.getByLabel(/vote budget/i);
-      const setBudget = page.getByRole("button", { name: /^set$/i });
-
-      for (const invalidValue of ["", "abc", "2.5", "0", "101"] as const) {
-        await budgetInput.fill(invalidValue);
-        await expect(budgetInput).toHaveValue(invalidValue);
-        await setBudget.click();
-        await expect(page.getByRole("alert").filter({ hasText: /vote budget must be an integer between 1 and 100/i })).toBeVisible();
-      }
-
-      const roomId = new URL(page.url()).pathname.split("/").pop()!;
-      const state = await page.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomId) as { voteBudget: number };
-      expect(state.voteBudget).toBe(5);
-    });
-
-    test.skip("vote send failures show feedback without applying pending optimistic state", async ({ page }) => {
-      await createJoinedRoom(page);
-      await page.getByPlaceholder(/add a retro item/i).fill("Vote failure item");
-      await page.getByRole("button", { name: /add item/i }).click();
-      await expect(page.getByText("Vote failure item")).toBeVisible({ timeout: 5000 });
-      await advanceToPhase(page, "vote");
-
-      await page.context().setOffline(true);
-      await expect(page.getByLabel("Disconnected", { exact: true })).toBeVisible({ timeout: 5000 });
-
-      await expect(page.getByText(/0 used \/ 5 total/i)).toBeVisible();
-      await expect(page.getByText(/\(5 remaining\)/i)).toBeVisible();
-      await page.locator("li", { hasText: "Vote failure item" }).getByRole("button", { name: /add a vote/i }).click();
-
-      await expect(page.getByRole("alert").filter({ hasText: /vote not sent/i })).toBeVisible();
-      await expect(page.getByText(/0 used \/ 5 total/i)).toBeVisible();
-      await expect(page.getByText(/\(5 remaining\)/i)).toBeVisible();
-    });
-
-    test.skip("organise send failures show recoverable feedback without applying local layout changes", async ({ page }) => {
-      await createJoinedRoom(page);
-      await page.getByPlaceholder(/add a retro item/i).fill("Disconnected drag item");
-      await page.getByRole("button", { name: /add item/i }).click();
-      await expect(page.getByText("Disconnected drag item")).toBeVisible({ timeout: 5000 });
-      await advanceToPhase(page, "organise");
-
-      const initialColumns = await page.locator(".group-panel__title").allTextContents();
-      expect(initialColumns.slice(0, 3)).toEqual(["Start", "Stop", "Continue"]);
-
-      await page.context().setOffline(true);
-      await expect(page.getByLabel("Disconnected", { exact: true })).toBeVisible({ timeout: 5000 });
-
-      await page.getByRole("button", { name: /move group down/i }).first().click();
-      await expect(page.getByRole("alert").filter({ hasText: /column order not sent/i })).toBeVisible();
-      await expect(page.locator(".group-panel__title")).toHaveText(initialColumns);
-
-      const stopColumnId = await page.evaluate(() => {
-        const panel = Array.from(document.querySelectorAll(".group-panel")).find((candidate) => candidate.textContent?.includes("Stop"));
-        return panel?.querySelector<HTMLElement>("[data-drop-list]")?.dataset.dropList ?? null;
-      });
-      expect(stopColumnId).not.toBeNull();
-      await dragItemToDropZone(page, "Disconnected drag item", stopColumnId, 0);
-      await expect(page.getByRole("alert").filter({ hasText: /item move not sent/i })).toBeVisible();
-      await expect(page.locator(".group-panel", { hasText: "Start" }).getByText("Disconnected drag item")).toBeVisible();
-      await expect(page.locator(".group-panel", { hasText: "Stop" }).getByText("Disconnected drag item")).toHaveCount(0);
-    });
-
-    test("WebSocket credentials are not exposed in browser-visible URLs or console failures", async ({ page }) => {
-      const consoleErrors: string[] = [];
-      const pageErrors: string[] = [];
-      page.on("console", (message) => {
-        if (message.type() === "error") consoleErrors.push(message.text());
-      });
-      page.on("pageerror", (error) => pageErrors.push(error.message));
-
-      await createJoinedRoom(page);
-      await expect(page.getByLabel("Connected", { exact: true })).toBeVisible({ timeout: 5000 });
-
-      const visibleText = await page.locator("body").innerText();
-      expect(visibleText).not.toMatch(/token=|pid=|auth-[a-f0-9]{64}/i);
-      const resourceUrls = await page.evaluate(() => performance.getEntriesByType("resource").map((entry) => entry.name));
-      expect(resourceUrls.join("\n")).not.toMatch(/[?&](token|pid)=|auth-[a-f0-9]{64}/i);
-      expect(consoleErrors.join("\n")).not.toMatch(/[?&](token|pid)=|auth-[a-f0-9]{64}/i);
-      expect(pageErrors).toEqual([]);
-    });
-
-    test("mobile long content remains constrained without horizontal overflow", async ({ page }) => {
-      await page.setViewportSize({ width: 390, height: 844 });
-      const longName = "Alice-" + "VeryLongParticipantName".repeat(3);
-      await createJoinedRoom(page, longName);
-      await page.getByRole("button", { name: /configure columns/i }).click();
-      const longColumn = "ExtremelyLongColumnLabelWithoutSpaces".repeat(3).slice(0, 80);
-      await page.getByLabel(/new column name/i).fill(longColumn);
-      await page.getByRole("button", { name: /add column/i }).click();
-      await expect(page.getByRole("heading", { name: longColumn })).toBeVisible({ timeout: 5000 });
-      await page.getByLabel(/column for new item/i).selectOption({ label: longColumn });
-      await page.getByPlaceholder(/add a retro item/i).fill("LongItemTextWithoutSpaces".repeat(24));
-      await page.getByRole("button", { name: /add item/i }).click();
-      await expect(page.getByText(/LongItemTextWithoutSpaces/)).toBeVisible({ timeout: 5000 });
-
-      const metrics = await page.evaluate(() => ({
-        scrollWidth: document.documentElement.scrollWidth,
-        clientWidth: document.documentElement.clientWidth,
-        bodyScrollWidth: document.body.scrollWidth,
-      }));
-      expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth + 1);
-      expect(metrics.bodyScrollWidth).toBeLessThanOrEqual(metrics.clientWidth + 1);
-      await expect(page.getByRole("button", { name: /add item/i })).toBeVisible();
-    });
-
-    test("reduced motion disables continuous spinner animation and heavy transitions", async ({ page }) => {
-      await page.emulateMedia({ reducedMotion: "reduce" });
-      await page.route("**/api/rooms", async (route) => {
-        await new Promise((resolve) => setTimeout(resolve, 250));
-        await route.continue();
-      });
-      await page.goto("/");
-      await page.getByRole("button", { name: /create room/i }).click();
-      const spinner = page.locator(".loading-spinner").first();
-      await expect(spinner).toBeVisible();
-      const styles = await spinner.evaluate((element) => {
-        const computed = window.getComputedStyle(element);
-        return {
-          animationName: computed.animationName,
-          animationDuration: computed.animationDuration,
-          transitionDuration: computed.transitionDuration,
-        };
-      });
-      expect(styles.animationName).toBe("none");
-      expect(styles.animationDuration).toBe("0s");
-      expect(styles.transitionDuration).toBe("0s");
-    });
-
-    test("phase changes leave focus on a logical visible room status target", async ({ page }) => {
-      await createJoinedRoom(page);
-      await page.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(page.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
-      await expect(page.getByRole("region", { name: /room status/i })).toBeFocused();
-    });
-
-    test("offline column create recovers after network restore without refresh", async ({ page }) => {
-      await createJoinedRoom(page);
-      await page.getByRole("button", { name: /configure columns/i }).click();
-      const columnInput = page.locator(".column-config__form").getByLabel(/new column name/i);
-      await columnInput.fill("Recovery");
-
-      await page.context().setOffline(true);
-      await expect(page.getByLabel("Disconnected", { exact: true })).toBeVisible({ timeout: 5000 });
-      await page.getByRole("button", { name: /add column/i }).click();
-
-      await expect(page.getByRole("alert").filter({ hasText: /reconnecting/i })).toBeVisible();
-      await expect(columnInput).toHaveValue("Recovery");
-
-      await page.context().setOffline(false);
-      await expect(page.getByLabel("Connected", { exact: true })).toBeVisible({ timeout: 10000 });
-      await expect(page.getByRole("button", { name: /add column/i })).toBeEnabled();
-
-      await page.getByRole("button", { name: /add column/i }).click();
-      await expect(page.getByRole("heading", { name: "Recovery" })).toBeVisible({ timeout: 5000 });
-    });
-
-    test("remote phase snapshots restore focus when the active element is lost", async ({ browser }) => {
-      const ctx1 = await browser.newContext();
-      const alice = await ctx1.newPage();
-      await alice.goto("/");
-      await alice.getByRole("button", { name: /create room/i }).click();
-      await alice.waitForURL(/\/room\//);
-      const roomUrl = alice.url();
-
-      await alice.getByLabel(/display name/i).fill("Alice");
-      await alice.getByRole("button", { name: /join/i }).click();
-      await expect(alice.getByText(/Phase: WRITE/i)).toBeVisible();
-
-      const ctx2 = await browser.newContext();
-      const bob = await ctx2.newPage();
-      await bob.goto(roomUrl);
-      await bob.getByLabel(/display name/i).fill("Bob");
-      await bob.getByRole("button", { name: /join/i }).click();
-      await expect(bob.getByText(/Phase: WRITE/i)).toBeVisible();
-
-      await bob.evaluate(() => {
-        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
-      });
-      await expect(bob.locator("body")).toBeFocused();
-
-      await alice.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(bob.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
-      await expect(bob.getByRole("region", { name: /room status/i })).toBeFocused();
-
-      await ctx1.close();
-      await ctx2.close();
-    });
+test.describe("Retro Board current flow", () => {
+  test("home page creates a room and shows setup", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.getByRole("heading", { name: /run better team retros/i })).toBeVisible();
+    await page.getByRole("button", { name: createRoomButton }).click();
+    await page.waitForURL(/\/room\//);
+    await page.getByLabel(/display name/i).fill("Alice");
+    await page.getByRole("button", { name: /^join room$/i }).click();
+    await expect(page.getByText(/Set up the board/i)).toBeVisible();
+    await expect(page.getByRole("radio", { name: /Score voting/i })).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByText(/Mad/i)).toBeVisible();
+    await expect(page.getByText(/Glad/i)).toBeVisible();
+    await expect(page.getByText(/Sad/i)).toBeVisible();
   });
 
-  test.describe("Two-user flow", () => {
-    test("final regression covers two-user realtime, refreshes, phase gates, mixed review order, and credential privacy", async ({ browser }) => {
-      const aliceConsoleErrors: string[] = [];
-      const bobConsoleErrors: string[] = [];
-      const pageErrors: string[] = [];
-      const ctx1 = await browser.newContext();
-      const alice = await ctx1.newPage();
-      alice.on("console", (message) => {
-        if (message.type() === "error") aliceConsoleErrors.push(message.text());
-      });
-      alice.on("pageerror", (error) => pageErrors.push(error.message));
-      await createJoinedRoom(alice, "Alice");
-      const roomUrl = alice.url();
-      const roomId = new URL(roomUrl).pathname.split("/").pop()!;
-
-      const ctx2 = await browser.newContext();
-      const bob = await ctx2.newPage();
-      bob.on("console", (message) => {
-        if (message.type() === "error") bobConsoleErrors.push(message.text());
-      });
-      bob.on("pageerror", (error) => pageErrors.push(error.message));
-      await bob.goto(roomUrl);
-      await bob.getByLabel(/display name/i).fill("Bob");
-      await bob.getByRole("button", { name: /join/i }).click();
-      await expect(bob.getByText(/Phase: WRITE/i)).toBeVisible();
-      await expect(alice.getByText("Bob")).toBeVisible({ timeout: 5000 });
-      await expect(bob.getByText("Alice")).toBeVisible({ timeout: 5000 });
-      await expect(bob.getByRole("button", { name: /advance to next phase/i })).toHaveCount(0);
-      await expect(bob.getByRole("button", { name: /configure columns/i })).toHaveCount(0);
-
-      await createWriteColumn(alice, "Wins");
-      await createWriteColumn(alice, "Risks");
-      await expect(bob.getByRole("heading", { name: "Wins" })).toBeVisible({ timeout: 5000 });
-      await expect(bob.getByRole("heading", { name: "Risks" })).toBeVisible({ timeout: 5000 });
-
-      for (const [page, columnName, itemText] of [
-        [alice, "Wins", "Ship notes"],
-        [bob, "Wins", "Docs are stale"],
-        [alice, "Risks", "Reduce toil"],
-      ] as const) {
-        await page.getByLabel(/column for new item/i).selectOption({ label: columnName });
-        await page.getByPlaceholder(/add a retro item/i).fill(itemText);
-        await page.getByRole("button", { name: /add item/i }).click();
-        await expect(alice.locator(".column-board__column", { hasText: columnName }).getByText(itemText)).toBeVisible({ timeout: 5000 });
-        await expect(bob.locator(".column-board__column", { hasText: columnName }).getByText(itemText)).toBeVisible({ timeout: 5000 });
-      }
-
-      await alice.reload();
-      await expect(alice.getByText(/Phase: WRITE/i)).toBeVisible({ timeout: 5000 });
-      await expect(alice.getByText("Ship notes")).toBeVisible();
-      await expect(alice.getByText("Docs are stale")).toBeVisible();
-      await expect(alice.getByRole("button", { name: /advance to next phase/i })).toBeVisible();
-
-      await alice.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(alice.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
-      await expect(bob.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
-      await bob.reload();
-      await expect(bob.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
-      await expect(bob.getByText("Ship notes")).toBeVisible();
-      await expect(bob.getByText("Docs are stale")).toBeVisible();
-      await expect(bob.getByRole("button", { name: /advance to next phase/i })).toHaveCount(0);
-
-      const winsLane = alice.locator(".column-board__column").filter({ has: alice.getByRole("heading", { name: "Wins", exact: true }) });
-      await winsLane.getByPlaceholder(/new group name/i).fill("Delivery themes");
-      await winsLane.getByRole("button", { name: /create group/i }).click();
-      await expect(bob.getByText("Delivery themes")).toBeVisible({ timeout: 5000 });
-
-      const organiseState = await alice.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomId) as { version: number; groups: { id: string; name: string; columnId: string }[]; items: { id: string; text: string; columnId: string; groupId: string | null }[] };
-      const deliveryGroup = organiseState.groups.find((group) => group.name === "Delivery themes")!;
-      await dragItemToDropZone(alice, "Ship notes", deliveryGroup.id, 0);
-      await expect(bob.locator(`[data-drop-list="${deliveryGroup.id}"]`, { hasText: "Ship notes" })).toBeVisible({ timeout: 5000 });
-
-      const beforeRejectedMove = await alice.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomId) as { version: number; items: { text: string; groupId: string | null }[] };
-      await dragItemToDropZone(alice, "Reduce toil", deliveryGroup.id, 0);
-      await expect(alice.getByRole("alert").filter({ hasText: /original column/i })).toBeVisible({ timeout: 5000 });
-      const afterRejectedMove = await alice.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomId) as { version: number; items: { text: string; groupId: string | null }[] };
-      expect(afterRejectedMove.version).toBe(beforeRejectedMove.version);
-      expect(afterRejectedMove.items.find((item) => item.text === "Reduce toil")?.groupId).toBeNull();
-
-      await alice.reload();
-      await expect(alice.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
-      await expect(alice.locator(`[data-drop-list="${deliveryGroup.id}"]`, { hasText: "Ship notes" })).toBeVisible({ timeout: 5000 });
-      await expect(alice.getByText("Docs are stale")).toBeVisible();
-
-      await alice.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(alice.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
-      await expect(bob.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
-      await expect(alice.locator(".item-row", { hasText: "Ship notes" }).getByRole("button", { name: /add a vote/i })).toHaveCount(0);
-      await expect(alice.locator("[data-vote-group-id]", { hasText: "Delivery themes" })).toBeVisible();
-      await expect(alice.locator("[data-vote-item-id]", { hasText: "Docs are stale" })).toBeVisible();
-
-      await alice.getByRole("button", { name: /add a vote to Delivery themes/i }).click();
-      await bob.getByRole("button", { name: /add a vote to Delivery themes/i }).click();
-      await alice.getByRole("button", { name: /add a vote to Docs are stale/i }).click();
-      await bob.getByRole("button", { name: /add a vote to Docs are stale/i }).click();
-      await bob.getByRole("button", { name: /add a vote to Docs are stale/i }).click();
-      await bob.getByRole("button", { name: /add a vote to Reduce toil/i }).click();
-      await expect(alice.locator("[data-vote-group-id]", { hasText: "Delivery themes" }).getByText(/2 votes?/)).toBeVisible({ timeout: 5000 });
-      await expect(alice.locator("[data-vote-item-id]", { hasText: "Docs are stale" }).getByText(/3 votes?/)).toBeVisible({ timeout: 5000 });
-      await expect(bob.getByText(/4 used \/ 5 total/i)).toBeVisible();
-      await bob.getByRole("button", { name: /remove one of your votes from Reduce toil/i }).click();
-      await expect(alice.locator("[data-vote-item-id]", { hasText: "Reduce toil" }).getByText(/0 votes?/)).toBeVisible({ timeout: 5000 });
-
-      await bob.reload();
-      await expect(bob.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
-      await expect(bob.locator("[data-vote-item-id]", { hasText: "Docs are stale" }).getByText(/3 votes?/)).toBeVisible({ timeout: 5000 });
-      await expect(bob.getByText(/3 used \/ 5 total/i)).toBeVisible();
-      await expect(bob.getByText(/\(2 remaining\)/i)).toBeVisible();
-      await expectNoCredentialLeaks(alice, aliceConsoleErrors);
-      await expectNoCredentialLeaks(bob, bobConsoleErrors);
-
-      await alice.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(alice.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
-      await expect(bob.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
-      await expect(alice.getByText("Slide 1 of 3")).toBeVisible({ timeout: 5000 });
-      await expect(alice.locator("[data-review-item-id]", { hasText: "Docs are stale" }).getByLabel(/3 votes?/)).toBeVisible();
-      await alice.getByRole("button", { name: /next review target/i }).click();
-      await expect(alice.getByText("Slide 2 of 3")).toBeVisible();
-      await expect(alice.locator("[data-review-group-id]", { hasText: "Delivery themes" }).getByLabel(/2 votes?/)).toBeVisible();
-      await expect(alice.locator("[data-review-group-id]", { hasText: "Delivery themes" }).getByText("Ship notes")).toBeVisible();
-      await expect(alice.getByPlaceholder(/add a retro item/i)).toHaveCount(0);
-      await expect(alice.getByRole("button", { name: /add a vote/i })).toHaveCount(0);
-      await expect(alice.getByRole("button", { name: /create group/i })).toHaveCount(0);
-
-      await alice.reload();
-      await expect(alice.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
-      await expect(alice.getByText("Slide 2 of 3")).toBeVisible({ timeout: 5000 });
-      await expect(alice.locator("[data-review-group-id]", { hasText: "Delivery themes" }).getByLabel(/2 votes?/)).toBeVisible();
-      await expectNoCredentialLeaks(alice, aliceConsoleErrors);
-      expect(pageErrors).toEqual([]);
-
-      await ctx1.close();
-      await ctx2.close();
-    });
-
-    test("mobile full flow remains usable without horizontal overflow", async ({ browser }) => {
-      const ctx = await browser.newContext({
-        hasTouch: true,
-        isMobile: true,
-        viewport: { width: 390, height: 844 },
-      });
-      const page = await ctx.newPage();
-      await createJoinedRoom(page, "Mobile Alice");
-      await expect(page.getByRole("region", { name: /participants/i })).toContainText("Mobile Alice");
-      await expectNoHorizontalOverflow(page);
-
-      await createWriteColumn(page, "Mobile Wins");
-      await createWriteColumn(page, "Mobile Risks");
-      for (const [columnName, itemText] of [
-        ["Mobile Wins", "Compact success"],
-        ["Mobile Risks", "Narrow risk"],
-      ] as const) {
-        await page.getByLabel(/column for new item/i).selectOption({ label: columnName });
-        await page.getByPlaceholder(/add a retro item/i).fill(itemText);
-        await page.getByRole("button", { name: /add item/i }).click();
-        await expect(page.locator(".column-board__column", { hasText: columnName }).getByText(itemText)).toBeVisible({ timeout: 5000 });
-      }
-      await expectNoHorizontalOverflow(page);
-
-      await page.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(page.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
-      const winsLane = page.locator(".column-board__column").filter({ has: page.getByRole("heading", { name: "Mobile Wins", exact: true }) });
-      await winsLane.getByPlaceholder(/new group name/i).fill("Mobile theme");
-      await winsLane.getByRole("button", { name: /create group/i }).click();
-      await expect(page.getByText("Mobile theme")).toBeVisible({ timeout: 5000 });
-      const roomId = new URL(page.url()).pathname.split("/").pop()!;
-      const organiseState = await page.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomId) as { version: number; groups: { id: string; name: string }[]; items: { text: string; groupId: string | null }[] };
-      const mobileGroup = organiseState.groups.find((group) => group.name === "Mobile theme")!;
-      await dragItemToDropZone(page, "Compact success", mobileGroup.id, 0);
-      await expect(page.locator(`[data-drop-list="${mobileGroup.id}"]`, { hasText: "Compact success" })).toBeVisible({ timeout: 5000 });
-
-      const beforeCrossColumn = await page.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomId) as { version: number; items: { text: string; groupId: string | null }[] };
-      await dragItemToDropZone(page, "Narrow risk", mobileGroup.id, 0);
-      await expect(page.getByRole("alert").filter({ hasText: /original column/i })).toBeVisible({ timeout: 5000 });
-      const afterCrossColumn = await page.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomId) as { version: number; items: { text: string; groupId: string | null }[] };
-      expect(afterCrossColumn.version).toBe(beforeCrossColumn.version);
-      expect(afterCrossColumn.items.find((item) => item.text === "Narrow risk")?.groupId).toBeNull();
-      await expectNoHorizontalOverflow(page);
-
-      await page.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(page.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
-      await page.getByRole("button", { name: /add a vote to Mobile theme/i }).click();
-      await expect(page.locator("[data-vote-group-id]", { hasText: "Mobile theme" }).getByText(/1 vote/)).toBeVisible({ timeout: 5000 });
-      await expectNoHorizontalOverflow(page);
-
-      await page.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(page.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
-      await expect(page.getByText("Slide 1 of 2")).toBeVisible({ timeout: 5000 });
-      await expect(page.locator("[data-review-group-id]", { hasText: "Mobile theme" }).getByLabel(/1 vote/)).toBeVisible();
-      await page.getByRole("button", { name: /next review target/i }).click();
-      await expect(page.getByText("Slide 2 of 2")).toBeVisible();
-      await expect(page.locator("[data-review-item-id]", { hasText: "Narrow risk" })).toBeVisible();
-      await expectNoHorizontalOverflow(page);
-
-      await ctx.close();
-    });
-
-    test("facilitator configures write columns, targets every lane, reorders, deletes, and syncs participants", async ({ browser }) => {
-      const ctx1 = await browser.newContext();
-      const alice = await ctx1.newPage();
-      await alice.goto("/");
-      await alice.getByRole("button", { name: /create room/i }).click();
-      await alice.waitForURL(/\/room\//);
-      const roomUrl = alice.url();
-      const roomId = new URL(roomUrl).pathname.split("/").pop()!;
-
-      await alice.getByLabel(/display name/i).fill("Alice");
-      await alice.getByRole("button", { name: /join/i }).click();
-      await expect(alice.getByText(/Phase: WRITE/i)).toBeVisible();
-      await expect(alice.getByRole("region", { name: /facilitator controls/i })).toContainText(/server-authoritative controls/i);
-      await expect(alice.getByRole("region", { name: /participants/i }).getByRole("heading", { name: /participants/i })).toBeVisible();
-      await expect(alice.getByRole("button", { name: /configure columns/i })).toBeVisible();
-      await expect(alice.getByRole("heading", { name: /create your first column/i })).toBeVisible();
-      await expect(alice.getByRole("button", { name: /add item/i })).toBeDisabled();
-
-      const ctx2 = await browser.newContext();
-      const bob = await ctx2.newPage();
-      await bob.goto(roomUrl);
-      await bob.getByLabel(/display name/i).fill("Bob");
-      await bob.getByRole("button", { name: /join/i }).click();
-      await expect(bob.getByText(/Phase: WRITE/i)).toBeVisible();
-      await expect(bob.getByRole("region", { name: /participants/i }).getByRole("heading", { name: /participants/i })).toBeVisible();
-      await expect(bob.getByRole("button", { name: /configure columns/i })).toHaveCount(0);
-
-      await alice.getByRole("button", { name: /configure columns/i }).click();
-      await alice.getByLabel(/new column name/i).fill("  Learn  ");
-      await alice.getByRole("button", { name: /add column/i }).click();
-      await expect(alice.getByRole("heading", { name: "Learn" })).toBeVisible({ timeout: 5000 });
-      await expect(bob.getByRole("heading", { name: "Learn" })).toBeVisible({ timeout: 5000 });
-      for (const name of ["Improve", "Celebrate"]) {
-        await alice.locator(".column-config__form").getByLabel(/new column name/i).fill(name);
-        await alice.getByRole("button", { name: /add column/i }).click();
-        await expect(bob.getByRole("heading", { name })).toBeVisible({ timeout: 5000 });
-      }
-
-      await alice.locator(".column-config__item", { hasText: "Learn" }).getByRole("button", { name: "Edit" }).click();
-      await alice.getByLabel(/edit Learn column name/i).fill("Team Wins");
-      await alice.getByRole("button", { name: "Save" }).click();
-      await expect(bob.getByRole("heading", { name: "Team Wins" })).toBeVisible({ timeout: 5000 });
-
-      const ctx3 = await browser.newContext();
-      const carol = await ctx3.newPage();
-      await carol.goto(roomUrl);
-      await carol.getByLabel(/display name/i).fill("Carol");
-      await carol.getByRole("button", { name: /join/i }).click();
-      await expect(carol.getByRole("heading", { name: "Team Wins" })).toBeVisible({ timeout: 5000 });
-
-      for (const [columnName, itemText] of [
-        ["Team Wins", "Win item"],
-        ["Improve", "Improve item"],
-        ["Celebrate", "Celebrate item"],
-      ] as const) {
-        await alice.getByLabel(/column for new item/i).selectOption({ label: columnName });
-        await alice.getByPlaceholder(/add a retro item/i).fill(itemText);
-        await alice.getByRole("button", { name: /add item/i }).click();
-        await expect(bob.locator(".column-board__column", { hasText: columnName }).getByText(itemText)).toBeVisible({ timeout: 5000 });
-      }
-
-      const stateAfterItem = await alice.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomId) as { columns: { id: string; name: string; order: number }[]; items: { text: string; columnId: string | null }[] };
-      const teamWins = stateAfterItem.columns.find((column) => column.name === "Team Wins")!;
-      const improve = stateAfterItem.columns.find((column) => column.name === "Improve")!;
-      const celebrate = stateAfterItem.columns.find((column) => column.name === "Celebrate")!;
-      expect(stateAfterItem.items.find((item) => item.text === "Win item")?.columnId).toBe(teamWins.id);
-      expect(stateAfterItem.items.find((item) => item.text === "Improve item")?.columnId).toBe(improve.id);
-      expect(stateAfterItem.items.find((item) => item.text === "Celebrate item")?.columnId).toBe(celebrate.id);
-
-      await alice.locator(".column-config__item", { hasText: "Team Wins" }).getByRole("button", { name: /move Team Wins column right/i }).click();
-      await expect(bob.locator(".column-board__column").first()).toContainText("Improve", { timeout: 5000 });
-      const stateAfterReorder = await alice.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomId) as { columns: { id: string; name: string; order: number }[]; items: { text: string; columnId: string | null }[] };
-      const sortedNames = [...stateAfterReorder.columns].sort((a, b) => a.order - b.order).map((column) => column.name);
-      expect(sortedNames).toEqual(["Improve", "Team Wins", "Celebrate"]);
-      expect(stateAfterReorder.items.find((item) => item.text === "Win item")?.columnId).toBe(teamWins.id);
-
-      await alice.locator(".column-config__item", { hasText: "Celebrate" }).getByRole("button", { name: /delete Celebrate column/i }).click();
-      await expect(bob.getByRole("heading", { name: "Celebrate" })).toHaveCount(0, { timeout: 5000 });
-      await expect(bob.getByText("Celebrate item")).toHaveCount(0);
-      const stateAfterDelete = await alice.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomId) as { columns: { id: string; name: string }[]; items: { text: string; columnId: string | null }[] };
-      expect(stateAfterDelete.columns.map((column) => column.name)).toEqual(["Improve", "Team Wins"]);
-      expect(stateAfterDelete.items.map((item) => item.text)).toEqual(expect.arrayContaining(["Win item", "Improve item"]));
-      expect(stateAfterDelete.items.find((item) => item.text === "Celebrate item")).toBeUndefined();
-
-      await ctx1.close();
-      await ctx2.close();
-      await ctx3.close();
-    });
-
-    test("organise columns support nested groups, same-column moves, blocked cross-column drops, and refresh persistence", async ({ browser }) => {
-      const ctx = await browser.newContext();
-      const page = await ctx.newPage();
-      await createJoinedRoom(page);
-      const roomId = new URL(page.url()).pathname.split("/").pop()!;
-
-      await createWriteColumn(page, "Alpha");
-      await createWriteColumn(page, "Beta");
-
-      for (const [columnName, itemText] of [
-        ["Alpha", "Alpha A"],
-        ["Alpha", "Alpha B"],
-        ["Beta", "Beta A"],
-      ] as const) {
-        await page.getByLabel(/column for new item/i).selectOption({ label: columnName });
-        await page.getByPlaceholder(/add a retro item/i).fill(itemText);
-        await page.getByRole("button", { name: /add item/i }).click();
-        await expect(page.locator(".column-board__column", { hasText: columnName }).getByText(itemText)).toBeVisible({ timeout: 5000 });
-      }
-
-      await advanceToPhase(page, "organise");
-      await expect(page.getByRole("region", { name: /room status/i })).toBeFocused();
-      await expect(page.getByRole("heading", { name: "Alpha" })).toBeVisible();
-      await expect(page.getByRole("heading", { name: "Beta" })).toBeVisible();
-
-      async function createGroupInColumn(columnName: string, groupName: string) {
-        const lane = page.locator(".column-board__column", { hasText: columnName });
-        await lane.getByPlaceholder(/new group name/i).fill(groupName);
-        await lane.getByRole("button", { name: /create group/i }).click();
-        await expect(lane.getByText(groupName)).toBeVisible({ timeout: 5000 });
-      }
-
-      await createGroupInColumn("Alpha", "Alpha themes");
-      await createGroupInColumn("Alpha", "Alpha followups");
-      await createGroupInColumn("Beta", "Beta themes");
-      await createGroupInColumn("Beta", "Alpha themes");
-
-      const beforeDuplicateCreate = await page.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomId) as { version: number; groups: { id: string; name: string; columnId: string }[]; items: { id: string; text: string; columnId: string; groupId: string | null; order: number }[]; votes: unknown[] };
-      const alphaLane = page.locator(".column-board__column").filter({
-        has: page.getByRole("heading", { name: "Alpha", exact: true }),
-      });
-      await alphaLane.getByPlaceholder(/new group name/i).fill(" Alpha themes ");
-      await alphaLane.getByRole("button", { name: /create group/i }).click();
-      await expect(page.getByRole("alert").filter({ hasText: /group name already exists in this column/i })).toBeVisible({ timeout: 5000 });
-      const afterDuplicateCreate = await page.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomId) as { version: number; groups: { id: string; name: string; columnId: string }[]; items: { id: string; text: string; columnId: string; groupId: string | null; order: number }[]; votes: unknown[] };
-      expect(afterDuplicateCreate).toEqual(beforeDuplicateCreate);
-
-      await alphaLane.getByRole("button", { name: /rename Alpha followups/i }).click();
-      await alphaLane.getByLabel(/edit Alpha followups group name/i).fill(" Alpha themes ");
-      await alphaLane.getByRole("button", { name: "Save" }).click();
-      await expect(page.getByRole("alert").filter({ hasText: /group name already exists in this column/i })).toBeVisible({ timeout: 5000 });
-      const afterDuplicateRename = await page.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomId) as { version: number; groups: { id: string; name: string; columnId: string }[]; items: { id: string; text: string; columnId: string; groupId: string | null; order: number }[]; votes: unknown[] };
-      expect(afterDuplicateRename).toEqual(beforeDuplicateCreate);
-      await alphaLane.getByRole("button", { name: "Cancel" }).click();
-
-      let state = await page.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomId) as { version: number; groups: { id: string; name: string; columnId: string }[]; items: { id: string; text: string; columnId: string; groupId: string | null; order: number }[] };
-      const alphaThemes = state.groups.find((group) => group.name === "Alpha themes")!;
-      const alphaFollowups = state.groups.find((group) => group.name === "Alpha followups")!;
-
-      await dragItemToDropZone(page, "Alpha A", alphaThemes.id, 0);
-      await expect(page.locator(`[data-drop-list="${alphaThemes.id}"]`, { hasText: "Alpha A" })).toBeVisible({ timeout: 5000 });
-      await dragItemToDropZone(page, "Alpha B", alphaThemes.id, 1);
-      await expect(page.locator(`[data-drop-list="${alphaThemes.id}"] [data-drag-item-id]`).nth(1)).toContainText("Alpha B", { timeout: 5000 });
-
-      await dragItemToDropZone(page, "Alpha B", alphaThemes.id, 0);
-      await expect(page.locator(`[data-drop-list="${alphaThemes.id}"] [data-drag-item-id]`).first()).toContainText("Alpha B", { timeout: 5000 });
-
-      await dragItemToDropZone(page, "Alpha A", alphaFollowups.id, 0);
-      await expect(page.locator(`[data-drop-list="${alphaFollowups.id}"]`, { hasText: "Alpha A" })).toBeVisible({ timeout: 5000 });
-
-      await dragItemToDropZone(page, "Alpha A", null, 0);
-      await expect(page.locator(`[data-drop-list="__ungrouped__"][data-drop-column-id="${alphaThemes.columnId}"]`, { hasText: "Alpha A" })).toBeVisible({ timeout: 5000 });
-
-      state = await page.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomId) as { version: number; groups: { id: string; name: string; columnId: string }[]; items: { id: string; text: string; columnId: string; groupId: string | null; order: number }[] };
-      const beforeRejectedVersion = state.version;
-      await dragItemToDropZone(page, "Beta A", alphaThemes.id, 0);
-      await expect(page.getByRole("alert").filter({ hasText: /original column/i })).toBeVisible({ timeout: 5000 });
-      const rejectedState = await page.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomId) as { version: number; items: { text: string; groupId: string | null }[] };
-      expect(rejectedState.version).toBe(beforeRejectedVersion);
-      expect(rejectedState.items.find((item) => item.text === "Beta A")?.groupId).toBeNull();
-
-      await page.reload();
-      await expect(page.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
-      await expect(page.locator(`[data-drop-list="${alphaThemes.id}"]`, { hasText: "Alpha B" })).toBeVisible({ timeout: 5000 });
-      await expect(page.locator(`[data-drop-list="__ungrouped__"][data-drop-column-id="${alphaThemes.columnId}"]`, { hasText: "Alpha A" })).toBeVisible();
-      await expect(page.locator(".column-board__column", { hasText: "Beta" }).getByText("Beta A")).toBeVisible();
-
-      await ctx.close();
-    });
-
-    test("group voting aggregates in realtime, persists through refresh, and handles no groups", async ({ browser }) => {
-      const ctx1 = await browser.newContext();
-      const alice = await ctx1.newPage();
-      await createJoinedRoom(alice);
-      const roomUrl = alice.url();
-      const roomId = new URL(roomUrl).pathname.split("/").pop()!;
-
-      const ctx2 = await browser.newContext();
-      const bob = await ctx2.newPage();
-      await bob.goto(roomUrl);
-      await bob.getByLabel(/display name/i).fill("Bob");
-      await bob.getByRole("button", { name: /join/i }).click();
-      await expect(bob.getByText(/Phase: WRITE/i)).toBeVisible();
-
-      await createWriteColumn(alice, "Wins");
-      await alice.getByLabel(/column for new item/i).selectOption({ label: "Wins" });
-      await alice.getByPlaceholder(/add a retro item/i).fill("Shared success");
-      await alice.getByRole("button", { name: /add item/i }).click();
-      await expect(bob.getByText("Shared success")).toBeVisible({ timeout: 5000 });
-
-      await advanceToPhase(alice, "organise");
-      await expect(bob.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
-      const lane = alice.locator(".column-board__column", { hasText: "Wins" });
-      await lane.getByPlaceholder(/new group name/i).fill("Launch wins");
-      await lane.getByRole("button", { name: /create group/i }).click();
-      await expect(bob.getByText("Launch wins")).toBeVisible({ timeout: 5000 });
-
-      const organiseState = await alice.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomId) as { groups: { id: string; name: string }[] };
-      const launchWins = organiseState.groups.find((group) => group.name === "Launch wins")!;
-      await dragItemToDropZone(alice, "Shared success", launchWins.id, 0);
-      await expect(bob.locator(`[data-drop-list="${launchWins.id}"]`, { hasText: "Shared success" })).toBeVisible({ timeout: 5000 });
-
-      await alice.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(alice.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
-      await expect(bob.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
-      await expect(alice.locator(".item-row", { hasText: "Shared success" }).getByRole("button")).toHaveCount(0);
-
-      await alice.getByRole("button", { name: /add a vote to Launch wins/i }).click();
-      await alice.getByRole("button", { name: /add a vote to Launch wins/i }).click();
-      await bob.getByRole("button", { name: /add a vote to Launch wins/i }).click();
-      await expect(alice.locator("[data-vote-group-id]", { hasText: "Launch wins" }).getByText(/3 votes?/)).toBeVisible({ timeout: 5000 });
-      await expect(bob.locator("[data-vote-group-id]", { hasText: "Launch wins" }).getByText(/3 votes?/)).toBeVisible({ timeout: 5000 });
-
-      const voteState = await alice.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomId) as { votes: { participantId: string; target?: { type: "group" | "item"; id: string }; groupId?: string; itemId?: string; count: number }[] };
-      expect(voteState.votes).toEqual(expect.arrayContaining([
-        { participantId: expect.any(String), target: { type: "group", id: launchWins.id }, count: 2 },
-        { participantId: expect.any(String), target: { type: "group", id: launchWins.id }, count: 1 },
-      ]));
-      expect(voteState.votes.every((vote) => vote.target?.type === "group" && vote.target.id === launchWins.id && vote.itemId === undefined)).toBe(true);
-
-      await bob.reload();
-      await expect(bob.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
-      await expect(bob.locator("[data-vote-group-id]", { hasText: "Launch wins" }).getByText(/3 votes?/)).toBeVisible({ timeout: 5000 });
-      await alice.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(alice.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
-      await expect(bob.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
-      await expect(alice.getByText("Slide 1 of 1")).toBeVisible({ timeout: 5000 });
-      await expect(alice.locator("[data-review-group-id]", { hasText: "Launch wins" }).getByLabel(/3 votes?/)).toBeVisible();
-      await expect(alice.locator("[data-review-group-id]", { hasText: "Launch wins" }).getByText("Shared success")).toBeVisible();
-      await expect(alice.getByRole("button", { name: /add a vote/i })).toHaveCount(0);
-      await bob.reload();
-      await expect(bob.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
-      await expect(bob.getByText("Slide 1 of 1")).toBeVisible({ timeout: 5000 });
-      await expect(bob.locator("[data-review-group-id]", { hasText: "Launch wins" }).getByLabel(/3 votes?/)).toBeVisible();
-
-      await ctx1.close();
-      await ctx2.close();
-
-      const emptyCtx = await browser.newContext();
-      const emptyPage = await emptyCtx.newPage();
-      await createJoinedRoom(emptyPage);
-      await createWriteColumn(emptyPage, "Topics");
-      await emptyPage.getByLabel(/column for new item/i).selectOption({ label: "Topics" });
-      await emptyPage.getByPlaceholder(/add a retro item/i).fill("Ungrouped only");
-      await emptyPage.getByRole("button", { name: /add item/i }).click();
-      await advanceToPhase(emptyPage, "vote");
-      await expect(emptyPage.locator("[data-vote-item-id]", { hasText: "Ungrouped only" })).toBeVisible({ timeout: 5000 });
-      await emptyPage.getByRole("button", { name: /add a vote to Ungrouped only/i }).click();
-      await expect(emptyPage.locator("[data-vote-item-id]", { hasText: "Ungrouped only" }).getByText(/1 vote/)).toBeVisible({ timeout: 5000 });
-      await emptyPage.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(emptyPage.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
-      await expect(emptyPage.getByText("Slide 1 of 1")).toBeVisible({ timeout: 5000 });
-      await expect(emptyPage.locator("[data-review-item-id]", { hasText: "Ungrouped only" }).getByLabel(/1 vote/)).toBeVisible();
-      await expect(emptyPage.locator("[data-review-item-id]", { hasText: "Ungrouped only" }).getByText("Topics")).toBeVisible();
-      await emptyCtx.close();
-    });
-
-    test("full dynamic-column flow preserves duplicate identities, realtime sync, and phase locks", async ({ browser }) => {
-      const ctx1 = await browser.newContext();
-      const alice = await ctx1.newPage();
-      await createJoinedRoom(alice);
-      const roomUrl = alice.url();
-      const roomId = new URL(roomUrl).pathname.split("/").pop()!;
-
-      const ctx2 = await browser.newContext();
-      const bob = await ctx2.newPage();
-      await bob.goto(roomUrl);
-      await bob.getByLabel(/display name/i).fill("Bob");
-      await bob.getByRole("button", { name: /join/i }).click();
-      await expect(bob.getByText(/Phase: WRITE/i)).toBeVisible();
-      await expect(bob.getByRole("button", { name: /configure columns/i })).toHaveCount(0);
-      await expect(bob.getByRole("button", { name: /advance to next phase/i })).toHaveCount(0);
-
-      await createWriteColumn(alice, "Same");
-      await createWriteColumn(alice, "Other");
-      const writeState = await alice.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomId) as { columns: { id: string; name: string; order: number }[] };
-      const sameColumnId = writeState.columns.find((column) => column.name === "Same")!.id;
-      const otherColumnId = writeState.columns.find((column) => column.name === "Other")!.id;
-
-      await alice.locator(".column-config__item", { hasText: "Same" }).getByRole("button", { name: "Edit" }).click();
-      await alice.getByLabel(/edit Same column name/i).fill("Primary");
-      await alice.getByRole("button", { name: "Save" }).click();
-      await expect(bob.getByRole("heading", { name: "Primary" })).toBeVisible({ timeout: 5000 });
-      await alice.locator(".column-config__item", { hasText: "Primary" }).getByRole("button", { name: /move Primary column right/i }).click();
-      await expect(bob.locator(".column-board__column").first()).toContainText("Other", { timeout: 5000 });
-
-      for (const [page, columnName] of [
-        [alice, "Primary"],
-        [bob, "Primary"],
-        [alice, "Other"],
-      ] as const) {
-        await page.getByLabel(/column for new item/i).selectOption({ label: columnName });
-        await page.getByPlaceholder(/add a retro item/i).fill("Duplicate item");
-        await page.getByRole("button", { name: /add item/i }).click();
-      }
-      await expect(alice.locator(".column-board__column", { hasText: "Primary" }).getByText("Duplicate item")).toHaveCount(2, { timeout: 5000 });
-      await expect(bob.locator(".column-board__column", { hasText: "Other" }).getByText("Duplicate item")).toBeVisible({ timeout: 5000 });
-
-      const afterWrite = await alice.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomId) as { columns: { id: string; name: string; order: number }[]; items: { id: string; text: string; authorId: string; columnId: string; groupId: string | null }[] };
-      expect(afterWrite.columns.find((column) => column.id === sameColumnId)).toMatchObject({ name: "Primary", order: 1 });
-      expect(afterWrite.columns.find((column) => column.id === otherColumnId)).toMatchObject({ name: "Other", order: 0 });
-      expect(afterWrite.items.filter((item) => item.text === "Duplicate item")).toHaveLength(3);
-      expect(afterWrite.items.filter((item) => item.columnId === sameColumnId)).toHaveLength(2);
-      expect(afterWrite.items.filter((item) => item.columnId === otherColumnId)).toHaveLength(1);
-
-      await alice.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(bob.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
-      for (const columnName of ["Primary", "Other"] as const) {
-        const lane = alice.locator(".column-board__column", { hasText: columnName });
-        await lane.getByPlaceholder(/new group name/i).fill("Duplicate theme");
-        await lane.getByRole("button", { name: /create group/i }).click();
-        await expect(bob.locator(".column-board__column", { hasText: columnName }).getByText("Duplicate theme")).toBeVisible({ timeout: 5000 });
-      }
-      const organiseState = await alice.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomId) as { groups: { id: string; name: string; columnId: string }[]; items: { id: string; text: string; columnId: string; groupId: string | null }[] };
-      const primaryGroup = organiseState.groups.find((group) => group.columnId === sameColumnId)!;
-      const otherGroup = organiseState.groups.find((group) => group.columnId === otherColumnId)!;
-      const primaryItems = organiseState.items.filter((item) => item.columnId === sameColumnId);
-      const otherItem = organiseState.items.find((item) => item.columnId === otherColumnId)!;
-
-      await dragItemIdToDropZone(alice, primaryItems[0]!.id, primaryGroup.id, 0);
-      await expect(bob.locator(`[data-drop-list="${primaryGroup.id}"] [data-drag-item-id="${primaryItems[0]!.id}"]`)).toBeVisible({ timeout: 5000 });
-      await dragItemIdToDropZone(alice, otherItem.id, otherGroup.id, 0);
-      await expect(bob.locator(`[data-drop-list="${otherGroup.id}"] [data-drag-item-id="${otherItem.id}"]`)).toBeVisible({ timeout: 5000 });
-
-      await alice.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(alice.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
-      await expect(bob.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
-      const columnConfigToggle = alice.getByRole("button", { name: /configure columns/i });
-      if ((await columnConfigToggle.getAttribute("aria-expanded")) !== "true") {
-        await columnConfigToggle.click();
-      }
-      await expect(alice.getByText(/column configuration is locked in vote phase/i)).toBeVisible();
-      await expect(alice.getByRole("button", { name: /add column/i })).toBeDisabled();
-      await expect(alice.getByRole("button", { name: /create group/i })).toHaveCount(0);
-      await expect(alice.locator(".item-row", { hasText: "Duplicate item" }).getByRole("button", { name: /add a vote/i })).toHaveCount(0);
-
-      await alice.locator(`[data-vote-group-id="${primaryGroup.id}"]`).getByRole("button", { name: /add a vote/i }).click();
-      await alice.locator(`[data-vote-group-id="${primaryGroup.id}"]`).getByRole("button", { name: /add a vote/i }).click();
-      await bob.locator(`[data-vote-group-id="${otherGroup.id}"]`).getByRole("button", { name: /add a vote/i }).click();
-      await expect(bob.locator(`[data-vote-group-id="${primaryGroup.id}"]`).getByText(/2 votes?/)).toBeVisible({ timeout: 5000 });
-      await expect(alice.locator(`[data-vote-group-id="${otherGroup.id}"]`).getByText(/1 vote/)).toBeVisible({ timeout: 5000 });
-
-      const voteState = await alice.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomId) as { items: { id: string; text: string; authorId: string; columnId: string; groupId: string | null }[]; votes: { participantId: string; target?: { type: "group" | "item"; id: string }; groupId?: string; count: number }[] };
-      expect(voteState.items.find((item) => item.id === primaryItems[0]!.id)).toMatchObject({ columnId: sameColumnId, groupId: primaryGroup.id, text: "Duplicate item" });
-      expect(voteState.items.find((item) => item.id === primaryItems[1]!.id)).toMatchObject({ columnId: sameColumnId, groupId: null, text: "Duplicate item" });
-      expect(voteState.items.find((item) => item.id === otherItem.id)).toMatchObject({ columnId: otherColumnId, groupId: otherGroup.id, text: "Duplicate item" });
-      expect(voteState.votes.map((vote) => ({ groupId: vote.target?.type === "group" ? vote.target.id : vote.groupId, count: vote.count })).sort((a, b) => a.groupId!.localeCompare(b.groupId!))).toEqual([
-        { groupId: otherGroup.id, count: 1 },
-        { groupId: primaryGroup.id, count: 2 },
-      ].sort((a, b) => a.groupId.localeCompare(b.groupId)));
-
-      await alice.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(alice.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
-      await expect(bob.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
-      await expect(alice.locator("[data-review-group-id]").first()).toHaveAttribute("data-review-group-id", primaryGroup.id);
-      await expect(bob.locator(`[data-review-group-id="${primaryGroup.id}"]`).getByLabel(/2 votes?/)).toBeVisible({ timeout: 5000 });
-      await expect(alice.getByRole("button", { name: /add a vote/i })).toHaveCount(0);
-      await expect(alice.getByPlaceholder(/add a retro item/i)).toHaveCount(0);
-      await alice.reload();
-      await expect(alice.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
-      await expect(alice.locator("[data-review-group-id]").first()).toHaveAttribute("data-review-group-id", primaryGroup.id);
-
-      await ctx1.close();
-      await ctx2.close();
-    });
-
-    test.skip("organise create-column form blocks maximum columns with visible feedback", async ({ page }) => {
-      await page.goto("/");
-      await page.getByRole("button", { name: /create room/i }).click();
-      await page.waitForURL(/\/room\//);
-
-      await page.getByLabel(/display name/i).fill("Alice");
-      await page.getByRole("button", { name: /join/i }).click();
-      await expect(page.getByText(/Phase: WRITE/i)).toBeVisible();
-
-      await page.getByRole("button", { name: /configure columns/i }).click();
-      for (const name of ["One", "Two", "Three", "Four", "Five"]) {
-        await page.locator(".column-config__form").getByLabel(/new column name/i).fill(name);
-        await page.getByRole("button", { name: /add column/i }).click();
-        await expect(page.getByRole("heading", { name })).toBeVisible({ timeout: 5000 });
-      }
-
-      await page.getByRole("button", { name: /configure columns/i }).click();
-      await page.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(page.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
-
-      const board = page.locator(".board-area");
-      await expect(board.getByText(/Rooms can have at most 8 columns\./i)).toBeVisible();
-      await expect(board.getByLabel(/new column name/i)).toBeDisabled();
-      await expect(board.getByRole("button", { name: /create group \/ column/i })).toBeDisabled();
-    });
-
-    test.skip("organise drag/drop moves, reorders, cancels, and syncs across participants", async ({ browser }) => {
-      const ctx1 = await browser.newContext();
-      const alice = await ctx1.newPage();
-      await alice.goto("/");
-      await alice.getByRole("button", { name: /create room/i }).click();
-      await alice.waitForURL(/\/room\//);
-      const roomUrl = alice.url();
-      const roomId = new URL(roomUrl).pathname.split("/").pop()!;
-
-      await alice.getByLabel(/display name/i).fill("Alice");
-      await alice.getByRole("button", { name: /join/i }).click();
-      await expect(alice.getByText(/Phase: WRITE/i)).toBeVisible();
-
-      for (const text of ["Drag A", "Drag B", "Drag C"]) {
-        await alice.getByPlaceholder(/add a retro item/i).fill(text);
-        await alice.getByRole("button", { name: /add item/i }).click();
-        await expect(alice.getByText(text)).toBeVisible();
-      }
-
-      const ctx2 = await browser.newContext();
-      const bob = await ctx2.newPage();
-      await bob.goto(roomUrl);
-      await bob.getByLabel(/display name/i).fill("Bob");
-      await bob.getByRole("button", { name: /join/i }).click();
-      await expect(bob.getByText(/Phase: WRITE/i)).toBeVisible();
-
-      await alice.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(alice.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
-      await expect(bob.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
-
-      await expect(alice.getByRole("dialog", { name: /move item/i })).toHaveCount(0);
-      const stateBefore = await alice.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomId) as { columns: { id: string; name: string }[]; items: { id: string; text: string; columnId: string | null; order: number }[]; version: number };
-      const stopColumnId = stateBefore.columns.find((column) => column.name === "Stop")!.id;
-
-      await dragItemToDropZone(alice, "Drag A", stopColumnId, 0);
-      await expect(bob.locator(`[data-drop-list="${stopColumnId}"]`, { hasText: "Drag A" })).toBeVisible({ timeout: 5000 });
-
-      await dragItemToDropZone(alice, "Drag B", stopColumnId, 0);
-      await expect(bob.locator(`[data-drop-list="${stopColumnId}"] [data-drag-item-id]`).first()).toContainText("Drag B", { timeout: 5000 });
-
-      const stateAfterMoves = await alice.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomId) as { items: { id: string; text: string; columnId: string | null; order: number }[]; version: number };
-      expect(stateAfterMoves.version).toBeGreaterThan(stateBefore.version);
-      expect(stateAfterMoves.items.filter((item) => item.columnId === stopColumnId).sort((a, b) => a.order - b.order).map((item) => item.text)).toEqual(["Drag B", "Drag A"]);
-      expect(stateAfterMoves.items.find((item) => item.text === "Drag A")?.id).toBe(stateBefore.items.find((item) => item.text === "Drag A")?.id);
-
-      const itemC = alice.locator("[data-drag-item-id]", { hasText: "Drag C" }).first();
-      const itemCHandle = itemC.getByRole("button", { name: /drag Drag C/i });
-      const itemCBox = await itemCHandle.boundingBox();
-      expect(itemCBox).not.toBeNull();
-      await itemCHandle.dispatchEvent("pointerdown", {
-        pointerId: 5,
-        pointerType: "mouse",
-        button: 0,
-        clientX: itemCBox!.x + itemCBox!.width / 2,
-        clientY: itemCBox!.y + itemCBox!.height / 2,
-      });
-      await expect(alice.locator("[data-drop-zone='true']").first()).toBeVisible();
-      await alice.keyboard.press("Escape");
-      await expect(alice.locator("[data-drop-zone='true']").first()).not.toBeVisible();
-
-      const stateAfterCancel = await alice.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomId) as { items: { text: string; columnId: string | null; order: number }[]; version: number };
-      expect(stateAfterCancel).toEqual(stateAfterMoves);
-
-      await ctx1.close();
-      await ctx2.close();
-    });
-
-    test.skip("touch drag works in a scrollable organise container", async ({ browser }) => {
-      const ctx = await browser.newContext({
-        hasTouch: true,
-        isMobile: true,
-        viewport: { width: 390, height: 844 },
-      });
-      const page = await ctx.newPage();
-      await page.goto("/");
-      await page.getByRole("button", { name: /create room/i }).click();
-      await page.waitForURL(/\/room\//);
-      const roomId = new URL(page.url()).pathname.split("/").pop()!;
-      await page.getByLabel(/display name/i).fill("Alice");
-      await page.getByRole("button", { name: /join/i }).click();
-      await expect(page.getByText(/Phase: WRITE/i)).toBeVisible();
-
-      for (const text of ["Touch A", "Touch B", "Touch C", "Touch D", "Touch E"]) {
-        await page.getByPlaceholder(/add a retro item/i).fill(text);
-        await page.getByRole("button", { name: /add item/i }).click();
-        await expect(page.getByText(text)).toBeVisible();
-      }
-
-      await page.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(page.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
-      const stateBefore = await page.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomId) as { columns: { id: string; name: string }[]; version: number };
-      const continueColumnId = stateBefore.columns.find((column) => column.name === "Continue")!.id;
-
-      await page.locator(`[data-drop-list="${continueColumnId}"]`).scrollIntoViewIfNeeded();
-      await touchDragItemToDropZone(page, "Touch E", continueColumnId, 0);
-
-      const stateAfter = await page.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomId) as { items: { text: string; columnId: string | null; order: number }[]; version: number };
-      expect(stateAfter.version).toBeGreaterThan(stateBefore.version);
-      expect(stateAfter.items.find((item) => item.text === "Touch E")?.columnId).toBe(continueColumnId);
-
-      await ctx.close();
-    });
-
-    test.skip("mobile repeated controls meet touch target baseline", async ({ browser }) => {
-      const ctx = await browser.newContext({
-        hasTouch: true,
-        isMobile: true,
-        viewport: { width: 390, height: 844 },
-      });
-      const page = await ctx.newPage();
-      await page.goto("/");
-      await page.getByRole("button", { name: /create room/i }).click();
-      await page.waitForURL(/\/room\//);
-      await page.getByLabel(/display name/i).fill("Alice");
-      await page.getByRole("button", { name: /join/i }).click();
-      await expect(page.getByText(/Phase: WRITE/i)).toBeVisible();
-
-      await page.getByPlaceholder(/add a retro item/i).fill("Touch target item");
-      await page.getByRole("button", { name: /add item/i }).click();
-      await page.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(page.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
-
-      const controls = [
-        page.getByRole("button", { name: /drag Touch target item/i }).first(),
-        page.getByRole("button", { name: /create group \/ column/i }),
-        page.getByRole("button", { name: /advance to next phase/i }),
-      ];
-
-      for (const control of controls) {
-        const box = await control.boundingBox();
-        expect(box).not.toBeNull();
-        expect(box!.width).toBeGreaterThanOrEqual(44);
-        expect(box!.height).toBeGreaterThanOrEqual(44);
-      }
-
-      await ctx.close();
-    });
-
-    test.skip("full two-user retro flow through all phases", async ({ browser }) => {
-      // Create room as Alice (facilitator)
-      const ctx1 = await browser.newContext();
-      const alice = await ctx1.newPage();
-      await alice.goto("/");
-      await alice.getByRole("button", { name: /create room/i }).click();
-      await alice.waitForURL(/\/room\//);
-      const roomUrl = alice.url();
-
-      await alice.getByLabel(/display name/i).fill("Alice");
-      await alice.getByRole("button", { name: /join/i }).click();
-      await expect(alice.getByText(/Phase: WRITE/i)).toBeVisible();
-
-      // Bob joins
-      const ctx2 = await browser.newContext();
-      const bob = await ctx2.newPage();
-      await bob.goto(roomUrl);
-      await bob.getByLabel(/display name/i).fill("Bob");
-      await bob.getByRole("button", { name: /join/i }).click();
-      await expect(bob.getByText(/Phase: WRITE/i)).toBeVisible();
-
-      // Both see each other
-      await expect(alice.getByText(/Bob/)).toBeVisible({ timeout: 5000 });
-      await expect(bob.getByText(/Alice/)).toBeVisible({ timeout: 5000 });
-
-      // === WRITE PHASE ===
-      // Alice adds items
-      await alice.getByPlaceholder(/add a retro item/i).fill("Improve standups");
-      await alice.getByRole("button", { name: /add/i }).click();
-      await alice.getByPlaceholder(/add a retro item/i).fill("Better docs");
-      await alice.getByRole("button", { name: /add/i }).click();
-
-      // Bob sees the items
-      await expect(bob.getByText("Improve standups")).toBeVisible({ timeout: 5000 });
-      await expect(bob.getByText("Better docs")).toBeVisible({ timeout: 5000 });
-
-      // Bob adds an item
-      await bob.getByPlaceholder(/add a retro item/i).fill("More pair programming");
-      await bob.getByRole("button", { name: /add/i }).click();
-
-      // Alice sees Bob's item
-      await expect(alice.getByText("More pair programming")).toBeVisible({ timeout: 5000 });
-
-      // === ADVANCE TO ORGANISE ===
-      await alice.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(alice.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
-      await expect(bob.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
-
-      // Bob cannot advance phase (no facilitator controls)
-      await expect(bob.getByRole("button", { name: /advance to next phase/i })).toHaveCount(0);
-
-      // Create a group
-      await alice.getByPlaceholder(/new group name/i).fill("Process");
-      await alice.getByRole("button", { name: /create group/i }).click();
-      await expect(alice.getByText("Process")).toBeVisible();
-
-      // === ADVANCE TO VOTE ===
-      await alice.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(alice.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
-      await expect(bob.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
-
-      // Both can vote
-      const aliceVoteButtons = alice.getByRole("button", { name: /add a vote/i });
-      await expect(aliceVoteButtons.first()).toBeVisible({ timeout: 5000 });
-      await aliceVoteButtons.first().click();
-      await alice.getByRole("button", { name: /add a vote/i }).first().click();
-
-      const bobVoteButtons = bob.getByRole("button", { name: /add a vote/i });
-      await expect(bobVoteButtons.first()).toBeVisible({ timeout: 5000 });
-      await bobVoteButtons.first().click();
-
-      // Wait for vote sync
-      await alice.waitForTimeout(2000);
-
-      // Check vote totals are present (the first item should have votes)
-      await expect(alice.getByText(/3 votes?/).first()).toBeVisible({ timeout: 5000 });
-
-      // === ADVANCE TO REVIEW ===
-      await alice.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(alice.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
-      await expect(bob.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
-
-      // Review shows results
-      await expect(alice.getByText(/Results are read-only/i)).toBeVisible();
-      await expect(bob.getByText(/Results are read-only/i)).toBeVisible();
-
-      // Items are present in review
-      await expect(alice.getByText("Improve standups")).toBeVisible();
-      await expect(alice.getByText("Better docs")).toBeVisible();
-      await expect(alice.getByText("More pair programming")).toBeVisible();
-
-      await ctx1.close();
-      await ctx2.close();
-    });
-
-    test.skip("room isolation: separate rooms are independent", async ({ browser }) => {
-      // Create Room A
-      const ctxA = await browser.newContext();
-      const pageA = await ctxA.newPage();
-      await pageA.goto("/");
-      await pageA.getByRole("button", { name: /create room/i }).click();
-      await pageA.waitForURL(/\/room\//);
-      const roomAUrl = pageA.url();
-      await pageA.getByLabel(/display name/i).fill("Alice");
-      await pageA.getByRole("button", { name: /join/i }).click();
-      await expect(pageA.getByText(/Phase: WRITE/i)).toBeVisible();
-
-      // Create Room B
-      const ctxB = await browser.newContext();
-      const pageB = await ctxB.newPage();
-      await pageB.goto("/");
-      await pageB.getByRole("button", { name: /create room/i }).click();
-      await pageB.waitForURL(/\/room\//);
-      const roomBUrl = pageB.url();
-      await pageB.getByLabel(/display name/i).fill("Bob");
-      await pageB.getByRole("button", { name: /join/i }).click();
-      await expect(pageB.getByText(/Phase: WRITE/i)).toBeVisible();
-
-      // Room URLs should be different
-      expect(roomAUrl).not.toBe(roomBUrl);
-
-      // Add item in Room A
-      await pageA.getByPlaceholder(/add a retro item/i).fill("Room A item");
-      await pageA.getByRole("button", { name: /add/i }).click();
-
-      // Room B should not see Room A's item
-      await expect(pageB.getByText("Room A item")).not.toBeVisible({ timeout: 3000 });
-
-      // Add item in Room B
-      await pageB.getByPlaceholder(/add a retro item/i).fill("Room B item");
-      await pageB.getByRole("button", { name: /add/i }).click();
-
-      // Room A should not see Room B's item
-      await expect(pageA.getByText("Room B item")).not.toBeVisible({ timeout: 3000 });
-
-      await ctxA.close();
-      await ctxB.close();
-    });
-
-    test.skip("same browser rooms keep identical labels and dragged layouts isolated through review and refresh", async ({ browser }) => {
-      const ctx = await browser.newContext();
-      const roomA = await ctx.newPage();
-      await roomA.goto("/");
-      await roomA.getByRole("button", { name: /create room/i }).click();
-      await roomA.waitForURL(/\/room\//);
-      const roomAUrl = roomA.url();
-      const roomAId = new URL(roomAUrl).pathname.split("/").pop()!;
-      await roomA.getByLabel(/display name/i).fill("Alice");
-      await roomA.getByRole("button", { name: /join/i }).click();
-      await expect(roomA.getByText(/Phase: WRITE/i)).toBeVisible();
-
-      const roomB = await ctx.newPage();
-      await roomB.goto("/");
-      await roomB.getByRole("button", { name: /create room/i }).click();
-      await roomB.waitForURL(/\/room\//);
-      const roomBUrl = roomB.url();
-      const roomBId = new URL(roomBUrl).pathname.split("/").pop()!;
-      await roomB.getByLabel(/display name/i).fill("Alice");
-      await roomB.getByRole("button", { name: /join/i }).click();
-      await expect(roomB.getByText(/Phase: WRITE/i)).toBeVisible();
-      expect(roomAId).not.toBe(roomBId);
-
-      for (const page of [roomA, roomB]) {
-        await page.getByRole("button", { name: /configure columns/i }).click();
-        await page.getByLabel(/new column name/i).fill("Shared");
-        await page.getByRole("button", { name: /add column/i }).click();
-        await expect(page.getByRole("heading", { name: "Shared" })).toBeVisible({ timeout: 5000 });
-        await page.getByPlaceholder(/add a retro item/i).fill("Identical item");
-        await page.getByRole("button", { name: /add item/i }).click();
-        await expect(page.getByText("Identical item")).toBeVisible();
-        await page.getByRole("button", { name: /advance to next phase/i }).click();
-        await expect(page.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
-      }
-
-      const stateA = await roomA.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomAId) as { columns: { id: string; name: string }[] };
-      const stateB = await roomB.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomBId) as { columns: { id: string; name: string }[] };
-      const roomASharedId = stateA.columns.find((column) => column.name === "Shared")!.id;
-      const roomBStopId = stateB.columns.find((column) => column.name === "Stop")!.id;
-
-      await dragItemToDropZone(roomA, "Identical item", roomASharedId, 0);
-      await dragItemToDropZone(roomB, "Identical item", roomBStopId, 0);
-
-      for (const page of [roomA, roomB]) {
-        await page.getByRole("button", { name: /advance to next phase/i }).click();
-        await expect(page.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
-        await page.getByRole("button", { name: /add a vote/i }).first().click();
-        await page.getByRole("button", { name: /advance to next phase/i }).click();
-        await expect(page.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
-        await page.reload();
-        await expect(page.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
-        await expect(page.getByText("Identical item")).toBeVisible();
-      }
-
-      const finalA = await roomA.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomAId) as { items: { text: string; columnId: string | null }[]; votes: { itemId: string; count: number }[]; phase: string };
-      const finalB = await roomB.evaluate(async (id) => {
-        const response = await fetch(`/api/rooms/${id}`);
-        return response.json();
-      }, roomBId) as { items: { text: string; columnId: string | null }[]; votes: { itemId: string; count: number }[]; phase: string };
-
-      expect(finalA.phase).toBe("review");
-      expect(finalB.phase).toBe("review");
-      expect(finalA.items.find((item) => item.text === "Identical item")?.columnId).toBe(roomASharedId);
-      expect(finalB.items.find((item) => item.text === "Identical item")?.columnId).toBe(roomBStopId);
-      expect(finalA.votes).toHaveLength(1);
-      expect(finalB.votes).toHaveLength(1);
-
-      const lateCtx = await browser.newContext();
-      const lateJoiner = await lateCtx.newPage();
-      await lateJoiner.goto(roomAUrl);
-      await lateJoiner.getByLabel(/display name/i).fill("Late Alice");
-      await lateJoiner.getByRole("button", { name: /join/i }).click();
-      await expect(lateJoiner.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
-      await expect(lateJoiner.getByRole("heading", { name: "Shared" })).toBeVisible({ timeout: 5000 });
-      await expect(lateJoiner.getByText("Identical item")).toBeVisible();
-      await expect(lateJoiner.getByPlaceholder(/add a retro item/i)).toHaveCount(0);
-      await expect(lateJoiner.locator("[data-drag-item-id]")).toHaveCount(0);
-      await expect(lateJoiner.locator("li button[title='Add a vote']")).toHaveCount(0);
-
-      await lateCtx.close();
-      await ctx.close();
-    });
-
-    test.skip("refresh preserves room state in each phase", async ({ browser }) => {
-      const ctx = await browser.newContext();
-      const page = await ctx.newPage();
-      await page.goto("/");
-      await page.getByRole("button", { name: /create room/i }).click();
-      await page.waitForURL(/\/room\//);
-      await page.getByLabel(/display name/i).fill("Alice");
-      await page.getByRole("button", { name: /join/i }).click();
-      await expect(page.getByText(/Phase: WRITE/i)).toBeVisible();
-
-      // Add an item
-      await page.getByPlaceholder(/add a retro item/i).fill("Persisted item");
-      await page.getByRole("button", { name: /add/i }).click();
-      await expect(page.getByText("Persisted item")).toBeVisible();
-
-      // Refresh in WRITE phase
-      await page.reload();
-      await expect(page.getByText("Persisted item")).toBeVisible({ timeout: 5000 });
-      await expect(page.getByText(/Phase: WRITE/i)).toBeVisible();
-
-      // Advance to ORGANISE phase
-      await page.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(page.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
-
-      // Add a group
-      await page.getByPlaceholder(/new group name/i).fill("My Group");
-      await page.getByRole("button", { name: /create group/i }).click();
-      await expect(page.getByText("My Group")).toBeVisible();
-
-      // Refresh in ORGANISE phase
-      await page.reload();
-      await expect(page.getByText("Persisted item")).toBeVisible({ timeout: 5000 });
-      await expect(page.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
-      await expect(page.getByText("My Group")).toBeVisible({ timeout: 5000 });
-
-      // Advance to VOTE phase
-      await page.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(page.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
-
-      // Refresh in VOTE phase
-      await page.reload();
-      await expect(page.getByText("Persisted item")).toBeVisible({ timeout: 5000 });
-      await expect(page.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
-
-      // Advance to REVIEW phase
-      await page.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(page.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
-
-      // Refresh in REVIEW phase
-      await page.reload();
-      await expect(page.getByText("Persisted item")).toBeVisible({ timeout: 5000 });
-      await expect(page.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
-      await expect(page.getByText(/Results are read-only/i)).toBeVisible();
-
-      await ctx.close();
-    });
-
-    test.skip("facilitator phase advance after reload updates UI without relying on WebSocket broadcast", async ({ browser }) => {
-      // This tests the fix for VAL-CROSS-002: after reload, a successful facilitator
-      // phase advance can leave the UI stuck on stale WRITE state if the WebSocket
-      // broadcast is missed during reconnect. The fix refetches authoritative room
-      // state after a successful HTTP phase mutation.
-      const ctx = await browser.newContext();
-      const page = await ctx.newPage();
-      await page.goto("/");
-      await page.getByRole("button", { name: /create room/i }).click();
-      await page.waitForURL(/\/room\//);
-      await page.getByLabel(/display name/i).fill("Alice");
-      await page.getByRole("button", { name: /join/i }).click();
-      await expect(page.getByText(/Phase: WRITE/i)).toBeVisible();
-
-      // Add an item so there's something to see
-      await page.getByPlaceholder(/add a retro item/i).fill("Item before reload");
-      await page.getByRole("button", { name: /add/i }).click();
-      await expect(page.getByText("Item before reload")).toBeVisible();
-
-      // Reload as the facilitator to simulate post-reload state
-      await page.reload();
-      await expect(page.getByText(/Phase: WRITE/i)).toBeVisible({ timeout: 5000 });
-      await expect(page.getByText("Item before reload")).toBeVisible({ timeout: 5000 });
-
-      // Advance phase — should update UI even if WebSocket broadcast is missed
-      await page.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(page.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
-
-      // Verify we are actually in organise (group creation is visible)
-      await expect(page.getByPlaceholder(/new group name/i)).toBeVisible({ timeout: 3000 });
-
-      await ctx.close();
-    });
-
-    test.skip("late join reconstructs state in each phase", async ({ browser }) => {
-      // Alice creates room and advances through phases
-      const ctx1 = await browser.newContext();
-      const alice = await ctx1.newPage();
-      await alice.goto("/");
-      await alice.getByRole("button", { name: /create room/i }).click();
-      await alice.waitForURL(/\/room\//);
-      const roomUrl = alice.url();
-      await alice.getByLabel(/display name/i).fill("Alice");
-      await alice.getByRole("button", { name: /join/i }).click();
-      await expect(alice.getByText(/Phase: WRITE/i)).toBeVisible();
-
-      // Add items
-      await alice.getByPlaceholder(/add a retro item/i).fill("Alice's item");
-      await alice.getByRole("button", { name: /add/i }).click();
-      await expect(alice.getByText("Alice's item")).toBeVisible();
-
-      // Advance to ORGANISE
-      await alice.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(alice.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
-
-      // Create a group
-      await alice.getByPlaceholder(/new group name/i).fill("Late Group");
-      await alice.getByRole("button", { name: /create group/i }).click();
-      await expect(alice.getByText("Late Group")).toBeVisible();
-
-      // Bob joins late during ORGANISE phase
-      const ctx2 = await browser.newContext();
-      const bob = await ctx2.newPage();
-      await bob.goto(roomUrl);
-      await bob.getByLabel(/display name/i).fill("Bob");
-      await bob.getByRole("button", { name: /join/i }).click();
-
-      // Bob sees ORGANISE phase and existing items/groups
-      await expect(bob.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
-      await expect(bob.getByText("Alice's item")).toBeVisible({ timeout: 5000 });
-      await expect(bob.getByText("Late Group")).toBeVisible({ timeout: 5000 });
-
-      // Advance to VOTE
-      await alice.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(alice.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
-      await expect(bob.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
-
-      // Carol joins late during VOTE phase
-      const ctx3 = await browser.newContext();
-      const carol = await ctx3.newPage();
-      await carol.goto(roomUrl);
-      await carol.getByLabel(/display name/i).fill("Carol");
-      await carol.getByRole("button", { name: /join/i }).click();
-
-      // Carol sees VOTE phase and existing items
-      await expect(carol.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
-      await expect(carol.getByText("Alice's item")).toBeVisible({ timeout: 5000 });
-
-      // Advance to REVIEW
-      await alice.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(alice.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
-      await expect(bob.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
-      await expect(carol.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
-
-      // Dave joins late during REVIEW phase
-      const ctx4 = await browser.newContext();
-      const dave = await ctx4.newPage();
-      await dave.goto(roomUrl);
-      await dave.getByLabel(/display name/i).fill("Dave");
-      await dave.getByRole("button", { name: /join/i }).click();
-
-      // Dave sees REVIEW phase and results
-      await expect(dave.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
-      await expect(dave.getByText("Alice's item")).toBeVisible({ timeout: 5000 });
-      await expect(dave.getByText(/Results are read-only/i)).toBeVisible({ timeout: 5000 });
-
-      await ctx1.close();
-      await ctx2.close();
-      await ctx3.close();
-      await ctx4.close();
-    });
+  test("setup cannot advance with zero columns", async ({ page }) => {
+    await createJoinedRoom(page, "Setup QA");
+
+    for (const column of ["Mad", "Glad", "Sad"]) {
+      await page.getByRole("button", { name: new RegExp(`delete ${column} column`, "i") }).click();
+      await expect(page.locator(".column-config__count")).toContainText(/\d\/8/);
+    }
+
+    await expect(page.locator(".column-config__count")).toContainText("0/8");
+    await page.getByRole("button", { name: /advance to write/i }).click();
+    await expectPhase(page, "Setup");
+    await expect(page.getByText(/Add at least one column before starting write phase/i)).toBeVisible();
   });
 
-  test.describe("Phase-specific controls", () => {
-    test("write phase shows add item form, other phases do not", async ({ browser }) => {
-      const ctx = await browser.newContext();
-      const page = await ctx.newPage();
-      await page.goto("/");
-      await page.getByRole("button", { name: /create room/i }).click();
-      await page.waitForURL(/\/room\//);
-      await page.getByLabel(/display name/i).fill("Alice");
-      await page.getByRole("button", { name: /join/i }).click();
-      await expect(page.getByText(/Phase: WRITE/i)).toBeVisible();
+  test("score voting locks vote budget after setup and completes export flow", async ({ page }) => {
+    const roomId = await createJoinedRoom(page, "Score QA");
+    await page.getByLabel(/vote budget/i).fill("3");
+    await page.getByRole("button", { name: /^set$/i }).click();
+    await expect(page.getByText(/Vote budget updated/i)).toBeVisible();
 
-      // Write phase has add item form
-      await expect(page.getByPlaceholder(/add a retro item/i)).toBeVisible();
+    await advanceTo(page, "Write");
+    await expect(page.getByLabel(/vote budget/i)).toHaveCount(0);
+    await addItem(page, "Score target");
 
-      // Advance to organise
-      await page.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(page.getByText(/Phase: ORGANISE/i)).toBeVisible({ timeout: 5000 });
+    const lockedBudget = await page.evaluate(async (id) => {
+      const participantId = localStorage.getItem(`retro-participant-${id}`);
+      const response = await fetch(`/api/rooms/${id}/vote-budget`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ participantId, budget: 1 }),
+      });
+      return response.json();
+    }, roomId) as { success: boolean; error?: string };
+    expect(lockedBudget).toMatchObject({ success: false, error: "Vote budget can only be changed during setup" });
 
-      // Organise phase should not have add item form
-      await expect(page.getByPlaceholder(/add a retro item/i)).not.toBeVisible();
+    await advanceTo(page, "Organise");
+    await advanceTo(page, "Vote");
+    await page.getByRole("button", { name: /add a vote to Score target/i }).click();
+    await expect(page.getByText(/1 used \/ 3 total/i)).toBeVisible();
+    await advanceTo(page, "Review");
+    await expect(page.getByText(/Score target/i)).toBeVisible();
+    await advanceTo(page, "Finalize");
+    await expect(page.getByText(/Export this retro/i)).toBeVisible();
+    await expect(page.getByText(/Actions preview/i)).toBeVisible();
+  });
 
-      // Advance to vote
-      await page.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(page.getByText(/Phase: VOTE/i)).toBeVisible({ timeout: 5000 });
+  test("pairwise ranking compares decision targets across the whole board", async ({ page }) => {
+    await createJoinedRoom(page, "Pairwise QA");
+    await page.getByRole("radio", { name: /Pairwise ranking/i }).click();
+    await expect(page.getByRole("radio", { name: /Pairwise ranking/i })).toHaveAttribute("aria-checked", "true");
 
-      // Vote phase should not have add item form
-      await expect(page.getByPlaceholder(/add a retro item/i)).not.toBeVisible();
+    await advanceTo(page, "Write");
+    await addItem(page, "Mad target one", "Mad");
+    await addItem(page, "Mad target two", "Mad");
+    await addItem(page, "Glad target", "Glad");
+    await addItem(page, "Sad target", "Sad");
+    await advanceTo(page, "Organise");
+    await advanceTo(page, "Vote");
 
-      // Advance to review
-      await page.getByRole("button", { name: /advance to next phase/i }).click();
-      await expect(page.getByText(/Phase: REVIEW/i)).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText(/0 of 6 comparisons complete/i)).toBeVisible();
+    await expect(page.getByText(/0\/6 global pairs/i)).toBeVisible();
+    await expect(page.locator(".pairwise-breakdown__item", { hasText: "Mad" })).toContainText("2 targets");
+    await expect(page.locator(".pairwise-breakdown__item", { hasText: "Glad" })).toContainText("1 target");
+    await chooseVisiblePairwiseOption(page);
+    await expect(page.getByText(/1 of 6 comparisons complete/i)).toBeVisible();
+    await chooseVisiblePairwiseOption(page);
+    await expect(page.getByText(/2 of 6 comparisons complete/i)).toBeVisible();
+    await chooseVisiblePairwiseOption(page);
+    await chooseVisiblePairwiseOption(page);
+    await chooseVisiblePairwiseOption(page);
+    await chooseVisiblePairwiseOption(page);
+    await expect(page.getByText(/6 of 6 comparisons complete/i)).toBeVisible();
+    await expect(page.getByRole("heading", { name: /All comparisons are complete/i })).toBeVisible();
+    await expect(page.getByText(/ranked over/i).first()).toBeVisible();
+  });
 
-      // Review phase should not have add item form
-      await expect(page.getByPlaceholder(/add a retro item/i)).not.toBeVisible();
+  test("pairwise progress is visible live for each participant", async ({ browser }) => {
+    const alice = await browser.newPage();
+    await createJoinedRoom(alice, "Alice");
+    await alice.getByRole("radio", { name: /Pairwise ranking/i }).click();
+    const roomUrl = alice.url();
 
-      await ctx.close();
+    const bob = await browser.newPage();
+    await bob.goto(roomUrl);
+    await bob.getByLabel(/display name/i).fill("Bob");
+    await bob.getByRole("button", { name: /^join room$/i }).click();
+    await expectPhase(bob, "Setup");
+
+    await advanceTo(alice, "Write");
+    await addItem(alice, "First target", "Mad");
+    await addItem(alice, "Second target", "Mad");
+    await addItem(alice, "Third target", "Mad");
+    await advanceTo(alice, "Organise");
+    await advanceTo(alice, "Vote");
+    await expectPhase(bob, "Vote");
+
+    await expect(alice.getByLabel(/participant ranking progress/i)).toContainText("Alice");
+    await expect(alice.getByLabel(/participant ranking progress/i)).toContainText("You");
+    await expect(alice.getByLabel(/participant ranking progress/i)).toContainText("Bob");
+    await chooseVisiblePairwiseOption(alice);
+    await expect(bob.getByLabel(/participant ranking progress/i)).toContainText("Alice");
+    await expect(bob.getByLabel(/participant ranking progress/i)).toContainText("1/3", { timeout: 5_000 });
+
+    await chooseVisiblePairwiseOption(bob);
+    await expect(alice.getByLabel(/participant ranking progress/i)).toContainText("Bob");
+    await expect(alice.getByLabel(/participant ranking progress/i)).toContainText("1/3", { timeout: 5_000 });
+
+    await alice.close();
+    await bob.close();
+  });
+
+  test("two participants see live phase and item updates", async ({ browser }) => {
+    const alice = await browser.newPage();
+    await createJoinedRoom(alice, "Alice");
+    const roomUrl = alice.url();
+
+    const bob = await browser.newPage();
+    await bob.goto(roomUrl);
+    await bob.getByLabel(/display name/i).fill("Bob");
+    await bob.getByRole("button", { name: /^join room$/i }).click();
+    await expectPhase(bob, "Setup");
+
+    await advanceTo(alice, "Write");
+    await expectPhase(bob, "Write");
+    await addItem(bob, "Bob feedback");
+    await expect(alice.getByText(/Bob feedback/i)).toBeVisible({ timeout: 5_000 });
+
+    await alice.close();
+    await bob.close();
+  });
+
+  test("keyboard submits keep focus in card and group inputs", async ({ page }) => {
+    await createJoinedRoom(page, "Focus QA");
+    await advanceTo(page, "Write");
+
+    const madComposer = page.getByRole("form", { name: /add card to Mad/i });
+    const madInput = madComposer.getByLabel(/add a card to Mad/i);
+    await madInput.fill("Focused card");
+    await madInput.press("ControlOrMeta+Enter");
+    await expect(page.getByLabel(/Mad items/i).getByText("Focused card")).toBeVisible({ timeout: 5_000 });
+    await expect(madInput).toHaveValue("");
+    await expectFocused(madInput);
+
+    await advanceTo(page, "Organise");
+    const groupInput = page.getByLabel(/new group name for Mad/i);
+    await groupInput.fill("Focused group");
+    await groupInput.press("ControlOrMeta+Enter");
+    await expect(page.getByText("Focused group")).toBeVisible({ timeout: 5_000 });
+    await expect(groupInput).toHaveValue("");
+    await expectFocused(groupInput);
+  });
+
+  test("card reactions sync live between participants", async ({ browser }) => {
+    const alice = await browser.newPage();
+    await createJoinedRoom(alice, "Alice");
+    const roomUrl = alice.url();
+    await advanceTo(alice, "Write");
+    await addItem(alice, "Reactable card");
+
+    const bob = await browser.newPage();
+    await bob.goto(roomUrl);
+    await bob.getByLabel(/display name/i).fill("Bob");
+    await bob.getByRole("button", { name: /^join room$/i }).click();
+    await expectPhase(bob, "Write");
+    await expect(bob.getByText("Reactable card")).toBeVisible({ timeout: 5_000 });
+
+    const aliceReactions = alice.getByLabel(/Reactions for Reactable card/i).first();
+    const bobReactions = bob.getByLabel(/Reactions for Reactable card/i).first();
+
+    await aliceReactions.getByRole("button", { name: /add reaction for Reactable card/i }).click();
+    await alice.locator("emoji-picker").locator('button[aria-label*="thumbs up"]').first().click();
+    await expect(bobReactions).toContainText("1", { timeout: 5_000 });
+
+    await bobReactions.getByRole("button", { name: /add reaction for Reactable card/i }).click();
+    await bob.locator("emoji-picker").locator('button[aria-label*="thumbs up"]').first().click();
+    await expect(aliceReactions).toContainText("2", { timeout: 5_000 });
+
+    await aliceReactions.locator(".reaction-pill").first().click();
+    await expect(bobReactions).toContainText("1", { timeout: 5_000 });
+
+    await alice.close();
+    await bob.close();
+  });
+
+  test("write cards can be edited and deleted only by their author", async ({ browser }) => {
+    const alice = await browser.newPage();
+    await createJoinedRoom(alice, "Alice");
+    const roomUrl = alice.url();
+    await advanceTo(alice, "Write");
+    await addItem(alice, "Alice owned card");
+
+    const bob = await browser.newPage();
+    await bob.goto(roomUrl);
+    await bob.getByLabel(/display name/i).fill("Bob");
+    await bob.getByRole("button", { name: /^join room$/i }).click();
+    await expectPhase(bob, "Write");
+    await addItem(bob, "Bob owned card");
+    await expect(alice.getByLabel(/Mad items/i).getByText("Bob owned card")).toBeVisible();
+
+    const bobCardForAlice = alice.locator(".item-card", { hasText: "Bob owned card" });
+    await expect(bobCardForAlice.getByRole("button", { name: /edit/i })).toHaveCount(0);
+    await expect(bobCardForAlice.getByRole("button", { name: /delete/i })).toHaveCount(0);
+
+    const aliceCard = alice.locator(".item-card", { hasText: "Alice owned card" });
+    await aliceCard.getByRole("button", { name: /edit/i }).click();
+    await alice.getByLabel(/edit card/i).fill("Alice edited card");
+    await alice.getByRole("button", { name: /^save$/i }).click();
+    await expect(alice.getByLabel(/Mad items/i).getByText("Alice edited card")).toBeVisible();
+
+    const editedCard = alice.locator(".item-card", { hasText: "Alice edited card" });
+    await editedCard.getByRole("button", { name: /delete/i }).click();
+    await expect(alice.getByLabel(/Mad items/i).getByText("Alice edited card")).toHaveCount(0);
+    await expect(bob.getByLabel(/Mad items/i).getByText("Alice edited card")).toHaveCount(0);
+
+    await alice.close();
+    await bob.close();
+  });
+
+  test("invite copy fallback does not expose credentials", async ({ page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText: () => Promise.reject(new Error("denied")) },
+      });
     });
+    await createJoinedRoom(page, "Invite QA");
+    await page.getByRole("button", { name: /copy room invite link/i }).click();
+    const manualUrl = page.getByLabel(/room invite url/i);
+    await expect(manualUrl).toBeVisible();
+    await expect(manualUrl).toHaveValue(/\/room\/[A-Z0-9_-]+$/i);
+    await expect(page.locator("body")).not.toContainText(/token=|pid=|auth-[a-f0-9]{64}/i);
   });
 });

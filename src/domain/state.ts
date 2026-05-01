@@ -1,10 +1,14 @@
-import type { Phase, Participant, RetroItem, Group, Column, VoteAllocation, TimerState, RoomState, VoteTarget } from "./types";
+import type { Phase, Participant, RetroItem, Group, Column, VoteAllocation, TimerState, RoomState, VoteTarget, ActionItem, PairwiseChoice, RankingMethod, Reaction, ReactionTarget } from "./types";
 
 export const DEFAULT_COLUMNS: readonly Column[] = [
+  { id: "mad", name: "Mad", order: 0 },
+  { id: "glad", name: "Glad", order: 1 },
+  { id: "sad", name: "Sad", order: 2 },
 ] as const;
 
 export const MAX_COLUMN_NAME_LENGTH = 100;
 export const MAX_COLUMNS = 8;
+export const MAX_ACTION_TEXT_LENGTH = 240;
 
 export function getDefaultColumns(): Column[] {
   return DEFAULT_COLUMNS.map((column) => ({ ...column }));
@@ -14,12 +18,17 @@ export function createRoomState(roomId: string, voteBudget: number = 5): RoomSta
   return {
     roomId,
     schemaVersion: 2,
-    phase: "write",
+    startedAt: Date.now(),
+    phase: "setup",
     participants: [],
     items: [],
     columns: getDefaultColumns(),
     groups: [],
     votes: [],
+    rankingMethod: "score",
+    pairwiseChoices: [],
+    actions: [],
+    reactions: [],
     timer: { startedAt: null, durationSeconds: null, expired: false },
     voteBudget,
     version: 0,
@@ -45,7 +54,11 @@ export function createColumn(id: string, name: string, order: number): Column {
   return { id, name, order };
 }
 
-export const PHASE_ORDER: readonly Phase[] = ["write", "organise", "vote", "review"] as const;
+export function createActionItem(id: string, text: string, authorId: string, order: number): ActionItem {
+  return { id, text: sanitizeActionText(text), authorId, order };
+}
+
+export const PHASE_ORDER: readonly Phase[] = ["setup", "write", "organise", "vote", "review", "finalize"] as const;
 
 export function canTransition(from: Phase, to: Phase): boolean {
   const fromIndex = PHASE_ORDER.indexOf(from);
@@ -59,6 +72,10 @@ export function isPhaseAllowed(actionPhase: Phase, currentPhase: Phase): boolean
 
 export function voteTargetKey(target: VoteTarget): string {
   return `${target.type}:${target.id}`;
+}
+
+export function pairwiseComparisonKey(left: VoteTarget, right: VoteTarget): string {
+  return [voteTargetKey(left), voteTargetKey(right)].sort().join("::");
 }
 
 export function groupVoteTarget(groupId: string): VoteTarget {
@@ -88,6 +105,30 @@ export function getVoteTarget(vote: VoteAllocation): VoteTarget | null {
 
 export function sameVoteTarget(left: VoteTarget, right: VoteTarget): boolean {
   return left.type === right.type && left.id === right.id;
+}
+
+export function isAllowedReactionEmoji(emoji: string): boolean {
+  const normalized = emoji.trim();
+  if (normalized.length === 0 || normalized.length > 32) return false;
+
+  const segmenter = typeof Intl !== "undefined" && "Segmenter" in Intl
+    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+    : null;
+  if (segmenter && Array.from(segmenter.segment(normalized)).length !== 1) return false;
+
+  return /[\p{Extended_Pictographic}\p{Emoji_Presentation}\p{Regional_Indicator}]/u.test(normalized);
+}
+
+export function getReactionsForTarget(reactions: Reaction[] | undefined, target: ReactionTarget): Reaction[] {
+  return (reactions ?? []).filter((reaction) => sameVoteTarget(reaction.target, target));
+}
+
+export function getReactionCount(reactions: Reaction[] | undefined, target: ReactionTarget, emoji: string): number {
+  return getReactionsForTarget(reactions, target).filter((reaction) => reaction.emoji === emoji).length;
+}
+
+export function hasParticipantReaction(reactions: Reaction[] | undefined, participantId: string, target: ReactionTarget, emoji: string): boolean {
+  return getReactionsForTarget(reactions, target).some((reaction) => reaction.participantId === participantId && reaction.emoji === emoji);
 }
 
 export function getVotesForTarget(votes: VoteAllocation[], target: VoteTarget): number {
@@ -125,22 +166,111 @@ export interface ReviewTarget {
   columnId: string;
   order: number;
   totalVotes: number;
+  wins: number;
+  losses: number;
+  comparisons: number;
+  score: number;
+  method: RankingMethod;
 }
 
-export function getReviewTargets(state: Pick<RoomState, "columns" | "groups" | "items" | "votes">): ReviewTarget[] {
+export interface DecisionTarget {
+  target: VoteTarget;
+  columnId: string;
+  order: number;
+  label: string;
+}
+
+export interface PairwiseComparison {
+  key: string;
+  columnId: string;
+  left: DecisionTarget;
+  right: DecisionTarget;
+}
+
+export function getDecisionTargets(state: Pick<RoomState, "groups" | "items">): DecisionTarget[] {
   const groups = state.groups.map((group) => ({
     target: groupVoteTarget(group.id),
     columnId: group.columnId,
     order: group.order,
-    totalVotes: getVotesForGroup(state.votes, group.id),
+    label: group.name,
   }));
   const ungroupedItems = getUngroupedItems(state.items).map((item) => ({
     target: itemVoteTarget(item.id),
     columnId: item.columnId,
     order: item.order,
-    totalVotes: getVotesForUngroupedItem(state.votes, item.id),
+    label: item.text,
   }));
   return [...groups, ...ungroupedItems];
+}
+
+export function getPairwiseComparisons(state: Pick<RoomState, "columns" | "groups" | "items">): PairwiseComparison[] {
+  const columnOrder = new Map(state.columns.map((column) => [column.id, column.order]));
+  const sortedTargets = getDecisionTargets(state).sort((a, b) => {
+    const columnDifference = (columnOrder.get(a.columnId) ?? Number.MAX_SAFE_INTEGER) - (columnOrder.get(b.columnId) ?? Number.MAX_SAFE_INTEGER);
+    if (columnDifference !== 0) return columnDifference;
+    const orderDifference = a.order - b.order;
+    if (orderDifference !== 0) return orderDifference;
+    return voteTargetKey(a.target).localeCompare(voteTargetKey(b.target));
+  });
+
+  const comparisons: PairwiseComparison[] = [];
+  for (let leftIndex = 0; leftIndex < sortedTargets.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < sortedTargets.length; rightIndex += 1) {
+      const left = sortedTargets[leftIndex];
+      const right = sortedTargets[rightIndex];
+      if (!left || !right) continue;
+      comparisons.push({
+        key: pairwiseComparisonKey(left.target, right.target),
+        columnId: left.columnId === right.columnId ? left.columnId : "__cross_column__",
+        left,
+        right,
+      });
+    }
+  }
+
+  return comparisons;
+}
+
+export function getPairwiseChoice(
+  choices: PairwiseChoice[],
+  participantId: string,
+  left: VoteTarget,
+  right: VoteTarget,
+): PairwiseChoice | null {
+  const key = pairwiseComparisonKey(left, right);
+  return choices.find((choice) =>
+    choice.participantId === participantId
+    && pairwiseComparisonKey(choice.winner, choice.loser) === key,
+  ) ?? null;
+}
+
+export function getReviewTargets(state: Pick<RoomState, "columns" | "groups" | "items" | "votes"> & Partial<Pick<RoomState, "rankingMethod" | "pairwiseChoices">>): ReviewTarget[] {
+  const method = state.rankingMethod ?? "score";
+  const pairwiseTotals = new Map<string, { wins: number; losses: number }>();
+  for (const choice of state.pairwiseChoices ?? []) {
+    const winnerKey = voteTargetKey(choice.winner);
+    const loserKey = voteTargetKey(choice.loser);
+    const winner = pairwiseTotals.get(winnerKey) ?? { wins: 0, losses: 0 };
+    const loser = pairwiseTotals.get(loserKey) ?? { wins: 0, losses: 0 };
+    pairwiseTotals.set(winnerKey, { ...winner, wins: winner.wins + 1 });
+    pairwiseTotals.set(loserKey, { ...loser, losses: loser.losses + 1 });
+  }
+
+  return getDecisionTargets(state).map((decisionTarget) => {
+    const pairwise = pairwiseTotals.get(voteTargetKey(decisionTarget.target)) ?? { wins: 0, losses: 0 };
+    const totalVotes = getVotesForTarget(state.votes, decisionTarget.target);
+    return {
+      target: decisionTarget.target,
+      columnId: decisionTarget.columnId,
+      order: decisionTarget.order,
+      totalVotes,
+      wins: pairwise.wins,
+      losses: pairwise.losses,
+      comparisons: pairwise.wins + pairwise.losses,
+      score: method === "pairwise" ? pairwise.wins : totalVotes,
+      method,
+    };
+  });
 }
 
 export function sortReviewTargets(
@@ -149,8 +279,10 @@ export function sortReviewTargets(
 ): ReviewTarget[] {
   const columnOrder = new Map(columns.map((column) => [column.id, column.order]));
   return [...targets].sort((a, b) => {
-    const voteDifference = b.totalVotes - a.totalVotes;
-    if (voteDifference !== 0) return voteDifference;
+    const scoreDifference = b.score - a.score;
+    if (scoreDifference !== 0) return scoreDifference;
+    const comparisonDifference = b.comparisons - a.comparisons;
+    if (comparisonDifference !== 0) return comparisonDifference;
     const columnDifference = (columnOrder.get(a.columnId) ?? Number.MAX_SAFE_INTEGER) - (columnOrder.get(b.columnId) ?? Number.MAX_SAFE_INTEGER);
     if (columnDifference !== 0) return columnDifference;
     const orderDifference = a.order - b.order;
@@ -179,6 +311,14 @@ export function sanitizeItemText(text: string): string {
 
 export function isValidItemText(text: string): boolean {
   return sanitizeItemText(text).length > 0;
+}
+
+export function sanitizeActionText(text: string): string {
+  return text.trim().replace(/\s+/g, " ").slice(0, MAX_ACTION_TEXT_LENGTH);
+}
+
+export function isValidActionText(text: string): boolean {
+  return sanitizeActionText(text).length > 0;
 }
 
 export function reorderList<T>(list: T[], orderedIds: string[], idExtractor: (item: T) => string): T[] {

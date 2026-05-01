@@ -67,9 +67,35 @@ export default {
         return forwardToDO(stub, "/vote-budget", request, body);
       }
 
+      if (suffix === "ranking-method" && method === "POST") {
+        const body = await request.json() as { participantId: string; rankingMethod: string };
+        return forwardToDO(stub, "/ranking-method", request, body);
+      }
+
       if (suffix === "phase" && method === "POST") {
         const body = await request.json() as { participantId: string; phase: string };
         return forwardToDO(stub, "/phase", request, body);
+      }
+
+      if (suffix === "items" && method === "POST") {
+        const body = await request.json() as { participantId: string; text: string; columnId?: string };
+        return forwardToDO(stub, "/items", request, body);
+      }
+
+      const itemMatch = suffix.match(/^items\/([^/]+)$/);
+      if (itemMatch && method === "PATCH") {
+        const body = await request.json() as { participantId: string; text: string };
+        return forwardToDO(stub, `/items/${itemMatch[1]}`, request, body);
+      }
+
+      if (itemMatch && method === "DELETE") {
+        const body = await request.json() as { participantId: string };
+        return forwardToDO(stub, `/items/${itemMatch[1]}`, request, body);
+      }
+
+      if (suffix === "timer" && method === "POST") {
+        const body = await request.json() as { participantId: string; durationSeconds: number };
+        return forwardToDO(stub, "/timer", request, body);
       }
 
       if (suffix === "ws" && request.headers.get("Upgrade") === "websocket") {

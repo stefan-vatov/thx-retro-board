@@ -1,4 +1,6 @@
-export type Phase = "write" | "organise" | "vote" | "review";
+export type Phase = "setup" | "write" | "organise" | "vote" | "review" | "finalize";
+
+export type RankingMethod = "score" | "pairwise";
 
 export interface Participant {
   id: string;
@@ -32,6 +34,14 @@ export interface Group {
 
 export type VoteTarget = { type: "group"; id: string } | { type: "item"; id: string };
 
+export type ReactionTarget = VoteTarget;
+
+export interface Reaction {
+  participantId: string;
+  target: ReactionTarget;
+  emoji: string;
+}
+
 export interface VoteAllocation {
   participantId: string;
   /** Canonical target for this allocation. */
@@ -43,6 +53,19 @@ export interface VoteAllocation {
   count: number;
 }
 
+export interface PairwiseChoice {
+  participantId: string;
+  winner: VoteTarget;
+  loser: VoteTarget;
+}
+
+export interface ActionItem {
+  id: string;
+  text: string;
+  authorId: string;
+  order: number;
+}
+
 export interface TimerState {
   startedAt: number | null;
   durationSeconds: number | null;
@@ -52,6 +75,7 @@ export interface TimerState {
 export interface RoomState {
   schemaVersion: 2;
   roomId: string;
+  startedAt: number;
   phase: Phase;
   participants: Participant[];
   items: RetroItem[];
@@ -59,6 +83,10 @@ export interface RoomState {
   /** @deprecated Compatibility alias for columns while the UI migrates from groups to columns. */
   groups: Group[];
   votes: VoteAllocation[];
+  rankingMethod: RankingMethod;
+  pairwiseChoices: PairwiseChoice[];
+  actions: ActionItem[];
+  reactions: Reaction[];
   timer: TimerState;
   voteBudget: number;
   version: number;

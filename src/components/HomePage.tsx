@@ -1,10 +1,9 @@
 import { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowRight, Loader2, ShieldCheck, Sparkles, UsersRound } from "lucide-react";
+import { ArrowRight, CheckCircle2, Columns3, Loader2, ShieldCheck, Sparkles, Timer, UsersRound, Vote } from "lucide-react";
 import { createRoom } from "../api";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 
 export function HomePage() {
   const navigate = useNavigate();
@@ -27,58 +26,75 @@ export function HomePage() {
   }
 
   return (
-    <main className="home-hero" aria-labelledby="home-title">
-      <section className="home-hero__content" aria-label="Retro Board introduction">
-        <div className="home-hero__eyebrow">
-          <Sparkles aria-hidden="true" size={16} />
-          Clean, timed retrospectives
-        </div>
-        <h1 id="home-title" className="home-hero__title">Retro Board</h1>
-        <p className="home-hero__copy">
-          Create a private room, invite your team, and move from writing to organising, voting, and review without exposing participant credentials.
-        </p>
-        <div className="home-hero__proof" aria-label="Product highlights">
-          <span><UsersRound aria-hidden="true" size={16} /> Realtime collaboration</span>
-          <span><ShieldCheck aria-hidden="true" size={16} /> Safe invite links</span>
-        </div>
-      </section>
-
-      <Card className="home-create-card">
-        <CardHeader className="text-center">
-          <div className="home-create-card__icon" aria-hidden="true">📋</div>
-          <CardTitle className="text-2xl">Start a room</CardTitle>
-          <CardDescription>
-            You will become the facilitator and can share an invite after joining.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-4">
+    <main className="home-shell" aria-labelledby="home-title">
+      <nav className="home-nav" aria-label="Home">
+        <a className="home-nav__brand" href="/" aria-label="Retro Board home">
+          <span className="home-nav__mark" aria-hidden="true">RB</span>
+          <span>Retro Board</span>
+        </a>
+        <div className="home-nav__meta" aria-label="Product attributes">
+          <span>Private rooms</span>
+          <span>Live collaboration</span>
           <Button
             ref={createButtonRef}
-            size="lg"
-            className="h-12 w-full text-base"
+            size="sm"
+            className="home-nav__cta"
             onClick={handleCreate}
             disabled={creating}
             aria-busy={creating}
           >
-            {creating ? (
-              <>
-                <Loader2 className="loading-spinner" aria-hidden="true" />
-                Creating room…
-              </>
-            ) : (
-              <>
-                Create Room
-                <ArrowRight aria-hidden="true" />
-              </>
-            )}
+            {creating ? "Creating…" : "Start"}
           </Button>
+        </div>
+      </nav>
+      <section className="home-hero" aria-label="Retro Board introduction">
+        <div className="home-hero__copy-block">
+          <div className="home-hero__eyebrow">
+            <Sparkles aria-hidden="true" size={16} />
+            Live team retros without the ceremony
+          </div>
+          <h1 id="home-title" className="home-hero__title">Run better team retros.</h1>
+          <p className="home-hero__copy">
+            Create a private room, collect feedback, group themes, vote by column, and walk away with clear next actions.
+          </p>
+          <div className="home-hero__actions">
+            <Button
+              ref={createButtonRef}
+              size="lg"
+              className="home-hero__cta"
+              onClick={handleCreate}
+              disabled={creating}
+              aria-busy={creating}
+            >
+              {creating ? (
+                <>
+                  <Loader2 className="loading-spinner" aria-hidden="true" />
+                  Creating room…
+                </>
+              ) : (
+                <>
+                  Start a retro
+                  <ArrowRight aria-hidden="true" />
+                </>
+              )}
+            </Button>
+            <span className="home-hero__secondary">
+              <ShieldCheck size={16} aria-hidden="true" />
+              Private invite, no account setup
+            </span>
+          </div>
+          <div className="home-hero__proof" aria-label="Product highlights">
+            <span><UsersRound aria-hidden="true" size={16} /> Realtime collaboration</span>
+            <span><Timer aria-hidden="true" size={16} /> Built-in timer</span>
+            <span><Vote aria-hidden="true" size={16} /> Column-aware voting</span>
+          </div>
           {creating && (
             <p className="home-create-card__status" role="status" aria-live="polite">
               Creating a private room and preparing your facilitator join screen…
             </p>
           )}
           {error && (
-            <Alert variant="destructive">
+            <Alert variant="destructive" className="home-hero__error">
               <AlertTitle>Room creation failed</AlertTitle>
               <AlertDescription>
                 <p>{error}</p>
@@ -94,8 +110,42 @@ export function HomePage() {
               </AlertDescription>
             </Alert>
           )}
-        </CardContent>
-      </Card>
+        </div>
+
+        <div className="home-product-shot" aria-hidden="true">
+          <div className="home-product-shot__chrome">
+            <span>Retro Board</span>
+            <span>Write</span>
+          </div>
+          <div className="home-product-shot__status">
+            <span>3 columns</span>
+            <span>5 min timer</span>
+            <span>5 votes</span>
+          </div>
+          <div className="home-product-shot__lanes">
+            {[
+              ["Mad", "Planning felt rushed", "Too many late handoffs"],
+              ["Glad", "Demo landed smoothly", "Pairing unblocked release"],
+              ["Sad", "Protect QA window", "Clarify release owner"],
+            ].map(([title, first, second]) => (
+              <div key={title} className="home-product-lane">
+                <div className="home-product-lane__header">
+                  <Columns3 size={14} />
+                  <span>{title}</span>
+                </div>
+                <span>{first}</span>
+                <span>{second}</span>
+              </div>
+            ))}
+          </div>
+          <div className="home-product-shot__footer">
+            <div>
+              <CheckCircle2 size={14} />
+              Vote results stay tied to their column
+            </div>
+          </div>
+        </div>
+      </section>
     </main>
   );
 }

@@ -17,6 +17,7 @@ import {
   groupVoteTarget,
   itemVoteTarget,
   getVotesForTarget,
+  getPairwiseComparisons,
   getReviewTargets,
   sortReviewTargets,
   getVotesByParticipant,
@@ -46,12 +47,17 @@ import type { RetroItem, Group, RoomState } from "./types";
 
 function makeState(overrides: Partial<RoomState> & { roomId: string }): RoomState {
   return {
+    schemaVersion: 2,
+    startedAt: 1000,
     phase: "write",
     participants: [],
     items: [],
     columns: getDefaultColumns(),
     groups: getDefaultColumns(),
     votes: [],
+    rankingMethod: "score",
+    pairwiseChoices: [],
+    actions: [],
     timer: { startedAt: null, durationSeconds: null, expired: false },
     voteBudget: 5,
     version: 0,
@@ -60,16 +66,20 @@ function makeState(overrides: Partial<RoomState> & { roomId: string }): RoomStat
 }
 
 describe("createRoomState", () => {
-  it("creates initial room state with write phase", () => {
+  it("creates initial room state with setup phase", () => {
     const state = createRoomState("room-1");
     expect(state.roomId).toBe("room-1");
-    expect(state.phase).toBe("write");
+    expect(state.startedAt).toEqual(expect.any(Number));
+    expect(state.phase).toBe("setup");
     expect(state.participants).toEqual([]);
     expect(state.items).toEqual([]);
     expect(state.schemaVersion).toBe(2);
-    expect(state.columns).toEqual([]);
+    expect(state.columns).toEqual(getDefaultColumns());
     expect(state.groups).toEqual([]);
     expect(state.votes).toEqual([]);
+    expect(state.rankingMethod).toBe("score");
+    expect(state.pairwiseChoices).toEqual([]);
+    expect(state.actions).toEqual([]);
     expect(state.timer).toEqual({ startedAt: null, durationSeconds: null, expired: false });
     expect(state.voteBudget).toBe(5);
     expect(state.version).toBe(0);
@@ -117,6 +127,58 @@ describe("createGroup", () => {
   it("creates a group with correct fields", () => {
     const g = createGroup("g1", "Process", "col-1", 0);
     expect(g).toEqual({ id: "g1", name: "Process", columnId: "col-1", order: 0 });
+  });
+});
+
+describe("getPairwiseComparisons", () => {
+  it("creates every pair across grouped and ungrouped decision targets", () => {
+    const columns = [
+      { id: "mad", name: "Mad", order: 0 },
+      { id: "glad", name: "Glad", order: 1 },
+      { id: "sad", name: "Sad", order: 2 },
+    ];
+    const groups: Group[] = [
+      { id: "group-1", name: "Grouped mad", columnId: "mad", order: 0 },
+    ];
+    const items: RetroItem[] = [
+      { id: "mad-grouped-1", text: "Grouped one", authorId: "p1", columnId: "mad", groupId: "group-1", order: 0 },
+      { id: "mad-grouped-2", text: "Grouped two", authorId: "p1", columnId: "mad", groupId: "group-1", order: 1 },
+      { id: "mad-ungrouped", text: "Ungrouped mad", authorId: "p1", columnId: "mad", groupId: null, order: 1 },
+      { id: "glad-ungrouped", text: "Ungrouped glad", authorId: "p1", columnId: "glad", groupId: null, order: 0 },
+      { id: "sad-ungrouped", text: "Ungrouped sad", authorId: "p1", columnId: "sad", groupId: null, order: 0 },
+    ];
+
+    const comparisons = getPairwiseComparisons({ columns, groups, items });
+
+    expect(comparisons).toHaveLength(6);
+    expect(comparisons.map((comparison) => [comparison.left.label, comparison.right.label])).toEqual([
+      ["Grouped mad", "Ungrouped mad"],
+      ["Grouped mad", "Ungrouped glad"],
+      ["Grouped mad", "Ungrouped sad"],
+      ["Ungrouped mad", "Ungrouped glad"],
+      ["Ungrouped mad", "Ungrouped sad"],
+      ["Ungrouped glad", "Ungrouped sad"],
+    ]);
+  });
+
+  it("compares two decision targets even when they are in different columns", () => {
+    const columns = [
+      { id: "mad", name: "Mad", order: 0 },
+      { id: "glad", name: "Glad", order: 1 },
+    ];
+    const items: RetroItem[] = [
+      { id: "mad-1", text: "Mad one", authorId: "p1", columnId: "mad", groupId: null, order: 0 },
+      { id: "glad-1", text: "Glad one", authorId: "p1", columnId: "glad", groupId: null, order: 0 },
+    ];
+
+    const comparisons = getPairwiseComparisons({ columns, groups: [], items });
+
+    expect(comparisons).toHaveLength(1);
+    expect(comparisons[0]).toMatchObject({
+      columnId: "__cross_column__",
+      left: expect.objectContaining({ label: "Mad one" }),
+      right: expect.objectContaining({ label: "Glad one" }),
+    });
   });
 });
 
@@ -199,7 +261,7 @@ describe("column helpers", () => {
 
 describe("PHASE_ORDER", () => {
   it("contains phases in correct order", () => {
-    expect(PHASE_ORDER).toEqual(["write", "organise", "vote", "review"]);
+    expect(PHASE_ORDER).toEqual(["setup", "write", "organise", "vote", "review", "finalize"]);
   });
 });
 
@@ -208,6 +270,7 @@ describe("canTransition", () => {
     expect(canTransition("write", "organise")).toBe(true);
     expect(canTransition("organise", "vote")).toBe(true);
     expect(canTransition("vote", "review")).toBe(true);
+    expect(canTransition("review", "finalize")).toBe(true);
   });
 
   it("rejects same-phase transition", () => {
@@ -217,11 +280,13 @@ describe("canTransition", () => {
   it("rejects backward transitions", () => {
     expect(canTransition("organise", "write")).toBe(false);
     expect(canTransition("review", "vote")).toBe(false);
+    expect(canTransition("finalize", "review")).toBe(false);
   });
 
   it("rejects skipping phases", () => {
     expect(canTransition("write", "vote")).toBe(false);
     expect(canTransition("write", "review")).toBe(false);
+    expect(canTransition("vote", "finalize")).toBe(false);
   });
 });
 

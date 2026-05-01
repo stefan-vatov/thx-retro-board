@@ -14,12 +14,14 @@ function makeRoomState(groups: Group[], items: RetroItem[] = [], votes: RoomStat
   return {
     schemaVersion: 2,
     roomId: "room-review-slideshow",
+    startedAt: 1000,
     phase: "review",
     participants: [{ id: "fac1", displayName: "Alice", isFacilitator: true }],
     columns,
     groups,
     items,
     votes,
+    actions: [],
     timer: { startedAt: null, durationSeconds: null, expired: false },
     voteBudget: 5,
     version: 1,
@@ -114,6 +116,23 @@ describe("ReviewBoard slideshow", () => {
 
     expect(markup).toContain("No review targets yet.");
     expect(markup).toContain("Add ungrouped items or create groups before review to produce slides.");
+    expect(markup).toContain("Assign next steps");
     expect(markup).not.toContain("Slide 1");
+  });
+
+  it("renders saved action items during review", () => {
+    const markup = renderToStaticMarkup(
+      createElement(ReviewBoard, {
+        roomState: {
+          ...makeRoomState([]),
+          actions: [{ id: "action-1", text: "Book rollout follow-up", authorId: "fac1", order: 0 }],
+        },
+      }),
+    );
+
+    expect(markup).toContain("Action items");
+    expect(markup).toContain("Book rollout follow-up");
+    expect(markup).toContain("Edit action 1");
+    expect(markup).toContain("Delete action 1");
   });
 });

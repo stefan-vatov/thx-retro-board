@@ -1,23 +1,28 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
-import { AlertCircle, ArrowDown, ArrowUp, GripVertical, Pencil, Plus, Trash2 } from "lucide-react";
+import { AlertCircle, ArrowDown, ArrowUp, Columns3, GripVertical, Pencil, Plus, Trash2 } from "lucide-react";
 import type { RoomState, RetroItem, Group, Column } from "../domain";
 import {
   getGroupedItems,
+  groupVoteTarget,
+  itemVoteTarget,
   sanitizeGroupName,
   isValidGroupName,
   hasDuplicateGroupNameInColumn,
   MAX_COLUMN_NAME_LENGTH,
 } from "../domain";
+import { ReactionBar } from "./Reactions";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader } from "./ui/card";
 import { Input } from "./ui/input";
+import { submitFormOnModEnter } from "./form-shortcuts";
 
 interface OrganiseBoardProps {
   roomState: RoomState;
   isFacilitator: boolean;
+  participantId: string;
   send: (message: unknown) => boolean;
   serverError?: string | null;
   clearServerError?: () => void;
@@ -25,20 +30,31 @@ interface OrganiseBoardProps {
 
 interface DragStart {
   itemId: string;
+  itemText: string;
   columnId: string;
   expectedVersion: number;
   sourceGroupId: string | null;
   sourceIndex: number;
 }
 
-export function OrganiseBoard({ roomState, send, serverError = null, clearServerError }: OrganiseBoardProps) {
+interface DragPosition {
+  x: number;
+  y: number;
+}
+
+export function OrganiseBoard({ roomState, participantId, send, serverError = null, clearServerError }: OrganiseBoardProps) {
   const [newGroupNames, setNewGroupNames] = useState<Record<string, string>>({});
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editingGroupName, setEditingGroupName] = useState("");
   const [groupError, setGroupError] = useState<string | null>(null);
   const [pendingMutation, setPendingMutation] = useState(false);
   const pendingVersionRef = useRef<number | null>(null);
+  const restoreGroupFocusRef = useRef<string | null>(null);
+  const groupInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
+  const [draggingSourceColumnId, setDraggingSourceColumnId] = useState<string | null>(null);
+  const [draggingItemText, setDraggingItemText] = useState("");
+  const [dragPosition, setDragPosition] = useState<DragPosition | null>(null);
   const [activeDrop, setActiveDrop] = useState<DropTarget | null>(null);
   const [organiseActionError, setOrganiseActionError] = useState<string | null>(null);
   const activeDragCleanupRef = useRef<(() => void) | null>(null);
@@ -53,8 +69,15 @@ export function OrganiseBoard({ roomState, send, serverError = null, clearServer
     serverOrganiseError,
   ].filter((message, index, messages): message is string => typeof message === "string" && messages.indexOf(message) === index);
 
+  function restoreGroupInputFocus(columnId: string) {
+    const focusInput = () => groupInputRefs.current[columnId]?.focus();
+    window.requestAnimationFrame(focusInput);
+    window.setTimeout(focusInput, 50);
+  }
+
   function handleCreateGroup(e: React.FormEvent, column: Column) {
     e.preventDefault();
+    if (pendingMutation) return;
     setGroupError(null);
     const rawName = newGroupNames[column.id] ?? "";
     if (!isValidGroupName(rawName)) {
@@ -73,6 +96,8 @@ export function OrganiseBoard({ roomState, send, serverError = null, clearServer
     pendingVersionRef.current = roomState.version;
     setPendingMutation(true);
     setNewGroupNames((current) => ({ ...current, [column.id]: "" }));
+    restoreGroupFocusRef.current = column.id;
+    restoreGroupInputFocus(column.id);
   }
 
   useEffect(() => {
@@ -80,6 +105,13 @@ export function OrganiseBoard({ roomState, send, serverError = null, clearServer
       pendingVersionRef.current = null;
       setPendingMutation(false);
     }
+  }, [pendingMutation, roomState.version]);
+
+  useEffect(() => {
+    const columnId = restoreGroupFocusRef.current;
+    if (!columnId || pendingMutation) return;
+    restoreGroupFocusRef.current = null;
+    restoreGroupInputFocus(columnId);
   }, [pendingMutation, roomState.version]);
 
   useEffect(() => {
@@ -154,21 +186,38 @@ export function OrganiseBoard({ roomState, send, serverError = null, clearServer
     activeDragCleanupRef.current?.();
     activeDragCleanupRef.current = null;
     setDraggingItemId(null);
+    setDraggingSourceColumnId(null);
+    setDraggingItemText("");
+    setDragPosition(null);
     setActiveDrop(null);
   }, []);
 
   const readDropTarget = useCallback((event: PointerEvent): DropTarget | null => {
+    const elementAtPoint = document.elementFromPoint(event.clientX, event.clientY);
     const eventTarget = (event.target as Element | null)?.closest<HTMLElement>("[data-drop-zone='true']");
-    const target = eventTarget ?? document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-drop-zone='true']");
-    if (!target) return null;
-    const groupId = target.dataset.groupId === "__ungrouped__" ? null : target.dataset.groupId ?? null;
-    const columnId = target.dataset.dropColumnId ?? null;
-    const index = Number(target.dataset.index);
-    if (!Number.isInteger(index) || !columnId) return null;
-    return { groupId, columnId, index };
+    const target = eventTarget ?? elementAtPoint?.closest<HTMLElement>("[data-drop-zone='true']");
+    if (target) {
+      const groupId = target.dataset.groupId === "__ungrouped__" ? null : target.dataset.groupId ?? null;
+      const columnId = target.dataset.dropColumnId ?? null;
+      const index = Number(target.dataset.index);
+      if (!Number.isInteger(index) || !columnId) return null;
+      return { groupId, columnId, index };
+    }
+
+    const list = elementAtPoint?.closest<HTMLElement>("[data-drop-list]");
+    if (!list) return null;
+    const groupKey = list.dataset.dropList;
+    const groupId = groupKey === "__ungrouped__" ? null : groupKey ?? null;
+    const columnId = list.dataset.dropColumnId ?? null;
+    if (!columnId) return null;
+
+    const rows = [...list.querySelectorAll<HTMLElement>("[data-drag-item-id]")];
+    const index = rows.findIndex((row) => event.clientY < row.getBoundingClientRect().top + row.offsetHeight / 2);
+    return { groupId, columnId, index: index === -1 ? rows.length : index };
   }, []);
 
   const updateActiveDrop = useCallback((event: PointerEvent): DropTarget | null => {
+    setDragPosition({ x: event.clientX, y: event.clientY });
     const target = readDropTarget(event);
     setActiveDrop(target);
     return target;
@@ -181,12 +230,15 @@ export function OrganiseBoard({ roomState, send, serverError = null, clearServer
     if (!item) return null;
     const nextDragStart = {
       itemId,
+      itemText: item.text,
       columnId: item.columnId,
       expectedVersion: roomState.version,
       sourceGroupId: item.groupId,
       sourceIndex: item.order,
     };
     setDraggingItemId(itemId);
+    setDraggingSourceColumnId(item.columnId);
+    setDraggingItemText(item.text);
     setActiveDrop(null);
     return nextDragStart;
   }, [clearServerError, roomState.items, roomState.version]);
@@ -220,11 +272,31 @@ export function OrganiseBoard({ roomState, send, serverError = null, clearServer
   const beginPointerDrag = useCallback((event: ReactPointerEvent, itemId: string) => {
     if (event.button !== 0) return;
     event.preventDefault();
-    const currentDragStart = startDrag(itemId);
-    if (!currentDragStart) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    const startPoint = { x: event.clientX, y: event.clientY };
+    let currentDragStart: DragStart | null = null;
 
-    const onPointerMove = (pointerEvent: PointerEvent) => updateActiveDrop(pointerEvent);
-    const onPointerUp = (pointerEvent: PointerEvent) => finishPointerDrag(pointerEvent, currentDragStart);
+    const beginDragIfNeeded = (pointerEvent: PointerEvent) => {
+      if (currentDragStart) return true;
+      const distance = Math.hypot(pointerEvent.clientX - startPoint.x, pointerEvent.clientY - startPoint.y);
+      if (distance < 6) return false;
+      currentDragStart = startDrag(itemId);
+      if (!currentDragStart) return false;
+      setDragPosition({ x: pointerEvent.clientX, y: pointerEvent.clientY });
+      return true;
+    };
+
+    const onPointerMove = (pointerEvent: PointerEvent) => {
+      if (!beginDragIfNeeded(pointerEvent)) return;
+      updateActiveDrop(pointerEvent);
+    };
+    const onPointerUp = (pointerEvent: PointerEvent) => {
+      if (currentDragStart) {
+        finishPointerDrag(pointerEvent, currentDragStart);
+      } else {
+        cancelDrag();
+      }
+    };
     const onPointerCancel = () => cancelDrag();
     const onKeyDown = (keyEvent: KeyboardEvent) => {
       if (keyEvent.key === "Escape") cancelDrag();
@@ -252,19 +324,30 @@ export function OrganiseBoard({ roomState, send, serverError = null, clearServer
         <Alert className="status-msg status-msg--info drag-status" role="status" aria-live="polite">
           <GripVertical aria-hidden="true" />
           <AlertTitle>Dragging item</AlertTitle>
-          <AlertDescription>Drop on an insertion line in the same column, or press Escape to cancel.</AlertDescription>
+          <AlertDescription>Drop anywhere in a group or ungrouped area in the same column, or press Escape to cancel.</AlertDescription>
         </Alert>
       )}
 
+      {draggingItemId && dragPosition && (
+        <div
+          className="drag-preview"
+          style={{ transform: `translate3d(${dragPosition.x + 14}px, ${dragPosition.y + 14}px, 0)` }}
+          aria-hidden="true"
+        >
+          <GripVertical size={16} />
+          <span>{draggingItemText}</span>
+        </div>
+      )}
+
       {(organiseActionError || serverOrganiseError) && (
-        <Alert variant="destructive" className="status-msg status-msg--error" style={{ marginBottom: "var(--space-3)" }}>
+        <Alert variant="destructive" className="status-msg status-msg--error organise-error">
           <AlertCircle aria-hidden="true" />
           <AlertTitle>Organise change was not applied</AlertTitle>
           <AlertDescription>{organiseActionError ?? serverOrganiseError}</AlertDescription>
         </Alert>
       )}
       {feedbackMessages.length > 0 && !organiseActionError && (
-        <div id="organise-group-feedback" style={{ display: "grid", gap: "var(--space-1)", marginBottom: "var(--space-3)" }}>
+        <div id="organise-group-feedback" className="organise-feedback-stack">
           {feedbackMessages.map((message) => (
             <Alert key={message} variant="destructive" className="status-msg status-msg--error organise-feedback-alert">
               <AlertCircle aria-hidden="true" />
@@ -276,7 +359,9 @@ export function OrganiseBoard({ roomState, send, serverError = null, clearServer
 
       {sortedColumns.length === 0 ? (
         <div className="empty-state">
-          <div className="empty-state__icon">🧭</div>
+          <div className="empty-state__icon empty-state__icon--block" aria-hidden="true">
+            <Columns3 size={28} />
+          </div>
           <p className="empty-state__text">No columns to organise yet. Ask the facilitator to create columns.</p>
         </div>
       ) : (
@@ -307,6 +392,9 @@ export function OrganiseBoard({ roomState, send, serverError = null, clearServer
                 {isOrganise && (
                   <form className="input-row organise-group-form" onSubmit={(event) => handleCreateGroup(event, column)}>
                     <Input
+                      ref={(element) => {
+                        groupInputRefs.current[column.id] = element;
+                      }}
                       type="text"
                       className="input"
                       value={newGroupNames[column.id] ?? ""}
@@ -314,11 +402,11 @@ export function OrganiseBoard({ roomState, send, serverError = null, clearServer
                         setNewGroupNames((current) => ({ ...current, [column.id]: e.target.value }));
                         if (groupError) setGroupError(null);
                       }}
+                      onKeyDown={submitFormOnModEnter}
                       maxLength={MAX_COLUMN_NAME_LENGTH}
                       placeholder="New group name…"
                       aria-label={`New group name for ${column.name}`}
                       aria-describedby={feedbackMessages.length > 0 ? "organise-group-feedback" : undefined}
-                      disabled={pendingMutation}
                     />
                     <Button type="submit" variant="secondary" size="sm" className="btn btn--secondary btn--sm" disabled={pendingMutation} aria-busy={pendingMutation}>
                       <Plus aria-hidden="true" />
@@ -343,6 +431,7 @@ export function OrganiseBoard({ roomState, send, serverError = null, clearServer
                     isOrganise={isOrganise}
                     onReorderGroups={(fromIdx, toIdx) => handleReorderGroups(column.id, fromIdx, toIdx)}
                     draggingItemId={draggingItemId}
+                    draggingSourceColumnId={draggingSourceColumnId}
                     activeDrop={activeDrop}
                     onDragStart={beginPointerDrag}
                     editingGroupId={editingGroupId}
@@ -356,6 +445,9 @@ export function OrganiseBoard({ roomState, send, serverError = null, clearServer
                     }}
                     onDelete={deleteGroup}
                     feedbackId={feedbackMessages.length > 0 ? "organise-group-feedback" : undefined}
+                    roomState={roomState}
+                    participantId={participantId}
+                    send={send}
                   />
                 ))}
                 </div>
@@ -367,9 +459,13 @@ export function OrganiseBoard({ roomState, send, serverError = null, clearServer
                   emptyText="No ungrouped items."
                   isOrganise={isOrganise}
                   draggingItemId={draggingItemId}
+                  draggingSourceColumnId={draggingSourceColumnId}
                   activeDrop={activeDrop}
                   onDragStart={beginPointerDrag}
                   className="ungrouped-section"
+                  roomState={roomState}
+                  participantId={participantId}
+                  send={send}
                 />
                 </CardContent>
               </Card>
@@ -395,6 +491,7 @@ interface GroupSectionProps {
   isOrganise: boolean;
   onReorderGroups: (fromIdx: number, toIdx: number) => void;
   draggingItemId: string | null;
+  draggingSourceColumnId: string | null;
   activeDrop: DropTarget | null;
   onDragStart: (event: ReactPointerEvent, itemId: string) => void;
   editingGroupId: string | null;
@@ -405,9 +502,12 @@ interface GroupSectionProps {
   onCancelEdit: () => void;
   onDelete: (group: Group) => void;
   feedbackId?: string;
+  roomState: RoomState;
+  participantId: string;
+  send: (message: unknown) => boolean;
 }
 
-function GroupSection({ group, items, groupIndex, totalGroups, isOrganise, onReorderGroups, draggingItemId, activeDrop, onDragStart, editingGroupId, editingGroupName, onEditNameChange, onStartEdit, onSubmitEdit, onCancelEdit, onDelete, feedbackId }: GroupSectionProps) {
+function GroupSection({ group, items, groupIndex, totalGroups, isOrganise, onReorderGroups, draggingItemId, draggingSourceColumnId, activeDrop, onDragStart, editingGroupId, editingGroupName, onEditNameChange, onStartEdit, onSubmitEdit, onCancelEdit, onDelete, feedbackId, roomState, participantId, send }: GroupSectionProps) {
   const isEditing = editingGroupId === group.id;
   return (
     <Card className="group-panel" data-group-id={group.id}>
@@ -424,6 +524,7 @@ function GroupSection({ group, items, groupIndex, totalGroups, isOrganise, onReo
               className="input"
               value={editingGroupName}
               onChange={(event) => onEditNameChange(event.target.value)}
+              onKeyDown={submitFormOnModEnter}
               maxLength={MAX_COLUMN_NAME_LENGTH}
               aria-label={`Edit ${group.name} group name`}
               aria-describedby={feedbackId}
@@ -436,6 +537,9 @@ function GroupSection({ group, items, groupIndex, totalGroups, isOrganise, onReo
             <h4 className="group-panel__title">{group.name}</h4>
             <CardDescription>{items.length} grouped {items.length === 1 ? "item" : "items"}</CardDescription>
           </div>
+        )}
+        {!isEditing && (
+          <ReactionBar roomState={roomState} target={groupVoteTarget(group.id)} participantId={participantId} send={send} label={group.name} compact />
         )}
         {isOrganise && (
           <span className="group-panel__controls">
@@ -483,8 +587,12 @@ function GroupSection({ group, items, groupIndex, totalGroups, isOrganise, onReo
         emptyText="No items in this group."
         isOrganise={isOrganise}
         draggingItemId={draggingItemId}
+        draggingSourceColumnId={draggingSourceColumnId}
         activeDrop={activeDrop}
         onDragStart={onDragStart}
+        roomState={roomState}
+        participantId={participantId}
+        send={send}
       />
       </CardContent>
     </Card>
@@ -499,15 +607,21 @@ interface DragListProps {
   emptyText: string;
   isOrganise: boolean;
   draggingItemId: string | null;
+  draggingSourceColumnId: string | null;
   activeDrop: DropTarget | null;
   onDragStart: (event: ReactPointerEvent, itemId: string) => void;
   className?: string;
+  roomState: RoomState;
+  participantId: string;
+  send: (message: unknown) => boolean;
 }
 
-function DragList({ title, columnId, groupId, items, emptyText, isOrganise, draggingItemId, activeDrop, onDragStart, className }: DragListProps) {
+function DragList({ title, columnId, groupId, items, emptyText, isOrganise, draggingItemId, draggingSourceColumnId, activeDrop, onDragStart, className, roomState, participantId, send }: DragListProps) {
   const visibleItems = items.filter((item) => item.id !== draggingItemId);
   const groupKey = groupId ?? "__ungrouped__";
   const isActiveList = draggingItemId !== null && activeDrop?.groupId === groupId && activeDrop?.columnId === columnId;
+  const isCompatibleDropList = draggingItemId !== null && draggingSourceColumnId === columnId;
+  const isInvalidDropList = draggingItemId !== null && draggingSourceColumnId !== null && draggingSourceColumnId !== columnId;
   const dropZone = (index: number) => {
     const isActive = isActiveList && activeDrop?.index === index;
     return (
@@ -527,7 +641,13 @@ function DragList({ title, columnId, groupId, items, emptyText, isOrganise, drag
   };
 
   return (
-    <div className={`${className ?? ""}${isActiveList ? " drag-list--active" : ""}`} data-drop-list={groupKey} data-drop-column-id={columnId} data-drop-list-active={isActiveList ? "true" : "false"} aria-label={`${title} drop target`}>
+    <div
+      className={`${className ?? ""}${isActiveList ? " drag-list--active" : ""}${isCompatibleDropList ? " drag-list--compatible" : ""}${isInvalidDropList ? " drag-list--invalid" : ""}`}
+      data-drop-list={groupKey}
+      data-drop-column-id={columnId}
+      data-drop-list-active={isActiveList ? "true" : "false"}
+      aria-label={`${title} drop target`}
+    >
       {className && (
         <div className="section-header">
           <span className="section-title">{title}</span>
@@ -542,10 +662,6 @@ function DragList({ title, columnId, groupId, items, emptyText, isOrganise, drag
               className={`item-row item-row--draggable${draggingItemId === item.id ? " item-row--dragging" : ""}`}
               data-drag-item-id={item.id}
               aria-grabbed={draggingItemId === item.id}
-              onPointerDown={(event) => {
-                if (event.button !== 0) return;
-                onDragStart(event, item.id);
-              }}
             >
               <button
                 type="button"
@@ -565,6 +681,7 @@ function DragList({ title, columnId, groupId, items, emptyText, isOrganise, drag
                 <GripVertical aria-hidden="true" />
               </button>
               <span className="item-row__text">{item.text}</span>
+              <ReactionBar roomState={roomState} target={itemVoteTarget(item.id)} participantId={participantId} send={send} label={item.text} compact />
             </li>
             {isOrganise && dropZone(idx + 1)}
           </Fragment>

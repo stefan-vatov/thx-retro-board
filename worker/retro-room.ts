@@ -7,14 +7,22 @@ import type {
   RetroItem,
   Group,
   Column,
+  ActionItem,
+  Reaction,
+  ReactionTarget,
   VoteAllocation,
   VoteTarget,
+  PairwiseChoice,
+  RankingMethod,
   ServerToClientMessage,
   ClientToServerMessage,
 } from "../src/domain";
 import {
   sanitizeItemText,
   isValidItemText,
+  sanitizeActionText,
+  isValidActionText,
+  createActionItem,
   canTransition,
   PHASE_ORDER,
   sanitizeColumnName,
@@ -42,6 +50,9 @@ import {
   itemVoteTarget,
   sameVoteTarget,
   voteTargetKey,
+  pairwiseComparisonKey,
+  getDefaultColumns,
+  isAllowedReactionEmoji,
 } from "../src/domain";
 
 interface StoredTimer {
@@ -53,12 +64,17 @@ interface StoredTimer {
 interface StoredState {
   schemaVersion?: 2;
   roomId: string;
+  startedAt?: number;
   phase: RoomState["phase"];
   participants: Participant[];
   items: RetroItem[];
   columns?: Column[];
   groups: Group[];
   votes: VoteAllocation[];
+  rankingMethod?: RankingMethod;
+  pairwiseChoices?: PairwiseChoice[];
+  actions: ActionItem[];
+  reactions?: Reaction[];
   facilitatorId: string | null;
   voteBudget: number;
   version: number;
@@ -306,6 +322,78 @@ function normalizeVotes(votes: VoteAllocation[], participants: Participant[], gr
   return [...merged.values()];
 }
 
+function normalizeRankingMethod(method: unknown): RankingMethod {
+  return method === "pairwise" ? "pairwise" : "score";
+}
+
+function normalizePairwiseChoices(choices: PairwiseChoice[] | undefined, participants: Participant[], groups: Group[], items: RetroItem[]): PairwiseChoice[] {
+  if (!Array.isArray(choices)) return [];
+  const validParticipantIds = new Set(participants.map((participant) => participant.id));
+  const merged = new Map<string, PairwiseChoice>();
+  for (const choice of choices) {
+    if (
+      !choice
+      || typeof choice.participantId !== "string"
+      || !validParticipantIds.has(choice.participantId)
+    ) {
+      continue;
+    }
+    const winner = normalizeVoteTarget({ participantId: choice.participantId, target: choice.winner, count: 1 }, groups, items);
+    const loser = normalizeVoteTarget({ participantId: choice.participantId, target: choice.loser, count: 1 }, groups, items);
+    if (winner === null || loser === null || sameVoteTarget(winner, loser)) continue;
+    const key = `${choice.participantId}:${pairwiseComparisonKey(winner, loser)}`;
+    merged.set(key, { participantId: choice.participantId, winner, loser });
+  }
+  return [...merged.values()];
+}
+
+function normalizeActions(actions: ActionItem[] | undefined, participants: Participant[]): ActionItem[] {
+  if (!Array.isArray(actions)) return [];
+  const participantIds = new Set(participants.map((participant) => participant.id));
+  return actions
+    .filter((action): action is ActionItem =>
+      Boolean(action)
+      && typeof action.id === "string"
+      && typeof action.text === "string"
+      && typeof action.authorId === "string",
+    )
+    .map((action, index) => ({
+      id: action.id,
+      text: sanitizeActionText(action.text) || `Action ${index + 1}`,
+      authorId: participantIds.has(action.authorId) ? action.authorId : "",
+      order: Number.isInteger(action.order) ? action.order : index,
+    }))
+    .sort((a, b) => a.order - b.order)
+    .map((action, index) => ({ ...action, order: index }));
+}
+
+function normalizeReactions(reactions: Reaction[] | undefined, participants: Participant[], groups: Group[], items: RetroItem[]): Reaction[] {
+  if (!Array.isArray(reactions)) return [];
+  const participantIds = new Set(participants.map((participant) => participant.id));
+  const groupIds = new Set(groups.map((group) => group.id));
+  const itemIds = new Set(items.map((item) => item.id));
+  const merged = new Map<string, Reaction>();
+  for (const reaction of reactions) {
+    if (
+      !reaction
+      || typeof reaction.participantId !== "string"
+      || !participantIds.has(reaction.participantId)
+      || typeof reaction.emoji !== "string"
+      || !isAllowedReactionEmoji(reaction.emoji)
+      || !reaction.target
+      || (reaction.target.type !== "group" && reaction.target.type !== "item")
+      || typeof reaction.target.id !== "string"
+    ) {
+      continue;
+    }
+    if (reaction.target.type === "group" && !groupIds.has(reaction.target.id)) continue;
+    if (reaction.target.type === "item" && !itemIds.has(reaction.target.id)) continue;
+    const key = `${reaction.participantId}:${voteTargetKey(reaction.target)}:${reaction.emoji}`;
+    merged.set(key, { participantId: reaction.participantId, target: reaction.target, emoji: reaction.emoji });
+  }
+  return [...merged.values()];
+}
+
 function generateToken(): string {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
@@ -354,11 +442,16 @@ export class RetroRoom extends DurableObject<Env> {
         this.state = {
           ...stored,
           schemaVersion: 2,
-          phase: "write",
+          startedAt: Number.isFinite(stored.startedAt) ? stored.startedAt : Date.now(),
+          phase: "setup",
           items: [],
-          columns: [],
+          columns: getDefaultColumns(),
           groups: [],
           votes: [],
+          rankingMethod: "score",
+          pairwiseChoices: [],
+          actions: [],
+          reactions: [],
         };
         await this.ctx.storage.put("room", this.state);
         return this.state;
@@ -368,12 +461,19 @@ export class RetroRoom extends DurableObject<Env> {
       this.state = {
         ...stored,
         schemaVersion: 2,
+        startedAt: Number.isFinite(stored.startedAt) ? stored.startedAt : Date.now(),
         columns,
         groups,
         items: normalizeItems(stored.items ?? [], columns, groups),
         votes: [],
+        rankingMethod: normalizeRankingMethod(stored.rankingMethod),
+        pairwiseChoices: [],
+        actions: normalizeActions(stored.actions, stored.participants ?? []),
+        reactions: [],
       };
       this.state.votes = normalizeVotes(stored.votes ?? [], this.state.participants, groups, this.state.items);
+      this.state.pairwiseChoices = normalizePairwiseChoices(stored.pairwiseChoices, this.state.participants, groups, this.state.items);
+      this.state.reactions = normalizeReactions(stored.reactions, this.state.participants, groups, this.state.items);
       return this.state;
     }
     return this.state!;
@@ -390,18 +490,24 @@ export class RetroRoom extends DurableObject<Env> {
   async initRoom(roomId: string): Promise<void> {
     const existing = await this.ctx.storage.get<StoredState>("room");
     if (existing) {
-      this.state = existing;
+      this.state = null;
+      await this.loadState();
       return;
     }
     this.state = {
       schemaVersion: 2,
       roomId,
-      phase: "write",
+      startedAt: Date.now(),
+      phase: "setup",
       participants: [],
       items: [],
-      columns: [],
+      columns: getDefaultColumns(),
       groups: [],
       votes: [],
+      rankingMethod: "score",
+      pairwiseChoices: [],
+      actions: [],
+      reactions: [],
       facilitatorId: null,
       voteBudget: 5,
       version: 0,
@@ -417,12 +523,17 @@ export class RetroRoom extends DurableObject<Env> {
     return {
       schemaVersion: 2,
       roomId: s.roomId,
+      startedAt: s.startedAt ?? Date.now(),
       phase: s.phase,
       participants: s.participants,
       items: s.items,
       columns: s.columns ?? s.groups,
       groups: s.groups,
       votes: s.votes,
+      rankingMethod: s.rankingMethod ?? "score",
+      pairwiseChoices: s.pairwiseChoices ?? [],
+      actions: s.actions ?? [],
+      reactions: s.reactions ?? [],
       timer,
       voteBudget: s.voteBudget,
       version: s.version,
@@ -501,11 +612,38 @@ export class RetroRoom extends DurableObject<Env> {
     if (s.facilitatorId !== participantId) {
       return { success: false, error: "Only the facilitator can set vote budget" };
     }
+    if (s.phase !== "setup") {
+      return { success: false, error: "Vote budget can only be changed during setup" };
+    }
     if (typeof budget !== "number" || budget < 1 || budget > 100 || !Number.isInteger(budget)) {
       return { success: false, error: "Vote budget must be an integer between 1 and 100" };
     }
     s.voteBudget = budget;
     await this.saveState();
+    this.broadcastState(s);
+    return { success: true };
+  }
+
+  async setRankingMethod(participantId: string, rankingMethod: RankingMethod): Promise<{ success: boolean; error?: string }> {
+    const s = await this.loadState();
+    if (!this.hasParticipant(s, participantId)) {
+      return { success: false, error: "Participant not found" };
+    }
+    if (s.facilitatorId !== participantId) {
+      return { success: false, error: "Only the facilitator can set ranking method" };
+    }
+    if (s.phase !== "setup") {
+      return { success: false, error: "Ranking method can only be changed during setup" };
+    }
+    if (rankingMethod !== "score" && rankingMethod !== "pairwise") {
+      return { success: false, error: "Invalid ranking method" };
+    }
+
+    s.rankingMethod = rankingMethod;
+    s.votes = [];
+    s.pairwiseChoices = [];
+    await this.saveState();
+    this.broadcast({ type: "ranking-method-changed", rankingMethod });
     this.broadcastState(s);
     return { success: true };
   }
@@ -547,6 +685,166 @@ export class RetroRoom extends DurableObject<Env> {
     return { success: true, item };
   }
 
+  async editItem(participantId: string, itemId: string, rawText: string): Promise<{ success: boolean; error?: string; item?: RetroItem }> {
+    const s = await this.loadState();
+
+    if (s.phase !== "write") {
+      return { success: false, error: "Cannot edit items outside write phase" };
+    }
+    if (!this.hasParticipant(s, participantId)) {
+      return { success: false, error: "Participant not found" };
+    }
+    if (!isValidItemText(rawText)) {
+      return { success: false, error: "Item text cannot be empty" };
+    }
+
+    const itemIndex = s.items.findIndex((item) => item.id === itemId);
+    if (itemIndex === -1) {
+      return { success: false, error: "Item not found" };
+    }
+    const existing = s.items[itemIndex];
+    if (!existing || existing.authorId !== participantId) {
+      return { success: false, error: "Only the author can edit this item" };
+    }
+
+    const item = { ...existing, text: sanitizeItemText(rawText) };
+    s.items = s.items.map((candidate) => candidate.id === itemId ? item : candidate);
+    await this.saveState();
+    this.broadcastState(s);
+    return { success: true, item };
+  }
+
+  async deleteItem(participantId: string, itemId: string): Promise<{ success: boolean; error?: string }> {
+    const s = await this.loadState();
+
+    if (s.phase !== "write") {
+      return { success: false, error: "Cannot delete items outside write phase" };
+    }
+    if (!this.hasParticipant(s, participantId)) {
+      return { success: false, error: "Participant not found" };
+    }
+
+    const existing = s.items.find((item) => item.id === itemId);
+    if (!existing) {
+      return { success: false, error: "Item not found" };
+    }
+    if (existing.authorId !== participantId) {
+      return { success: false, error: "Only the author can delete this item" };
+    }
+
+    const target = itemVoteTarget(itemId);
+    s.items = s.items
+      .filter((item) => item.id !== itemId)
+      .sort((a, b) => a.order - b.order)
+      .map((item, _index, allItems) => ({
+        ...item,
+        order: allItems.filter((candidate) => candidate.columnId === item.columnId && candidate.groupId === item.groupId && candidate.order < item.order).length,
+      }));
+    s.votes = s.votes.filter((vote) => {
+      const voteTarget = getVoteTarget(vote);
+      return voteTarget === null || !sameVoteTarget(voteTarget, target);
+    });
+    s.pairwiseChoices = normalizePairwiseChoices(
+      (s.pairwiseChoices ?? []).filter((choice) => !sameVoteTarget(choice.winner, target) && !sameVoteTarget(choice.loser, target)),
+      s.participants,
+      s.groups,
+      s.items,
+    );
+    s.reactions = (s.reactions ?? []).filter((reaction) => !sameVoteTarget(reaction.target, target));
+
+    await this.saveState();
+    this.broadcastState(s);
+    return { success: true };
+  }
+
+  async createAction(participantId: string, rawText: string): Promise<{ success: boolean; error?: string; action?: ActionItem }> {
+    const s = await this.loadState();
+
+    if (s.phase !== "review") {
+      return { success: false, error: "Cannot add actions outside review phase" };
+    }
+    if (!this.hasParticipant(s, participantId)) {
+      return { success: false, error: "Participant not found" };
+    }
+    if (!isValidActionText(rawText)) {
+      return { success: false, error: "Action text cannot be empty" };
+    }
+
+    const action = createActionItem(crypto.randomUUID(), rawText, participantId, (s.actions ?? []).length);
+    s.actions = [...(s.actions ?? []), action];
+    await this.saveState();
+
+    this.broadcast({ type: "actions-changed", actions: s.actions });
+    this.broadcastState(s);
+
+    return { success: true, action };
+  }
+
+  async editAction(participantId: string, actionId: string, rawText: string): Promise<{ success: boolean; error?: string; action?: ActionItem }> {
+    const s = await this.loadState();
+
+    if (s.phase !== "review") {
+      return { success: false, error: "Cannot edit actions outside review phase" };
+    }
+    if (!this.hasParticipant(s, participantId)) {
+      return { success: false, error: "Participant not found" };
+    }
+    if (typeof actionId !== "string" || actionId.trim().length === 0) {
+      return { success: false, error: "Action not found" };
+    }
+    if (!isValidActionText(rawText)) {
+      return { success: false, error: "Action text cannot be empty" };
+    }
+
+    const actionIndex = (s.actions ?? []).findIndex((action) => action.id === actionId);
+    if (actionIndex === -1) {
+      return { success: false, error: "Action not found" };
+    }
+
+    s.actions = [...(s.actions ?? [])];
+    const existing = s.actions[actionIndex];
+    if (!existing) {
+      return { success: false, error: "Action not found" };
+    }
+    s.actions[actionIndex] = { ...existing, text: sanitizeActionText(rawText) };
+    await this.saveState();
+
+    this.broadcast({ type: "actions-changed", actions: s.actions });
+    this.broadcastState(s);
+
+    return { success: true, action: s.actions[actionIndex] };
+  }
+
+  async deleteAction(participantId: string, actionId: string): Promise<{ success: boolean; error?: string }> {
+    const s = await this.loadState();
+
+    if (s.phase !== "review") {
+      return { success: false, error: "Cannot delete actions outside review phase" };
+    }
+    if (!this.hasParticipant(s, participantId)) {
+      return { success: false, error: "Participant not found" };
+    }
+    if (typeof actionId !== "string" || actionId.trim().length === 0) {
+      return { success: false, error: "Action not found" };
+    }
+
+    const existing = s.actions ?? [];
+    if (!existing.some((action) => action.id === actionId)) {
+      return { success: false, error: "Action not found" };
+    }
+
+    s.actions = existing
+      .filter((action) => action.id !== actionId)
+      .sort((a, b) => a.order - b.order)
+      .map((action, order) => ({ ...action, order }));
+    await this.saveState();
+
+    this.broadcast({ type: "actions-changed", actions: s.actions });
+    this.broadcastState(s);
+
+    return { success: true };
+  }
+
   async setPhase(participantId: string, phase: Phase): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
 
@@ -564,6 +862,9 @@ export class RetroRoom extends DurableObject<Env> {
 
     if (!canTransition(s.phase, phase)) {
       return { success: false, error: `Cannot transition from ${s.phase} to ${phase}` };
+    }
+    if (s.phase === "setup" && phase === "write" && (s.columns ?? []).length === 0) {
+      return { success: false, error: "Add at least one column before starting write phase" };
     }
 
     s.phase = phase;
@@ -619,8 +920,8 @@ export class RetroRoom extends DurableObject<Env> {
     if (s.facilitatorId !== participantId) {
       return { success: false, error: "Only the facilitator can configure columns" };
     }
-    if (s.phase !== "write" && s.phase !== "organise") {
-      return { success: false, error: "Cannot configure columns during vote or review phase" };
+    if (s.phase !== "setup") {
+      return { success: false, error: "Columns can only be configured during setup" };
     }
     return { success: true };
   }
@@ -704,6 +1005,8 @@ export class RetroRoom extends DurableObject<Env> {
     s.groups = result.groups;
     s.items = result.items;
     s.votes = result.votes;
+    s.pairwiseChoices = normalizePairwiseChoices(s.pairwiseChoices, s.participants, s.groups, s.items);
+    s.reactions = normalizeReactions(s.reactions, s.participants, s.groups, s.items);
     await this.saveState();
     this.broadcastState(s);
     return { success: true };
@@ -833,6 +1136,8 @@ export class RetroRoom extends DurableObject<Env> {
     s.groups = result.groups;
     s.items = result.items;
     s.votes = result.votes;
+    s.pairwiseChoices = normalizePairwiseChoices(s.pairwiseChoices, s.participants, s.groups, s.items);
+    s.reactions = (s.reactions ?? []).filter((reaction) => !sameVoteTarget(reaction.target, groupVoteTarget(groupId)));
     await this.saveState();
     this.broadcastState(s);
     return { success: true };
@@ -946,6 +1251,46 @@ export class RetroRoom extends DurableObject<Env> {
     return { success: true, target };
   }
 
+  private resolveReactionTarget(target: ReactionTarget): { success: true; target: ReactionTarget } | { success: false; error: string } {
+    if (!target || (target.type !== "group" && target.type !== "item") || typeof target.id !== "string") {
+      return { success: false, error: "Reaction target not found" };
+    }
+    if (target.type === "group") {
+      return this.state?.groups.some((group) => group.id === target.id)
+        ? { success: true, target }
+        : { success: false, error: "Group not found" };
+    }
+    return this.state?.items.some((item) => item.id === target.id)
+      ? { success: true, target }
+      : { success: false, error: "Item not found" };
+  }
+
+  async toggleReaction(participantId: string, target: ReactionTarget, emoji: string): Promise<{ success: boolean; error?: string }> {
+    const s = await this.loadState();
+    if (!this.hasParticipant(s, participantId)) {
+      return { success: false, error: "Participant not found" };
+    }
+    if (!isAllowedReactionEmoji(emoji)) {
+      return { success: false, error: "Reaction emoji is not supported" };
+    }
+    const targetValidation = this.resolveReactionTarget(target);
+    if (!targetValidation.success) {
+      return { success: false, error: targetValidation.error };
+    }
+
+    const reactionKey = `${participantId}:${voteTargetKey(targetValidation.target)}:${emoji}`;
+    const existing = s.reactions ?? [];
+    const hasReaction = existing.some((reaction) =>
+      `${reaction.participantId}:${voteTargetKey(reaction.target)}:${reaction.emoji}` === reactionKey,
+    );
+    s.reactions = hasReaction
+      ? existing.filter((reaction) => `${reaction.participantId}:${voteTargetKey(reaction.target)}:${reaction.emoji}` !== reactionKey)
+      : [...existing, { participantId, target: targetValidation.target, emoji }];
+    await this.saveState();
+    this.broadcastState(s);
+    return { success: true };
+  }
+
   async castVote(participantId: string, targetOrGroupId: VoteTarget | string, count: number): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
 
@@ -955,6 +1300,9 @@ export class RetroRoom extends DurableObject<Env> {
 
     if (!this.hasParticipant(s, participantId)) {
       return { success: false, error: "Participant not found" };
+    }
+    if ((s.rankingMethod ?? "score") !== "score") {
+      return { success: false, error: "This room is using pairwise ranking" };
     }
 
     const target = typeof targetOrGroupId === "string" ? groupVoteTarget(targetOrGroupId) : targetOrGroupId;
@@ -1000,6 +1348,9 @@ export class RetroRoom extends DurableObject<Env> {
     if (!this.hasParticipant(s, participantId)) {
       return { success: false, error: "Participant not found" };
     }
+    if ((s.rankingMethod ?? "score") !== "score") {
+      return { success: false, error: "This room is using pairwise ranking" };
+    }
 
     const target = typeof targetOrGroupId === "string" ? groupVoteTarget(targetOrGroupId) : targetOrGroupId;
     const targetValidation = this.resolveVoteTarget(target);
@@ -1039,6 +1390,46 @@ export class RetroRoom extends DurableObject<Env> {
     return { success: true };
   }
 
+  async choosePairwise(participantId: string, winner: VoteTarget, loser: VoteTarget): Promise<{ success: boolean; error?: string }> {
+    const s = await this.loadState();
+
+    if (s.phase !== "vote") {
+      return { success: false, error: "Cannot rank outside vote phase" };
+    }
+    if ((s.rankingMethod ?? "score") !== "pairwise") {
+      return { success: false, error: "This room is using score voting" };
+    }
+    if (!this.hasParticipant(s, participantId)) {
+      return { success: false, error: "Participant not found" };
+    }
+
+    const winnerValidation = this.resolveVoteTarget(winner);
+    if (!winnerValidation.success) return { success: false, error: winnerValidation.error };
+    const loserValidation = this.resolveVoteTarget(loser);
+    if (!loserValidation.success) return { success: false, error: loserValidation.error };
+    if (sameVoteTarget(winnerValidation.target, loserValidation.target)) {
+      return { success: false, error: "Pairwise targets must be different" };
+    }
+
+    const choice: PairwiseChoice = {
+      participantId,
+      winner: winnerValidation.target,
+      loser: loserValidation.target,
+    };
+    const choiceKey = `${participantId}:${pairwiseComparisonKey(choice.winner, choice.loser)}`;
+    const existingChoices = s.pairwiseChoices ?? [];
+    s.pairwiseChoices = [
+      ...existingChoices.filter((candidate) => `${candidate.participantId}:${pairwiseComparisonKey(candidate.winner, candidate.loser)}` !== choiceKey),
+      choice,
+    ];
+    await this.saveState();
+
+    this.broadcast({ type: "pairwise-choice-changed", choice });
+    this.broadcastState(s);
+
+    return { success: true };
+  }
+
   private broadcast(message: ServerToClientMessage, excludeId?: string) {
     const payload = JSON.stringify(message);
     for (const [id, ws] of this.sessions) {
@@ -1053,12 +1444,17 @@ export class RetroRoom extends DurableObject<Env> {
     const state: RoomState = {
       schemaVersion: 2,
       roomId: s.roomId,
+      startedAt: s.startedAt ?? Date.now(),
       phase: s.phase,
       participants: s.participants,
       items: s.items,
       columns: s.columns ?? s.groups,
       groups: s.groups,
       votes: s.votes,
+      rankingMethod: s.rankingMethod ?? "score",
+      pairwiseChoices: s.pairwiseChoices ?? [],
+      actions: s.actions ?? [],
+      reactions: s.reactions ?? [],
       timer,
       voteBudget: s.voteBudget,
       version: s.version,
@@ -1086,9 +1482,40 @@ export class RetroRoom extends DurableObject<Env> {
       return Response.json(result);
     }
 
+    if (url.pathname === "/ranking-method" && request.method === "POST") {
+      const body = await request.json() as { participantId: string; rankingMethod: RankingMethod };
+      const result = await this.setRankingMethod(body.participantId, body.rankingMethod);
+      return Response.json(result);
+    }
+
     if (url.pathname === "/phase" && request.method === "POST") {
       const body = await request.json() as { participantId: string; phase: string };
       const result = await this.setPhase(body.participantId, body.phase as Phase);
+      return Response.json(result);
+    }
+
+    if (url.pathname === "/items" && request.method === "POST") {
+      const body = await request.json() as { participantId: string; text: string; columnId?: string };
+      const result = await this.addItem(body.participantId, body.text, body.columnId);
+      return Response.json(result);
+    }
+
+    const itemMatch = url.pathname.match(/^\/items\/([^/]+)$/);
+    if (itemMatch && request.method === "PATCH") {
+      const body = await request.json() as { participantId: string; text: string };
+      const result = await this.editItem(body.participantId, decodeURIComponent(itemMatch[1]!), body.text);
+      return Response.json(result);
+    }
+
+    if (itemMatch && request.method === "DELETE") {
+      const body = await request.json() as { participantId: string };
+      const result = await this.deleteItem(body.participantId, decodeURIComponent(itemMatch[1]!));
+      return Response.json(result);
+    }
+
+    if (url.pathname === "/timer" && request.method === "POST") {
+      const body = await request.json() as { participantId: string; durationSeconds: number };
+      const result = await this.setTimer(body.participantId, body.durationSeconds);
       return Response.json(result);
     }
 
@@ -1173,8 +1600,32 @@ export class RetroRoom extends DurableObject<Env> {
         }
         break;
       }
+      case "edit-item": {
+        const result = await this.editItem(participantId, msg.itemId, msg.text);
+        if (!result.success) {
+          const ws = this.sessions.get(participantId);
+          ws?.send(JSON.stringify({ type: "error", message: result.error }));
+        }
+        break;
+      }
+      case "delete-item": {
+        const result = await this.deleteItem(participantId, msg.itemId);
+        if (!result.success) {
+          const ws = this.sessions.get(participantId);
+          ws?.send(JSON.stringify({ type: "error", message: result.error }));
+        }
+        break;
+      }
       case "set-vote-budget": {
         const result = await this.setVoteBudget(participantId, msg.budget);
+        if (!result.success) {
+          const ws = this.sessions.get(participantId);
+          ws?.send(JSON.stringify({ type: "error", message: result.error }));
+        }
+        break;
+      }
+      case "set-ranking-method": {
+        const result = await this.setRankingMethod(participantId, msg.rankingMethod);
         if (!result.success) {
           const ws = this.sessions.get(participantId);
           ws?.send(JSON.stringify({ type: "error", message: result.error }));
@@ -1307,6 +1758,46 @@ export class RetroRoom extends DurableObject<Env> {
         }
         break;
       }
+      case "choose-pairwise": {
+        const result = await this.choosePairwise(participantId, msg.winner, msg.loser);
+        if (!result.success) {
+          const ws = this.sessions.get(participantId);
+          ws?.send(JSON.stringify({ type: "error", message: result.error }));
+        }
+        break;
+      }
+      case "toggle-reaction": {
+        const result = await this.toggleReaction(participantId, msg.target, msg.emoji);
+        if (!result.success) {
+          const ws = this.sessions.get(participantId);
+          ws?.send(JSON.stringify({ type: "error", message: result.error }));
+        }
+        break;
+      }
+      case "create-action": {
+        const result = await this.createAction(participantId, msg.text);
+        if (!result.success) {
+          const ws = this.sessions.get(participantId);
+          ws?.send(JSON.stringify({ type: "error", message: result.error }));
+        }
+        break;
+      }
+      case "edit-action": {
+        const result = await this.editAction(participantId, msg.actionId, msg.text);
+        if (!result.success) {
+          const ws = this.sessions.get(participantId);
+          ws?.send(JSON.stringify({ type: "error", message: result.error }));
+        }
+        break;
+      }
+      case "delete-action": {
+        const result = await this.deleteAction(participantId, msg.actionId);
+        if (!result.success) {
+          const ws = this.sessions.get(participantId);
+          ws?.send(JSON.stringify({ type: "error", message: result.error }));
+        }
+        break;
+      }
       default:
         break;
     }
@@ -1328,11 +1819,15 @@ export class RetroRoom extends DurableObject<Env> {
   async seedStoredStateForTest(state: Partial<StoredState> & Pick<StoredState, "roomId">): Promise<void> {
     const stored: StoredState = {
       schemaVersion: 2,
-      phase: "write",
+      startedAt: Date.now(),
+      phase: "setup",
       participants: [],
       items: [],
       groups: [],
       votes: [],
+      rankingMethod: "score",
+      pairwiseChoices: [],
+      actions: [],
       facilitatorId: null,
       voteBudget: 5,
       version: 0,

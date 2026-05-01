@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { pairwiseComparisonKey } from "../domain";
 import type { RoomState, ServerToClientMessage } from "../domain";
 
 interface UseRoomResult {
@@ -98,9 +99,23 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
             setState((prev) => prev ? { ...prev, items: msg.items } : prev);
           } else if (msg.type === "groups-changed") {
             setState((prev) => prev ? { ...prev, groups: msg.groups } : prev);
+          } else if (msg.type === "actions-changed") {
+            setState((prev) => prev ? { ...prev, actions: msg.actions } : prev);
           } else if (msg.type === "vote-changed") {
             // Vote updates come via snapshot broadcast; this handler is a no-op
             // since the snapshot will carry the full authoritative votes array.
+          } else if (msg.type === "pairwise-choice-changed") {
+            setState((prev) => {
+              if (!prev) return prev;
+              const choiceKey = `${msg.choice.participantId}:${pairwiseComparisonKey(msg.choice.winner, msg.choice.loser)}`;
+              const pairwiseChoices = [
+                ...(prev.pairwiseChoices ?? []).filter((choice) =>
+                  `${choice.participantId}:${pairwiseComparisonKey(choice.winner, choice.loser)}` !== choiceKey,
+                ),
+                msg.choice,
+              ];
+              return { ...prev, pairwiseChoices };
+            });
           } else if (msg.type === "timer-updated") {
             setState((prev) => prev ? { ...prev, timer: msg.timer } : prev);
           } else if (msg.type === "error") {
