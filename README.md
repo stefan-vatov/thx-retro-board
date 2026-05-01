@@ -1,129 +1,191 @@
-# Retro Board
+# THX Retro Board
 
-A real-time team retrospective board built with Vite, React, TypeScript, and Cloudflare Workers with Durable Objects.
+> Run focused team retros, rank the signal, and export clean outcomes.
 
-## Overview
+<p>
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-6-3178c6?style=flat-square&logo=typescript&logoColor=white">
+  <img alt="React" src="https://img.shields.io/badge/React-19-149eca?style=flat-square&logo=react&logoColor=white">
+  <img alt="Cloudflare Workers" src="https://img.shields.io/badge/Cloudflare-Workers-f38020?style=flat-square&logo=cloudflare&logoColor=white">
+  <img alt="Vite" src="https://img.shields.io/badge/Vite-8-646cff?style=flat-square&logo=vite&logoColor=white">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-vitest%20%2B%20playwright-2f855a?style=flat-square">
+</p>
 
-Retro Board is a polished collaborative web application for running team retrospectives. Multiple participants join the same room through a shared link, enter a display name, and collaborate through timed phases controlled by the facilitator in a clean shadcn/Tailwind SaaS-style, responsive full-width interface.
+THX Retro Board is a real-time retrospective app for small teams that need more than a pile of sticky notes. It gives the facilitator a structured flow, gives participants a fast collaborative board, and turns the final discussion into exports you can analyze later.
 
-The app is designed for production use on Cloudflare, with accessible controls, keyboard-friendly interactions, responsive layouts, reduced-motion support, mobile-friendly resilience, and considered loading, error, reconnect, focus-recovery, and empty states throughout the retro flow.
+It runs as a Cloudflare Worker with Durable Objects, so each room has a server-authoritative state owner, real-time WebSocket sync, and no separate app server to operate.
 
-### Phases
+## Why It Exists
 
-1. **Write** — Participants add retro items into facilitator-created kanban list columns. Rooms begin with no fixed default columns, so the facilitator defines the board structure before collecting feedback.
-2. **Organise** — Participants group, regroup, reorder, and ungroup items within each column. Drag-and-drop is constrained to the same column so each item's original column context is preserved.
-3. **Vote** — Participants allocate votes within a facilitator-configured budget across mixed targets: grouped items are voted through their group target, while ungrouped items remain individually votable. Vote stacking on a single target is allowed, with responsive budget and selection feedback.
-4. **Review** — Presentation-ready slideshow results include groups and ungrouped items sorted together by total votes, with deterministic tie-breakers and each target shown in its column context.
+Most retro tools stop at collection. Teams still have to fight through duplicates, vague priorities, and action items that disappear after the call.
 
-## Architecture
+THX Retro Board keeps the session moving:
 
-- **React SPA** with a clean shadcn/Tailwind SaaS-style responsive full-width UI, served through the Cloudflare Vite plugin and Workers Static Assets
-- **RetroRoom Durable Object** (one per room) as the server-authoritative owner of room state: participants, phase, timer, user-created columns, item placement, column-scoped groups, ordering, and mixed group/item votes
-- **SQLite-backed Durable Object storage** for canonical room snapshots
-- **WebSocket Hibernation API** for real-time state synchronization across connected clients
-- **WebSocket credentials via subprotocols** so participant IDs and cryptographic tokens are not placed in the WebSocket URL
-- **TypeScript shared domain types** used by both client and server
-- **Production Cloudflare configuration** for Worker deployment, Durable Object bindings, migrations, and static asset serving
+- **Setup locks the rules before writing starts**: columns, vote budget, and ranking method are decided up front.
+- **Write happens directly in columns**: participants add cards where they belong instead of using a detached backlog.
+- **Organise preserves context**: groups stay inside their original column, so "Mad", "Glad", and "Sad" do not collapse into noise.
+- **Ranking supports small teams**: use classic score voting or pairwise comparisons across groups and ungrouped cards.
+- **Review becomes a presentation flow**: facilitator-controlled results move live for everyone in the room.
+- **Actions are collaborative**: anyone can add, edit, or remove action items during review.
+- **Exports are built in**: save the retro as anonymous JSON or Markdown, and export actions separately as Markdown, JSON, or CSV.
 
-## Getting Started
+## The Flow
 
-### Prerequisites
+```mermaid
+flowchart LR
+  setup["Setup board<br/>columns + ranking"] --> write["Write<br/>cards in columns"]
+  write --> organise["Organise<br/>group related cards"]
+  organise --> vote["Vote / rank<br/>score or pairwise"]
+  vote --> review["Review<br/>discuss results + actions"]
+  review --> finalize["Finalize<br/>export the retro"]
+```
 
-- Node.js 18+
-- npm
-- For deployment only: a Cloudflare account with `wrangler login` completed, or Cloudflare API credentials available in the environment
+## Features
 
-### Install
+### Facilitated Retros
+
+- Default board columns: **Mad**, **Glad**, **Sad**.
+- Facilitator can rename, reorder, add, or remove columns during setup.
+- Non-facilitators wait on setup until the board is ready.
+- Phase controls, timer controls, vote budget, and review navigation are facilitator-owned.
+- The elapsed retro clock and phase tracker keep the room oriented.
+
+### Collaborative Board
+
+- Multi-user rooms through a shareable invite link.
+- Real-time participant presence and state updates.
+- Cards are created inside columns, kanban-style.
+- Participants can edit or delete their own write-phase cards.
+- Organise mode supports column-scoped groups, reordering, and drag/drop refinement.
+- Discord-style emoji reactions work on cards and groups across write, organise, vote, and review.
+
+### Ranking That Fits Small Teams
+
+Two ranking modes are available during setup:
+
+| Method | Best For | How It Works |
+| --- | --- | --- |
+| Score voting | Fast prioritization | Each participant spends a fixed vote budget across decision targets. |
+| Pairwise ranking | Higher-confidence ordering | Participants choose between every pair of decision targets, then results are ordered by wins. |
+
+Decision targets are global: every group and every ungrouped card is compared against the rest of the board. A group counts as one target, while still showing the cards inside it.
+
+### Review And Export
+
+- Review is a live, facilitator-driven slideshow.
+- Results include grouped and ungrouped items in their original column context.
+- Reactions remain visible on review cards and groups.
+- Actions are collaboratively editable during review.
+- Finalize exports:
+  - full retro as JSON
+  - full retro as Markdown
+  - actions as JSON
+  - actions as Markdown
+  - actions as CSV for spreadsheets
+
+Exports are anonymous: participant IDs and authors are stripped from saved retro data.
+
+## Quick Start
 
 ```sh
 npm install
-```
-
-### Development
-
-Start the local development server:
-
-```sh
-npm run dev
-```
-
-Vite will print the local URL. For the same host/port used by Playwright, run:
-
-```sh
 npm run dev -- --host 127.0.0.1 --port 8787
 ```
 
-Then open [http://127.0.0.1:8787](http://127.0.0.1:8787).
+Open [http://127.0.0.1:8787](http://127.0.0.1:8787), create a room, and invite a second browser profile or window to test collaboration.
 
-### Scripts
+## Scripts
 
 | Command | Description |
-|---------|-------------|
-| `npm run dev` | Start the local Cloudflare/Vite dev server |
-| `npm run build` | Type-check and build for production |
-| `npm run typecheck` | Run TypeScript type checking |
-| `npm run lint` | Run ESLint on `src/` and `worker/` |
-| `npm run test` | Run unit and integration tests with Vitest and the Cloudflare Workers test pool |
-| `npm run test:watch` | Run Vitest in watch mode |
-| `npm run test:e2e` | Run end-to-end browser tests with Playwright |
-| `npm run preview` | Build and preview the production output locally |
-| `npm run deploy` | Build and deploy to Cloudflare with Wrangler |
+| --- | --- |
+| `npm run dev` | Start the local Cloudflare/Vite development server. |
+| `npm run build` | Type-check and build for production. |
+| `npm run typecheck` | Run TypeScript project checks. |
+| `npm run lint` | Run ESLint over `src/` and `worker/`. |
+| `npm run test` | Run Vitest unit and Worker integration tests. |
+| `npm run test:e2e` | Run Playwright end-to-end tests. |
+| `npm run preview` | Build and preview production output locally. |
+| `npm run deploy` | Build and deploy with Wrangler. |
 
-## Key Design Decisions
+## Architecture
 
-- **No fixed default columns**: Rooms start with an empty board. Facilitators create, rename, reorder, and delete columns before vote/review, and item placement follows the item through the flow.
-- **Safe column deletion**: Deleting a column cascades only its contained items, column-scoped groups, and group votes while preserving unrelated columns and content.
-- **Column-scoped organisation**: Groups live inside a single column. Organise-phase drag, regroup, reorder, and ungroup operations are restricted to that column to keep column meaning stable.
-- **Mixed voting targets**: Grouped items are voted only through their group target, while ungrouped items are individually votable. The review slideshow orders groups and ungrouped items together by total votes with deterministic tie-breakers.
-- **v2 room schema**: Persisted room snapshots use schema version 2. Incompatible legacy board data from the previous fixed-column model is reset/ignored instead of being migrated into the kanban model.
-- **Clean full-width SaaS UI**: The board uses ordered lists with visual columns/groups instead of sticky-note or canvas metaphors, wrapped in a responsive shadcn/Tailwind interface.
-- **Accessible phase interactions**: Phase controls, item actions, drag/drop fallbacks, moving, voting, review, and status feedback are designed for keyboard reach, screen-reader labels, and clear responsive behavior.
-- **Server-authoritative state**: The Durable Object owns phase transitions, permissions, timer state, item placement, ordering, and vote budgets. Clients never directly decide these.
-- **Facilitator controls**: The room creator is the facilitator. Only the facilitator can advance phases, configure columns, and set timers/vote budgets.
-- **Timer expiry does not auto-advance**: When a timer expires, the phase remains unchanged until the facilitator manually advances.
-- **Credentialed WebSockets**: WebSocket connections require a valid participant ID and cryptographic token, passed through subprotocols to prevent impersonation without exposing credentials in URLs.
-- **Resilient realtime UX**: Clients handle reconnects, focus recovery, failed sends, mobile browser behavior, and reduced-motion preferences while reconciling state by version.
-- **Version-based state reconciliation**: Client merge logic prefers higher-version snapshots, not participant count.
+THX Retro Board is built as a single Cloudflare application:
+
+- **React SPA** for the room UI, routing, and optimistic interaction states.
+- **Cloudflare Worker** for HTTP API routes and static asset serving.
+- **Durable Object per room** as the canonical state machine.
+- **SQLite-backed Durable Object storage** for persisted room snapshots.
+- **WebSockets with hibernation support** for low-overhead real-time sync.
+- **Shared TypeScript domain model** used by client, Worker, and tests.
+
+The Durable Object owns room state, permissions, phase transitions, timers, columns, items, groups, votes, pairwise choices, review position, actions, and reactions. Clients send intent; the server validates and broadcasts authoritative updates.
+
+## State Model
+
+The room state is versioned and server-authoritative:
+
+- `setup`: facilitator configures columns and ranking.
+- `write`: participants add cards in columns.
+- `organise`: cards are grouped and reordered within their original column.
+- `vote`: teams rank groups and ungrouped cards.
+- `review`: facilitator presents results while the room captures actions.
+- `finalize`: exports are generated for long-term analysis.
+
+Rooms use a schema-versioned state shape, with reconnect tokens stored only in the browser. Invite links do not include participant credentials.
 
 ## Testing
 
-### Unit and Integration Tests
-
 ```sh
+npm run typecheck
+npm run lint
 npm run test
-```
-
-Covers domain logic, user-created columns, column deletion cascades, schema v2 legacy resets, same-column organise operations, mixed group/item voting targets, review ordering, phase transitions, vote budget enforcement, Worker routing, Durable Object room isolation, WebSocket authentication, and phase-specific permissions.
-
-### End-to-End Tests
-
-```sh
 npm run test:e2e
 ```
 
-Playwright tests use `npm run dev -- --host 127.0.0.1 --port 8787` automatically and cover the full two-user retro flow from room creation through review, room isolation, refresh/reconnect persistence, focus recovery, mobile/reduced-motion resilience, and phase-specific controls.
+Coverage includes room creation, joins, phase permissions, setup locks, column invariants, card ownership, group operations, voting, pairwise ranking, review navigation, anonymous exports, reactions, WebSocket authentication, reconnect behavior, and end-to-end multi-user flow.
 
-## Deployment
+## Deploying To Cloudflare
+
+The project is configured for Cloudflare Workers in [wrangler.jsonc](./wrangler.jsonc).
 
 ```sh
 npm run deploy
 ```
 
-Requires `wrangler login` or appropriate Cloudflare API credentials. The app deploys as a single Cloudflare Worker with Durable Object bindings, SQLite-backed Durable Object storage, migrations, and static asset serving as configured in `wrangler.jsonc`.
+Deployment uses:
+
+- Worker static assets
+- Durable Object binding: `RETRO_ROOM`
+- Durable Object migration for `RetroRoom`
+- Custom route: `retro.thethracian.com`
+
+For a fork or a different Cloudflare account, change the Worker name and route in `wrangler.jsonc` before deploying.
 
 ## Project Structure
 
-```
+```text
 src/
-  domain/          # Shared TypeScript types, state logic, message schemas
-  hooks/           # React hooks, including the room WebSocket connection
-  components/      # React UI components
-  api.ts           # HTTP API client
-  App.tsx          # SPA routing
-  main.tsx         # Entry point
+  components/      React UI for home, room, vote, review, finalize, reactions
+  domain/          shared state model, validation, ranking, export formatting
+  hooks/           room WebSocket connection and state reconciliation
+  styles/          app design system and responsive UI
+  api.ts           HTTP API client
 worker/
-  index.ts         # Worker router (HTTP routes, SPA fallback)
-  retro-room.ts    # RetroRoom Durable Object
-e2e/               # Playwright end-to-end tests
-tests/             # Test configuration
+  index.ts         Worker router and SPA fallback
+  retro-room.ts    Durable Object room state machine
+e2e/
+  retro-flow.spec.ts
+tests/
+  test environment types/config
 ```
+
+## Privacy Notes
+
+- No account system is required.
+- Room invite links are room-only links.
+- Reconnect credentials are stored locally in the participant browser.
+- WebSocket credentials are passed through protocols rather than exposed in invite links.
+- Exported retros are anonymous and omit participant identities.
+
+## License
+
+No open-source license has been selected yet. Until a license is added, the code is source-visible but not automatically licensed for reuse.
