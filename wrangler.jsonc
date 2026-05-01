@@ -1,11 +1,17 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "retro-board",
+  "name": "thx-retro-board",
   "compatibility_date": "2026-04-24",
   "main": "./worker/index.ts",
   "assets": {
     "not_found_handling": "single-page-application"
   },
+  "routes": [
+    {
+      "pattern": "retro.thethracian.com",
+      "custom_domain": true
+    }
+  ],
   "durable_objects": {
     "bindings": [
       {
