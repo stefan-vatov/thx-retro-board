@@ -1,6 +1,7 @@
 // @ts-expect-error -- cloudflare:workers vitest module
 import { exports } from "cloudflare:workers";
 import { describe, it, expect } from "vitest";
+import worker, { type Env } from "./index";
 
 describe("Worker fetch", () => {
   it("returns JSON from GET /api/rooms", async () => {
@@ -13,6 +14,24 @@ describe("Worker fetch", () => {
   it("returns 404 for unknown routes", async () => {
     const response = await exports.default.fetch("http://localhost/nonexistent-path");
     expect(response.status).toBe(404);
+  });
+
+  it("serves SPA assets for non-API routes when an assets binding is present", async () => {
+    const response = await worker.fetch(
+      new Request("http://localhost/room/example"),
+      {
+        ASSETS: {
+          fetch: async () => new Response("<html>app</html>", {
+            headers: { "Content-Type": "text/html" },
+          }),
+        } as Fetcher,
+        RETRO_ROOM: undefined as unknown as Env["RETRO_ROOM"],
+      },
+      {} as ExecutionContext,
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("<html>app</html>");
   });
 
   it("returns 404 for malformed room paths", async () => {

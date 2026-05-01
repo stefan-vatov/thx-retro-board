@@ -2,7 +2,7 @@ import type { RetroRoom } from "./retro-room";
 import { generateRoomId } from "../src/domain";
 
 export interface Env {
-  ASSETS: Fetcher;
+  ASSETS?: Fetcher;
   RETRO_ROOM: DurableObjectNamespace<RetroRoom>;
 }
 
@@ -110,6 +110,6 @@ export default {
       return new Response("Not found", { status: 404 });
     }
 
-    return env.ASSETS.fetch(request);
+    return env.ASSETS?.fetch(request) ?? new Response("Not found", { status: 404 });
   },
 } satisfies ExportedHandler<Env>;
