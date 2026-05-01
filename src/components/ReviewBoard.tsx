@@ -1,6 +1,6 @@
 import { type FormEvent, useMemo, useState } from "react";
 import { Check, Pencil, Trash2, X } from "lucide-react";
-import type { ActionItem, RoomState, VoteTarget } from "../domain";
+import type { ActionItem, RoomState } from "../domain";
 import { getGroupedItems, getReviewTargets, groupVoteTarget, isValidActionText, itemVoteTarget, MAX_ACTION_TEXT_LENGTH, sanitizeActionText, sortReviewTargets, voteTargetKey } from "../domain";
 import { submitFormOnModEnter } from "./form-shortcuts";
 import { ReactionBar } from "./Reactions";
@@ -8,15 +8,16 @@ import { ReactionBar } from "./Reactions";
 interface ReviewBoardProps {
   roomState: RoomState;
   participantId: string;
+  isFacilitator: boolean;
   send?: (message: unknown) => boolean;
   serverError?: string | null;
   clearServerError?: () => void;
 }
 
-export function ReviewBoard({ roomState, participantId, send = () => false, serverError, clearServerError }: ReviewBoardProps) {
+export function ReviewBoard({ roomState, participantId, isFacilitator, send = () => false, serverError, clearServerError }: ReviewBoardProps) {
   const sortedTargets = useMemo(() => sortReviewTargets(getReviewTargets(roomState), roomState.columns), [roomState]);
-  const [activeTargetKey, setActiveTargetKey] = useState<string | null>(() => getStoredReviewSlideKey(roomState.roomId));
-  const activeIndex = Math.max(0, sortedTargets.findIndex((target) => voteTargetKey(target.target) === activeTargetKey));
+  const syncedTargetIndex = sortedTargets.findIndex((target) => voteTargetKey(target.target) === roomState.reviewTargetKey);
+  const activeIndex = syncedTargetIndex >= 0 ? syncedTargetIndex : 0;
   const activeReviewTarget = sortedTargets[activeIndex] ?? null;
 
   if (sortedTargets.length === 0 || activeReviewTarget === null) {
@@ -56,6 +57,16 @@ export function ReviewBoard({ roomState, participantId, send = () => false, serv
   const resultLabel = roomState.rankingMethod === "pairwise" ? "win" : "vote";
   const canGoPrevious = activeIndex > 0;
   const canGoNext = activeIndex < sortedTargets.length - 1;
+  const canNavigatePrevious = isFacilitator && canGoPrevious;
+  const canNavigateNext = isFacilitator && canGoNext;
+
+  function setActiveReviewIndex(nextIndex: number) {
+    if (!isFacilitator) return;
+    const nextTarget = sortedTargets[nextIndex]?.target;
+    if (!nextTarget) return;
+    clearServerError?.();
+    send({ type: "set-review-target", reviewTargetKey: voteTargetKey(nextTarget) });
+  }
 
   return (
     <div className="review-discussion-layout">
@@ -69,21 +80,28 @@ export function ReviewBoard({ roomState, participantId, send = () => false, serv
           <button
             type="button"
             className="btn btn--secondary"
-            onClick={() => setActiveReviewTarget(roomState.roomId, sortedTargets[Math.max(0, activeIndex - 1)]?.target ?? activeTarget, setActiveTargetKey)}
-            disabled={!canGoPrevious}
+            onClick={() => setActiveReviewIndex(activeIndex - 1)}
+            disabled={!canNavigatePrevious}
             aria-label="Previous review target"
+            title={isFacilitator ? "Previous review target" : "Only the facilitator can change the review slide"}
           >
             ← Previous
           </button>
-          <span className="review-slideshow__counter" aria-live="polite">
-            Slide {activeIndex + 1} of {sortedTargets.length}
-          </span>
+          <div className="review-slideshow__status">
+            <span className="review-slideshow__counter" aria-live="polite">
+              Slide {activeIndex + 1} of {sortedTargets.length}
+            </span>
+            {!isFacilitator ? (
+              <span className="review-slideshow__lock">Facilitator controls this for everyone</span>
+            ) : null}
+          </div>
           <button
             type="button"
             className="btn btn--secondary"
-            onClick={() => setActiveReviewTarget(roomState.roomId, sortedTargets[Math.min(sortedTargets.length - 1, activeIndex + 1)]?.target ?? activeTarget, setActiveTargetKey)}
-            disabled={!canGoNext}
+            onClick={() => setActiveReviewIndex(activeIndex + 1)}
+            disabled={!canNavigateNext}
             aria-label="Next review target"
+            title={isFacilitator ? "Next review target" : "Only the facilitator can change the review slide"}
           >
             Next →
           </button>
@@ -406,21 +424,4 @@ function ReviewItemRow({
       <ReactionBar roomState={roomState} target={itemVoteTarget(item.id)} participantId={participantId} send={send} label={item.text} compact />
     </li>
   );
-}
-
-function getReviewSlideStorageKey(roomId: string): string {
-  return `retro-review-slide:${roomId}`;
-}
-
-function getStoredReviewSlideKey(roomId: string): string | null {
-  if (typeof window === "undefined") return null;
-  return window.sessionStorage.getItem(getReviewSlideStorageKey(roomId));
-}
-
-function setActiveReviewTarget(roomId: string, target: VoteTarget, setActiveTargetKey: (targetKey: string) => void): void {
-  const targetKey = voteTargetKey(target);
-  setActiveTargetKey(targetKey);
-  if (typeof window !== "undefined") {
-    window.sessionStorage.setItem(getReviewSlideStorageKey(roomId), targetKey);
-  }
 }

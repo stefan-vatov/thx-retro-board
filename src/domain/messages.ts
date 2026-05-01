@@ -11,6 +11,7 @@ export type ServerToClientMessage =
   | { type: "vote-changed"; target?: import("./types").VoteTarget; groupId: string; itemId?: string; participantId: string; delta: number; totalForGroup: number; totalForItem?: number }
   | { type: "ranking-method-changed"; rankingMethod: import("./types").RankingMethod }
   | { type: "pairwise-choice-changed"; choice: import("./types").PairwiseChoice }
+  | { type: "review-target-changed"; reviewTargetKey: string | null }
   // delta > 0 for cast-vote (always +count), delta < 0 for remove-vote (always -1).
   // The vote-changed message is informational; authoritative state arrives via snapshot broadcast.
   | { type: "timer-updated"; timer: import("./types").TimerState }
@@ -45,6 +46,7 @@ export type ClientToServerMessage =
   | { type: "cast-vote"; groupId?: string; itemId?: string; count: number }
   | { type: "remove-vote"; groupId?: string; itemId?: string }
   | { type: "choose-pairwise"; winner: import("./types").VoteTarget; loser: import("./types").VoteTarget }
+  | { type: "set-review-target"; reviewTargetKey: string | null }
   | { type: "toggle-reaction"; target: import("./types").ReactionTarget; emoji: string }
   | { type: "create-action"; text: string }
   | { type: "edit-action"; actionId: string; text: string }

@@ -26,6 +26,7 @@ async function addItem(page: Page, text: string, column = "Mad") {
   const composer = page.getByRole("form", { name: new RegExp(`add card to ${column}`, "i") });
   const input = composer.getByLabel(new RegExp(`add a card to ${column}`, "i"));
   await input.fill(text);
+  await expect(composer.getByRole("button", { name: /add card/i })).toBeEnabled();
   await input.press("ControlOrMeta+Enter");
   await expect(page.getByLabel(new RegExp(`${column} items`, "i")).getByText(text)).toBeVisible({ timeout: 5_000 });
 }
@@ -179,6 +180,40 @@ test.describe("Retro Board current flow", () => {
     await expectPhase(bob, "Write");
     await addItem(bob, "Bob feedback");
     await expect(alice.getByText(/Bob feedback/i)).toBeVisible({ timeout: 5_000 });
+
+    await alice.close();
+    await bob.close();
+  });
+
+  test("review slide navigation is facilitator-controlled and syncs live", async ({ browser }) => {
+    const alice = await browser.newPage();
+    await createJoinedRoom(alice, "Alice");
+    const roomUrl = alice.url();
+
+    const bob = await browser.newPage();
+    await bob.goto(roomUrl);
+    await bob.getByLabel(/display name/i).fill("Bob");
+    await bob.getByRole("button", { name: /^join room$/i }).click();
+    await expectPhase(bob, "Setup");
+
+    await advanceTo(alice, "Write");
+    await addItem(alice, "First review topic", "Mad");
+    await addItem(alice, "Second review topic", "Glad");
+    await addItem(alice, "Third review topic", "Sad");
+    await advanceTo(alice, "Organise");
+    await advanceTo(alice, "Vote");
+    await advanceTo(alice, "Review");
+    await expectPhase(bob, "Review");
+
+    await expect(alice.getByText(/Slide 1 of 3/i)).toBeVisible();
+    await expect(bob.getByText(/Slide 1 of 3/i)).toBeVisible();
+    await expect(bob.getByRole("button", { name: /next review target/i })).toBeDisabled();
+    await expect(bob.getByText(/Facilitator controls this for everyone/i)).toBeVisible();
+
+    await alice.getByRole("button", { name: /next review target/i }).click();
+    await expect(alice.getByText(/Slide 2 of 3/i)).toBeVisible({ timeout: 5_000 });
+    await expect(bob.getByText(/Slide 2 of 3/i)).toBeVisible({ timeout: 5_000 });
+    await expect(bob.getByText(/Second review topic/i)).toBeVisible();
 
     await alice.close();
     await bob.close();

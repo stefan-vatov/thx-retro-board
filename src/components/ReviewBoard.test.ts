@@ -22,10 +22,24 @@ function makeRoomState(groups: Group[], items: RetroItem[] = [], votes: RoomStat
     items,
     votes,
     actions: [],
+    rankingMethod: "score",
+    pairwiseChoices: [],
+    reviewTargetKey: null,
+    reactions: [],
     timer: { startedAt: null, durationSeconds: null, expired: false },
     voteBudget: 5,
     version: 1,
   };
+}
+
+function renderReviewBoard(roomState: RoomState, isFacilitator = true): string {
+  return renderToStaticMarkup(
+    createElement(ReviewBoard, {
+      roomState,
+      participantId: isFacilitator ? "fac1" : "p2",
+      isFacilitator,
+    }),
+  );
 }
 
 describe("ReviewBoard slideshow", () => {
@@ -40,15 +54,11 @@ describe("ReviewBoard slideshow", () => {
       { id: "item-top", text: "Ungrouped winner", authorId: "fac1", columnId: "column-1", groupId: null, order: 1 },
     ];
 
-    const markup = renderToStaticMarkup(
-      createElement(ReviewBoard, {
-        roomState: makeRoomState(groups, items, [
-          { participantId: "fac1", target: groupVoteTarget("group-low"), count: 1 },
-          { participantId: "fac1", target: groupVoteTarget("group-high"), count: 3 },
-          { participantId: "fac1", target: itemVoteTarget("item-top"), count: 4 },
-        ]),
-      }),
-    );
+    const markup = renderReviewBoard(makeRoomState(groups, items, [
+      { participantId: "fac1", target: groupVoteTarget("group-low"), count: 1 },
+      { participantId: "fac1", target: groupVoteTarget("group-high"), count: 3 },
+      { participantId: "fac1", target: itemVoteTarget("item-top"), count: 4 },
+    ]));
 
     expect(markup).toContain("Slide 1 of 3");
     expect(markup).toContain("Ungrouped winner");
@@ -76,11 +86,7 @@ describe("ReviewBoard slideshow", () => {
       { id: "item-b", text: "Second ungrouped item", authorId: "fac1", columnId: "column-2", groupId: null, order: 0 },
     ];
 
-    const markup = renderToStaticMarkup(
-      createElement(ReviewBoard, {
-        roomState: makeRoomState(groups, items),
-      }),
-    );
+    const markup = renderReviewBoard(makeRoomState(groups, items));
 
     expect(markup).toContain("Slide 1 of 5");
     expect(markup).toContain("First tied group");
@@ -95,11 +101,7 @@ describe("ReviewBoard slideshow", () => {
       { id: "item-1", text: "Ungrouped topic", authorId: "fac1", columnId: "column-1", groupId: null, order: 0 },
     ];
 
-    const markup = renderToStaticMarkup(
-      createElement(ReviewBoard, {
-        roomState: makeRoomState([], items),
-      }),
-    );
+    const markup = renderReviewBoard(makeRoomState([], items));
 
     expect(markup).toContain("Slide 1 of 1");
     expect(markup).toContain("Ungrouped topic");
@@ -108,11 +110,7 @@ describe("ReviewBoard slideshow", () => {
   });
 
   it("shows a stable empty review state only when there are no targets", () => {
-    const markup = renderToStaticMarkup(
-      createElement(ReviewBoard, {
-        roomState: makeRoomState([]),
-      }),
-    );
+    const markup = renderReviewBoard(makeRoomState([]));
 
     expect(markup).toContain("No review targets yet.");
     expect(markup).toContain("Add ungrouped items or create groups before review to produce slides.");
@@ -121,18 +119,44 @@ describe("ReviewBoard slideshow", () => {
   });
 
   it("renders saved action items during review", () => {
-    const markup = renderToStaticMarkup(
-      createElement(ReviewBoard, {
-        roomState: {
-          ...makeRoomState([]),
-          actions: [{ id: "action-1", text: "Book rollout follow-up", authorId: "fac1", order: 0 }],
-        },
-      }),
-    );
+    const markup = renderReviewBoard({
+      ...makeRoomState([]),
+      actions: [{ id: "action-1", text: "Book rollout follow-up", authorId: "fac1", order: 0 }],
+    });
 
     expect(markup).toContain("Action items");
     expect(markup).toContain("Book rollout follow-up");
     expect(markup).toContain("Edit action 1");
     expect(markup).toContain("Delete action 1");
+  });
+
+  it("uses the shared review target key as the active slide", () => {
+    const groups: Group[] = [
+      { id: "group-first", name: "First group", columnId: "column-1", order: 0 },
+      { id: "group-second", name: "Synced group", columnId: "column-2", order: 0 },
+    ];
+    const state = {
+      ...makeRoomState(groups),
+      reviewTargetKey: "group:group-second",
+    };
+
+    const markup = renderReviewBoard(state);
+
+    expect(markup).toContain("Slide 2 of 2");
+    expect(markup).toContain("Synced group");
+    expect(markup).not.toContain("First group");
+  });
+
+  it("keeps non-facilitator review navigation read-only", () => {
+    const items: RetroItem[] = [
+      { id: "item-1", text: "First topic", authorId: "fac1", columnId: "column-1", groupId: null, order: 0 },
+      { id: "item-2", text: "Second topic", authorId: "fac1", columnId: "column-2", groupId: null, order: 0 },
+    ];
+
+    const markup = renderReviewBoard(makeRoomState([], items), false);
+
+    expect(markup).toContain("Facilitator controls this for everyone");
+    expect(markup).toContain("Only the facilitator can change the review slide");
+    expect(markup).toContain("disabled=\"\" aria-label=\"Next review target\"");
   });
 });

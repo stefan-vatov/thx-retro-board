@@ -1696,6 +1696,7 @@ export function RoomPage() {
           <ReviewBoard
             roomState={roomState}
             participantId={participantId}
+            isFacilitator={isFacilitator}
             send={send}
             serverError={lastError}
             clearServerError={clearError}

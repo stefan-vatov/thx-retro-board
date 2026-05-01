@@ -85,6 +85,7 @@ export interface RoomState {
   votes: VoteAllocation[];
   rankingMethod: RankingMethod;
   pairwiseChoices: PairwiseChoice[];
+  reviewTargetKey: string | null;
   actions: ActionItem[];
   reactions: Reaction[];
   timer: TimerState;

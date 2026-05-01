@@ -73,6 +73,7 @@ interface StoredState {
   votes: VoteAllocation[];
   rankingMethod?: RankingMethod;
   pairwiseChoices?: PairwiseChoice[];
+  reviewTargetKey?: string | null;
   actions: ActionItem[];
   reactions?: Reaction[];
   facilitatorId: string | null;
@@ -347,6 +348,15 @@ function normalizePairwiseChoices(choices: PairwiseChoice[] | undefined, partici
   return [...merged.values()];
 }
 
+function normalizeReviewTargetKey(targetKey: unknown, groups: Group[], items: RetroItem[]): string | null {
+  if (typeof targetKey !== "string") return null;
+  const validTargetKeys = new Set<string>([
+    ...groups.map((group) => voteTargetKey(groupVoteTarget(group.id))),
+    ...items.filter((item) => item.groupId === null).map((item) => voteTargetKey(itemVoteTarget(item.id))),
+  ]);
+  return validTargetKeys.has(targetKey) ? targetKey : null;
+}
+
 function normalizeActions(actions: ActionItem[] | undefined, participants: Participant[]): ActionItem[] {
   if (!Array.isArray(actions)) return [];
   const participantIds = new Set(participants.map((participant) => participant.id));
@@ -450,6 +460,7 @@ export class RetroRoom extends DurableObject<Env> {
           votes: [],
           rankingMethod: "score",
           pairwiseChoices: [],
+          reviewTargetKey: null,
           actions: [],
           reactions: [],
         };
@@ -468,11 +479,13 @@ export class RetroRoom extends DurableObject<Env> {
         votes: [],
         rankingMethod: normalizeRankingMethod(stored.rankingMethod),
         pairwiseChoices: [],
+        reviewTargetKey: null,
         actions: normalizeActions(stored.actions, stored.participants ?? []),
         reactions: [],
       };
       this.state.votes = normalizeVotes(stored.votes ?? [], this.state.participants, groups, this.state.items);
       this.state.pairwiseChoices = normalizePairwiseChoices(stored.pairwiseChoices, this.state.participants, groups, this.state.items);
+      this.state.reviewTargetKey = normalizeReviewTargetKey(stored.reviewTargetKey, groups, this.state.items);
       this.state.reactions = normalizeReactions(stored.reactions, this.state.participants, groups, this.state.items);
       return this.state;
     }
@@ -506,6 +519,7 @@ export class RetroRoom extends DurableObject<Env> {
       votes: [],
       rankingMethod: "score",
       pairwiseChoices: [],
+      reviewTargetKey: null,
       actions: [],
       reactions: [],
       facilitatorId: null,
@@ -532,6 +546,7 @@ export class RetroRoom extends DurableObject<Env> {
       votes: s.votes,
       rankingMethod: s.rankingMethod ?? "score",
       pairwiseChoices: s.pairwiseChoices ?? [],
+      reviewTargetKey: normalizeReviewTargetKey(s.reviewTargetKey, s.groups, s.items),
       actions: s.actions ?? [],
       reactions: s.reactions ?? [],
       timer,
@@ -910,6 +925,31 @@ export class RetroRoom extends DurableObject<Env> {
     this.broadcast(timerBroadcast);
     this.broadcastState(s);
 
+    return { success: true };
+  }
+
+  async setReviewTarget(participantId: string, reviewTargetKey: string | null): Promise<{ success: boolean; error?: string }> {
+    const s = await this.loadState();
+
+    if (!this.hasParticipant(s, participantId)) {
+      return { success: false, error: "Participant not found" };
+    }
+    if (s.facilitatorId !== participantId) {
+      return { success: false, error: "Only the facilitator can change review slide" };
+    }
+    if (s.phase !== "review") {
+      return { success: false, error: "Review slide can only be changed during review" };
+    }
+
+    const normalizedTargetKey = normalizeReviewTargetKey(reviewTargetKey, s.groups, s.items);
+    if (reviewTargetKey !== null && normalizedTargetKey === null) {
+      return { success: false, error: "Review target not found" };
+    }
+
+    s.reviewTargetKey = normalizedTargetKey;
+    await this.saveState();
+    this.broadcast({ type: "review-target-changed", reviewTargetKey: normalizedTargetKey });
+    this.broadcastState(s);
     return { success: true };
   }
 
@@ -1453,6 +1493,7 @@ export class RetroRoom extends DurableObject<Env> {
       votes: s.votes,
       rankingMethod: s.rankingMethod ?? "score",
       pairwiseChoices: s.pairwiseChoices ?? [],
+      reviewTargetKey: normalizeReviewTargetKey(s.reviewTargetKey, s.groups, s.items),
       actions: s.actions ?? [],
       reactions: s.reactions ?? [],
       timer,
@@ -1516,6 +1557,12 @@ export class RetroRoom extends DurableObject<Env> {
     if (url.pathname === "/timer" && request.method === "POST") {
       const body = await request.json() as { participantId: string; durationSeconds: number };
       const result = await this.setTimer(body.participantId, body.durationSeconds);
+      return Response.json(result);
+    }
+
+    if (url.pathname === "/review-target" && request.method === "POST") {
+      const body = await request.json() as { participantId: string; reviewTargetKey: string | null };
+      const result = await this.setReviewTarget(body.participantId, body.reviewTargetKey);
       return Response.json(result);
     }
 
@@ -1736,6 +1783,14 @@ export class RetroRoom extends DurableObject<Env> {
         }
         break;
       }
+      case "set-review-target": {
+        const result = await this.setReviewTarget(participantId, msg.reviewTargetKey);
+        if (!result.success) {
+          const ws = this.sessions.get(participantId);
+          ws?.send(JSON.stringify({ type: "error", message: result.error }));
+        }
+        break;
+      }
       case "cast-vote": {
         const target = parseVoteTargetMessage(msg);
         const result = target.success
@@ -1827,6 +1882,7 @@ export class RetroRoom extends DurableObject<Env> {
       votes: [],
       rankingMethod: "score",
       pairwiseChoices: [],
+      reviewTargetKey: null,
       actions: [],
       facilitatorId: null,
       voteBudget: 5,

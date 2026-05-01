@@ -116,6 +116,8 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
               ];
               return { ...prev, pairwiseChoices };
             });
+          } else if (msg.type === "review-target-changed") {
+            setState((prev) => prev ? { ...prev, reviewTargetKey: msg.reviewTargetKey } : prev);
           } else if (msg.type === "timer-updated") {
             setState((prev) => prev ? { ...prev, timer: msg.timer } : prev);
           } else if (msg.type === "error") {

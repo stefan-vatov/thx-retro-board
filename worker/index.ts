@@ -99,7 +99,16 @@ export default {
         return forwardToDO(stub, "/timer", request, body);
       }
 
+      if (suffix === "review-target" && method === "POST") {
+        const body = await request.json() as { participantId: string; reviewTargetKey: string | null };
+        return forwardToDO(stub, "/review-target", request, body);
+      }
+
       if (suffix === "ws" && request.headers.get("Upgrade") === "websocket") {
+        const hasRoom = await stub.hasRoom();
+        if (!hasRoom) {
+          return new Response(JSON.stringify({ error: "Room not found" }), { status: 404 });
+        }
         const newUrl = new URL(request.url);
         newUrl.pathname = "/ws";
         return stub.fetch(new Request(newUrl, request));

@@ -27,6 +27,7 @@ export function createRoomState(roomId: string, voteBudget: number = 5): RoomSta
     votes: [],
     rankingMethod: "score",
     pairwiseChoices: [],
+    reviewTargetKey: null,
     actions: [],
     reactions: [],
     timer: { startedAt: null, durationSeconds: null, expired: false },

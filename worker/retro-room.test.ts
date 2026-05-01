@@ -218,6 +218,34 @@ describe("RetroRoom Durable Object v2 schema", () => {
     expect(await stub.getRoomState()).toEqual(beforeLateDelete);
   });
 
+  it("lets only the facilitator move the shared review slide during review", async () => {
+    const stub = await init("test-v2-review-target-sync");
+    await stub.join("fac1", "Facilitator");
+    await stub.join("p2", "Participant");
+    const columnId = (await stub.getRoomState()).columns[0]!.id;
+    const item = await stub.addItem("fac1", "Review target card", columnId);
+    expect(item.success).toBe(true);
+    await stub.setPhase("fac1", "organise");
+    const group = await stub.createGroup("fac1", "Review target group", columnId);
+    expect(group.success).toBe(true);
+    await stub.setPhase("fac1", "vote");
+    await stub.setPhase("fac1", "review");
+
+    const targetKey = "group:" + group.group!.id;
+    await expect(stub.setReviewTarget("p2", targetKey)).resolves.toMatchObject({
+      success: false,
+      error: "Only the facilitator can change review slide",
+    });
+    expect((await stub.getRoomState()).reviewTargetKey).toBeNull();
+
+    await expect(stub.setReviewTarget("fac1", targetKey)).resolves.toMatchObject({ success: true });
+    expect((await stub.getRoomState()).reviewTargetKey).toBe(targetKey);
+    await expect(stub.setReviewTarget("fac1", "item:missing")).resolves.toMatchObject({
+      success: false,
+      error: "Review target not found",
+    });
+  });
+
   it("locks setup-only decisions after setup and requires at least one column before write", async () => {
     const stub = await initRaw("test-v2-setup-locks");
     await stub.join("fac1", "Facilitator");

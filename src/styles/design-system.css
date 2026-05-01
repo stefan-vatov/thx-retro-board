@@ -5122,6 +5122,20 @@ textarea.input::placeholder {
   font-weight: var(--weight-medium);
 }
 
+.review-slideshow__status {
+  display: grid;
+  justify-items: center;
+  gap: 0.1rem;
+  min-width: 12rem;
+}
+
+.review-slideshow__lock {
+  color: var(--text-tertiary);
+  font-size: 0.72rem;
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.01em;
+}
+
 .review-slide {
   min-height: 0;
   padding: 1.25rem !important;
