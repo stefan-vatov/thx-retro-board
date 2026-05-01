@@ -1455,6 +1455,14 @@ select.input {
   box-shadow: 0 14px 38px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.055);
 }
 
+.reaction-menu--portal {
+  position: fixed;
+  right: auto;
+  bottom: auto;
+  z-index: 2147483000;
+  isolation: isolate;
+}
+
 .reaction-picker {
   width: 100%;
   height: 100%;
@@ -5983,6 +5991,11 @@ textarea.input::placeholder {
   bottom: calc(100% + 0.5rem);
 }
 
+.reaction-menu--portal {
+  right: auto;
+  bottom: auto;
+}
+
 .item-row,
 .item-card,
 .vote-target-card__body,
@@ -6072,7 +6085,7 @@ textarea.input::placeholder {
 }
 
 @media (max-width: 760px) {
-  .reaction-menu {
+  .reaction-menu:not(.reaction-menu--portal) {
     right: auto;
     left: 50%;
     width: min(21rem, calc(100vw - 1.25rem));
