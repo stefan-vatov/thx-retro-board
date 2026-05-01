@@ -578,6 +578,7 @@ function ColumnConfiguration({
 
 function SetupBoard({
   roomState,
+  isFacilitator,
   send,
   serverError,
   clearServerError,
@@ -586,6 +587,7 @@ function SetupBoard({
   rankingMsg,
 }: {
   roomState: RoomState;
+  isFacilitator: boolean;
   send: (message: unknown) => boolean;
   serverError: string | null;
   clearServerError: () => void;
@@ -612,6 +614,25 @@ function SetupBoard({
       description: "Participants choose between two items at a time inside each column. Results rank by comparison wins.",
     },
   ];
+
+  if (!isFacilitator) {
+    return (
+      <div className="setup-board setup-board--waiting" aria-label="Waiting for setup">
+        <section className="setup-panel setup-panel--waiting">
+          <div className="setup-waiting__icon" aria-hidden="true">
+            <Clock3 size={18} />
+          </div>
+          <div>
+            <p className="review-slide__eyebrow">Setup in progress</p>
+            <h3>Waiting for the facilitator</h3>
+            <p className="setup-panel__copy">
+              The facilitator is choosing the room settings. You will move into writing automatically when setup is complete.
+            </p>
+          </div>
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div className="setup-board" aria-label="Setup retro board">
@@ -1652,7 +1673,9 @@ export function RoomPage() {
             <p className="board-subtitle">Capture, sort, vote, and review feedback in one shared room.</p>
           </div>
           {roomState?.phase === "setup" && (
-            <span className="phase-hint" aria-hidden="true">Configure once, then lock</span>
+            <span className="phase-hint" aria-hidden="true">
+              {isFacilitator ? "Configure once, then lock" : "Waiting for facilitator"}
+            </span>
           )}
           {roomState?.phase === "write" && (
             <span className="phase-hint" aria-hidden="true">Write privately, discuss together</span>
@@ -1668,6 +1691,7 @@ export function RoomPage() {
         {roomState?.phase === "setup" ? (
           <SetupBoard
             roomState={roomState}
+            isFacilitator={isFacilitator}
             send={send}
             serverError={lastError}
             clearServerError={clearError}

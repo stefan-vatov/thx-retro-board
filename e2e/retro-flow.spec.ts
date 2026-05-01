@@ -54,6 +54,28 @@ test.describe("Retro Board current flow", () => {
     await expect(page.getByText(/Sad/i)).toBeVisible();
   });
 
+  test("non-facilitators do not see setup controls", async ({ browser }) => {
+    const alice = await browser.newPage();
+    await createJoinedRoom(alice, "Alice");
+    const roomUrl = alice.url();
+
+    const bob = await browser.newPage();
+    await bob.goto(roomUrl);
+    await bob.getByLabel(/display name/i).fill("Bob");
+    await bob.getByRole("button", { name: /^join room$/i }).click();
+    await expectPhase(bob, "Setup");
+
+    await expect(bob.locator(".board-area")).toContainText(/Waiting for facilitator/i);
+    await expect(bob.locator(".board-area")).toContainText(/The facilitator is choosing the room settings/i);
+    await expect(bob.getByRole("button", { name: /Configure columns/i })).toHaveCount(0);
+    await expect(bob.getByRole("radio", { name: /Score voting/i })).toHaveCount(0);
+    await expect(bob.getByRole("radio", { name: /Pairwise ranking/i })).toHaveCount(0);
+    await expect(bob.locator(".column-config")).toHaveCount(0);
+
+    await alice.close();
+    await bob.close();
+  });
+
   test("setup cannot advance with zero columns", async ({ page }) => {
     await createJoinedRoom(page, "Setup QA");
 
