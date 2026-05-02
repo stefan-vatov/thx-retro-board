@@ -26,8 +26,9 @@ async function addItem(page: Page, text: string, column = "Mad") {
   const composer = page.getByRole("form", { name: new RegExp(`add card to ${column}`, "i") });
   const input = composer.getByLabel(new RegExp(`add a card to ${column}`, "i"));
   await input.fill(text);
-  await expect(composer.getByRole("button", { name: /add card/i })).toBeEnabled();
-  await input.press("ControlOrMeta+Enter");
+  const addButton = composer.getByRole("button", { name: /add card/i });
+  await expect(addButton).toBeEnabled();
+  await addButton.click();
   await expect(page.getByLabel(new RegExp(`${column} items`, "i")).getByText(text)).toBeVisible({ timeout: 5_000 });
 }
 
@@ -102,10 +103,11 @@ test.describe("Retro Board current flow", () => {
 
     const lockedBudget = await page.evaluate(async (id) => {
       const participantId = localStorage.getItem(`retro-participant-${id}`);
+      const connectionToken = localStorage.getItem(`retro-token-${id}`);
       const response = await fetch(`/api/rooms/${id}/vote-budget`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ participantId, budget: 1 }),
+        body: JSON.stringify({ participantId, connectionToken, budget: 1 }),
       });
       return response.json();
     }, roomId) as { success: boolean; error?: string };
@@ -280,11 +282,11 @@ test.describe("Retro Board current flow", () => {
     const bobReactions = bob.getByLabel(/Reactions for Reactable card/i).first();
 
     await aliceReactions.getByRole("button", { name: /add reaction for Reactable card/i }).click();
-    await alice.locator("emoji-picker").locator('button[aria-label*="thumbs up"]').first().click();
+    await alice.getByRole("menuitem", { name: /thumbs up/i }).click();
     await expect(bobReactions).toContainText("1", { timeout: 5_000 });
 
     await bobReactions.getByRole("button", { name: /add reaction for Reactable card/i }).click();
-    await bob.locator("emoji-picker").locator('button[aria-label*="thumbs up"]').first().click();
+    await bob.getByRole("menuitem", { name: /thumbs up/i }).click();
     await expect(aliceReactions).toContainText("2", { timeout: 5_000 });
 
     await aliceReactions.locator(".reaction-pill").first().click();

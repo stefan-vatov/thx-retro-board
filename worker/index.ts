@@ -30,10 +30,40 @@ function forwardToDO(stub: DurableObjectStub<RetroRoom>, pathname: string, reque
   }));
 }
 
-function getClientIp(request: Request): string {
-  return request.headers.get("CF-Connecting-IP")
-    ?? request.headers.get("X-Forwarded-For")?.split(",")[0]?.trim()
-    ?? "unknown";
+function getClientIp(request: Request): string | null {
+  return request.headers.get("CF-Connecting-IP");
+}
+
+function shouldRateLimitClientIp(clientIp: string | null): clientIp is string {
+  if (!clientIp) return false;
+  if (clientIp === "127.0.0.1" || clientIp === "::1") return false;
+  if (/^10\./.test(clientIp)) return false;
+  if (/^192\.168\./.test(clientIp)) return false;
+  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(clientIp)) return false;
+  return true;
+}
+
+function withSecurityHeaders(response: Response): Response {
+  const secured = new Response(response.body, response);
+  secured.headers.set("Content-Security-Policy", [
+    "default-src 'self'",
+    "script-src 'self' https://challenges.cloudflare.com",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    "font-src 'self' data:",
+    "connect-src 'self' https://challenges.cloudflare.com wss:",
+    "frame-src https://challenges.cloudflare.com",
+    "base-uri 'none'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+    "object-src 'none'",
+    "upgrade-insecure-requests",
+  ].join("; "));
+  secured.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()");
+  secured.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  secured.headers.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload");
+  secured.headers.set("X-Content-Type-Options", "nosniff");
+  return secured;
 }
 
 async function readJsonBody<T>(request: Request): Promise<T | null> {
@@ -44,6 +74,11 @@ async function readJsonBody<T>(request: Request): Promise<T | null> {
   } catch {
     return null;
   }
+}
+
+async function readRequiredJsonBody<T>(request: Request): Promise<T | Response> {
+  const body = await readJsonBody<T>(request);
+  return body ?? Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
 }
 
 async function verifyTurnstileToken(env: Env, token: unknown, remoteIp: string): Promise<{ success: true } | { success: false; error: string }> {
@@ -85,7 +120,7 @@ export default {
     if (pathname === "/api/rooms") {
       if (method === "POST") {
         const clientIp = getClientIp(request);
-        if (env.ROOM_CREATE_RATE_LIMITER) {
+        if (env.ROOM_CREATE_RATE_LIMITER && shouldRateLimitClientIp(clientIp)) {
           const { success } = await env.ROOM_CREATE_RATE_LIMITER.limit({ key: `room-create:${clientIp}` });
           if (!success) {
             return Response.json({ error: "Too many rooms created from this network. Please wait a minute and try again." }, { status: 429 });
@@ -93,7 +128,7 @@ export default {
         }
 
         const body = await readJsonBody<{ turnstileToken?: string }>(request);
-        const turnstile = await verifyTurnstileToken(env, body?.turnstileToken, clientIp);
+        const turnstile = await verifyTurnstileToken(env, body?.turnstileToken, clientIp ?? "unknown");
         if (!turnstile.success) {
           return Response.json({ error: turnstile.error }, { status: 403 });
         }
@@ -118,7 +153,8 @@ export default {
         if (!hasRoom) {
           return Response.json({ success: false, error: "Room not found" }, { status: 404 });
         }
-        const body = await request.json() as { participantId: string; displayName: string };
+        const body = await readRequiredJsonBody<{ participantId: string; displayName: string; connectionToken?: string }>(request);
+        if (body instanceof Response) return body;
         return forwardToDO(stub, "/join", request, body);
       }
 
@@ -132,43 +168,51 @@ export default {
       }
 
       if (suffix === "vote-budget" && method === "POST") {
-        const body = await request.json() as { participantId: string; budget: number };
+        const body = await readRequiredJsonBody<{ participantId: string; connectionToken?: string; budget: number }>(request);
+        if (body instanceof Response) return body;
         return forwardToDO(stub, "/vote-budget", request, body);
       }
 
       if (suffix === "ranking-method" && method === "POST") {
-        const body = await request.json() as { participantId: string; rankingMethod: string };
+        const body = await readRequiredJsonBody<{ participantId: string; connectionToken?: string; rankingMethod: string }>(request);
+        if (body instanceof Response) return body;
         return forwardToDO(stub, "/ranking-method", request, body);
       }
 
       if (suffix === "phase" && method === "POST") {
-        const body = await request.json() as { participantId: string; phase: string };
+        const body = await readRequiredJsonBody<{ participantId: string; connectionToken?: string; phase: string }>(request);
+        if (body instanceof Response) return body;
         return forwardToDO(stub, "/phase", request, body);
       }
 
       if (suffix === "items" && method === "POST") {
-        const body = await request.json() as { participantId: string; text: string; columnId?: string };
+        const body = await readRequiredJsonBody<{ participantId: string; connectionToken?: string; text: string; columnId?: string }>(request);
+        if (body instanceof Response) return body;
         return forwardToDO(stub, "/items", request, body);
       }
 
       const itemMatch = suffix.match(/^items\/([^/]+)$/);
       if (itemMatch && method === "PATCH") {
-        const body = await request.json() as { participantId: string; text: string };
+        const body = await readRequiredJsonBody<{ participantId: string; connectionToken?: string; text: string }>(request);
+        if (body instanceof Response) return body;
         return forwardToDO(stub, `/items/${itemMatch[1]}`, request, body);
       }
 
       if (itemMatch && method === "DELETE") {
-        const body = await request.json() as { participantId: string };
+        const body = await readRequiredJsonBody<{ participantId: string; connectionToken?: string }>(request);
+        if (body instanceof Response) return body;
         return forwardToDO(stub, `/items/${itemMatch[1]}`, request, body);
       }
 
       if (suffix === "timer" && method === "POST") {
-        const body = await request.json() as { participantId: string; durationSeconds: number };
+        const body = await readRequiredJsonBody<{ participantId: string; connectionToken?: string; durationSeconds: number }>(request);
+        if (body instanceof Response) return body;
         return forwardToDO(stub, "/timer", request, body);
       }
 
       if (suffix === "review-target" && method === "POST") {
-        const body = await request.json() as { participantId: string; reviewTargetKey: string | null };
+        const body = await readRequiredJsonBody<{ participantId: string; connectionToken?: string; reviewTargetKey: string | null }>(request);
+        if (body instanceof Response) return body;
         return forwardToDO(stub, "/review-target", request, body);
       }
 
@@ -177,7 +221,8 @@ export default {
         if (!hasRoom) {
           return Response.json({ success: false, error: "Room not found" }, { status: 404 });
         }
-        const body = await request.json() as { participantId: string };
+        const body = await readRequiredJsonBody<{ participantId: string; connectionToken?: string }>(request);
+        if (body instanceof Response) return body;
         return forwardToDO(stub, "/purge", request, body);
       }
 
@@ -196,6 +241,7 @@ export default {
       return new Response("Not found", { status: 404 });
     }
 
-    return env.ASSETS?.fetch(request) ?? new Response("Not found", { status: 404 });
+    const assetResponse = await env.ASSETS?.fetch(request);
+    return assetResponse ? withSecurityHeaders(assetResponse) : new Response("Not found", { status: 404 });
   },
 } satisfies ExportedHandler<Env>;

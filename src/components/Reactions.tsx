@@ -51,15 +51,26 @@ export function ReactionBar({ roomState, target, participantId, send, label, com
     if (!menuOpen) return;
     const picker = pickerRef.current;
     if (!picker) return;
+    let handledSelection = false;
 
-    function handleEmojiClick(event: Event) {
-      const detail = (event as CustomEvent<{ unicode?: string }>).detail;
-      if (detail.unicode) handlePickedEmoji(detail.unicode);
+    async function handleEmojiClick(event: Event) {
+      if (handledSelection) return;
+      handledSelection = true;
+      const rawDetail = (event as CustomEvent<
+        { unicode?: string; emoji?: { unicode?: string } } | Promise<{ unicode?: string; emoji?: { unicode?: string } }>
+      >).detail;
+      const detail = await rawDetail;
+      const unicode = detail.unicode ?? detail.emoji?.unicode;
+      if (unicode) handlePickedEmoji(unicode);
     }
 
     picker.addEventListener("emoji-click", handleEmojiClick);
-    return () => picker.removeEventListener("emoji-click", handleEmojiClick);
-  }, [menuOpen]);
+    picker.addEventListener("emoji-click-sync", handleEmojiClick);
+    return () => {
+      picker.removeEventListener("emoji-click", handleEmojiClick);
+      picker.removeEventListener("emoji-click-sync", handleEmojiClick);
+    };
+  }, [menuOpen, menuStyle, pickerReady]);
 
   useEffect(() => {
     if (!menuOpen) return;

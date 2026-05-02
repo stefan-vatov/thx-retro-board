@@ -91,6 +91,7 @@ const MAX_GROUPS_PER_ROOM = 300;
 const MAX_ACTIONS_PER_ROOM = 500;
 const MAX_REACTIONS_PER_ROOM = 10000;
 const MAX_REACTIONS_PER_TARGET = 1000;
+const MAX_WEBSOCKET_MESSAGE_BYTES = 16 * 1024;
 
 interface MoveItemPreconditions {
   expectedVersion: number;
@@ -419,13 +420,7 @@ function generateToken(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-function getWebSocketCredentials(request: Request, url: URL): { pid: string | null; token: string | null } {
-  const queryPid = url.searchParams.get("pid");
-  const queryToken = url.searchParams.get("token");
-  if (queryPid || queryToken) {
-    return { pid: queryPid, token: queryToken };
-  }
-
+function getWebSocketCredentials(request: Request): { pid: string | null; token: string | null } {
   const protocols = (request.headers.get("Sec-WebSocket-Protocol") ?? "")
     .split(",")
     .map((protocol) => protocol.trim());
@@ -436,6 +431,16 @@ function getWebSocketCredentials(request: Request, url: URL): { pid: string | nu
     pid: pidProtocol ? pidProtocol.slice("pid-".length) : null,
     token: authProtocol ? authProtocol.slice("auth-".length) : null,
   };
+}
+
+async function readJsonBody<T>(request: Request): Promise<T | null> {
+  const contentType = request.headers.get("Content-Type") ?? "";
+  if (!contentType.includes("application/json")) return null;
+  try {
+    return await request.json() as T;
+  } catch {
+    return null;
+  }
 }
 
 export class RetroRoom extends DurableObject<Env> {
@@ -624,9 +629,15 @@ export class RetroRoom extends DurableObject<Env> {
     return stored !== undefined;
   }
 
-  async join(participantId: string, displayName: string): Promise<{ success: boolean; error?: string; state?: RoomState; connectionToken?: string }> {
+  async join(participantId: string, displayName: string, connectionToken?: string): Promise<{ success: boolean; error?: string; state?: RoomState; connectionToken?: string }> {
     const s = await this.loadState();
     await this.cancelEmptyRoomPurge();
+    if (typeof participantId !== "string" || participantId.trim().length === 0 || participantId.length > 128) {
+      return { success: false, error: "Participant not found" };
+    }
+    if (typeof displayName !== "string") {
+      return { success: false, error: "Display name cannot be blank" };
+    }
     const trimmed = displayName.trim();
     if (trimmed.length === 0) {
       return { success: false, error: "Display name cannot be blank" };
@@ -635,6 +646,9 @@ export class RetroRoom extends DurableObject<Env> {
 
     const existing = s.participants.find((p) => p.id === participantId);
     if (existing) {
+      if (!this.hasValidConnectionToken(s, participantId, connectionToken)) {
+        return { success: false, error: "Invalid participant credentials" };
+      }
       const token = generateToken();
       s.connectionTokens[participantId] = token;
       await this.saveState();
@@ -1052,6 +1066,29 @@ export class RetroRoom extends DurableObject<Env> {
 
   private hasParticipant(s: StoredState, participantId: string): boolean {
     return s.participants.some((participant) => participant.id === participantId);
+  }
+
+  private hasValidConnectionToken(s: StoredState, participantId: string, connectionToken: unknown): boolean {
+    return typeof connectionToken === "string"
+      && connectionToken.length > 0
+      && s.connectionTokens[participantId] === connectionToken;
+  }
+
+  private authorizeHttpMutation(
+    s: StoredState | null,
+    participantId: unknown,
+    connectionToken: unknown,
+  ): { success: true; participantId: string } | { success: false; error: string } {
+    if (!s) {
+      return { success: false, error: "Room not found" };
+    }
+    if (typeof participantId !== "string" || !this.hasParticipant(s, participantId)) {
+      return { success: false, error: "Participant not found" };
+    }
+    if (!this.hasValidConnectionToken(s, participantId, connectionToken)) {
+      return { success: false, error: "Invalid participant credentials" };
+    }
+    return { success: true, participantId };
   }
 
   async createColumn(participantId: string, rawName: string): Promise<{ success: boolean; error?: string; column?: Column }> {
@@ -1604,8 +1641,9 @@ export class RetroRoom extends DurableObject<Env> {
     const url = new URL(request.url);
 
     if (url.pathname === "/join" && request.method === "POST") {
-      const body = await request.json() as { participantId: string; displayName: string };
-      const result = await this.join(body.participantId, body.displayName);
+      const body = await readJsonBody<{ participantId: string; displayName: string; connectionToken?: string }>(request);
+      if (!body) return Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
+      const result = await this.join(body.participantId, body.displayName, body.connectionToken);
       return Response.json(result);
     }
 
@@ -1615,57 +1653,84 @@ export class RetroRoom extends DurableObject<Env> {
     }
 
     if (url.pathname === "/vote-budget" && request.method === "POST") {
-      const body = await request.json() as { participantId: string; budget: number };
-      const result = await this.setVoteBudget(body.participantId, body.budget);
+      const body = await readJsonBody<{ participantId: string; connectionToken?: string; budget: number }>(request);
+      if (!body) return Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
+      const auth = this.authorizeHttpMutation(await this.loadState(), body.participantId, body.connectionToken);
+      if (!auth.success) return Response.json(auth, { status: 403 });
+      const result = await this.setVoteBudget(auth.participantId, body.budget);
       return Response.json(result);
     }
 
     if (url.pathname === "/ranking-method" && request.method === "POST") {
-      const body = await request.json() as { participantId: string; rankingMethod: RankingMethod };
-      const result = await this.setRankingMethod(body.participantId, body.rankingMethod);
+      const body = await readJsonBody<{ participantId: string; connectionToken?: string; rankingMethod: RankingMethod }>(request);
+      if (!body) return Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
+      const auth = this.authorizeHttpMutation(await this.loadState(), body.participantId, body.connectionToken);
+      if (!auth.success) return Response.json(auth, { status: 403 });
+      const result = await this.setRankingMethod(auth.participantId, body.rankingMethod);
       return Response.json(result);
     }
 
     if (url.pathname === "/phase" && request.method === "POST") {
-      const body = await request.json() as { participantId: string; phase: string };
-      const result = await this.setPhase(body.participantId, body.phase as Phase);
+      const body = await readJsonBody<{ participantId: string; connectionToken?: string; phase: string }>(request);
+      if (!body) return Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
+      const auth = this.authorizeHttpMutation(await this.loadState(), body.participantId, body.connectionToken);
+      if (!auth.success) return Response.json(auth, { status: 403 });
+      const result = await this.setPhase(auth.participantId, body.phase as Phase);
       return Response.json(result);
     }
 
     if (url.pathname === "/items" && request.method === "POST") {
-      const body = await request.json() as { participantId: string; text: string; columnId?: string };
-      const result = await this.addItem(body.participantId, body.text, body.columnId);
+      const body = await readJsonBody<{ participantId: string; connectionToken?: string; text: string; columnId?: string }>(request);
+      if (!body) return Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
+      const auth = this.authorizeHttpMutation(await this.loadState(), body.participantId, body.connectionToken);
+      if (!auth.success) return Response.json(auth, { status: 403 });
+      const result = await this.addItem(auth.participantId, body.text, body.columnId);
       return Response.json(result);
     }
 
     const itemMatch = url.pathname.match(/^\/items\/([^/]+)$/);
     if (itemMatch && request.method === "PATCH") {
-      const body = await request.json() as { participantId: string; text: string };
-      const result = await this.editItem(body.participantId, decodeURIComponent(itemMatch[1]!), body.text);
+      const body = await readJsonBody<{ participantId: string; connectionToken?: string; text: string }>(request);
+      if (!body) return Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
+      const auth = this.authorizeHttpMutation(await this.loadState(), body.participantId, body.connectionToken);
+      if (!auth.success) return Response.json(auth, { status: 403 });
+      const result = await this.editItem(auth.participantId, decodeURIComponent(itemMatch[1]!), body.text);
       return Response.json(result);
     }
 
     if (itemMatch && request.method === "DELETE") {
-      const body = await request.json() as { participantId: string };
-      const result = await this.deleteItem(body.participantId, decodeURIComponent(itemMatch[1]!));
+      const body = await readJsonBody<{ participantId: string; connectionToken?: string }>(request);
+      if (!body) return Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
+      const auth = this.authorizeHttpMutation(await this.loadState(), body.participantId, body.connectionToken);
+      if (!auth.success) return Response.json(auth, { status: 403 });
+      const result = await this.deleteItem(auth.participantId, decodeURIComponent(itemMatch[1]!));
       return Response.json(result);
     }
 
     if (url.pathname === "/timer" && request.method === "POST") {
-      const body = await request.json() as { participantId: string; durationSeconds: number };
-      const result = await this.setTimer(body.participantId, body.durationSeconds);
+      const body = await readJsonBody<{ participantId: string; connectionToken?: string; durationSeconds: number }>(request);
+      if (!body) return Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
+      const auth = this.authorizeHttpMutation(await this.loadState(), body.participantId, body.connectionToken);
+      if (!auth.success) return Response.json(auth, { status: 403 });
+      const result = await this.setTimer(auth.participantId, body.durationSeconds);
       return Response.json(result);
     }
 
     if (url.pathname === "/review-target" && request.method === "POST") {
-      const body = await request.json() as { participantId: string; reviewTargetKey: string | null };
-      const result = await this.setReviewTarget(body.participantId, body.reviewTargetKey);
+      const body = await readJsonBody<{ participantId: string; connectionToken?: string; reviewTargetKey: string | null }>(request);
+      if (!body) return Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
+      const auth = this.authorizeHttpMutation(await this.loadState(), body.participantId, body.connectionToken);
+      if (!auth.success) return Response.json(auth, { status: 403 });
+      const result = await this.setReviewTarget(auth.participantId, body.reviewTargetKey);
       return Response.json(result);
     }
 
     if (url.pathname === "/purge" && request.method === "POST") {
-      const body = await request.json() as { participantId: string };
-      const result = await this.purgeByFacilitator(body.participantId);
+      const body = await readJsonBody<{ participantId: string; connectionToken?: string }>(request);
+      if (!body) return Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
+      const auth = this.authorizeHttpMutation(await this.loadState(), body.participantId, body.connectionToken);
+      if (!auth.success) return Response.json(auth, { status: 403 });
+      const result = await this.purgeByFacilitator(auth.participantId);
       return Response.json(result);
     }
 
@@ -1673,7 +1738,7 @@ export class RetroRoom extends DurableObject<Env> {
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
 
-      const { pid, token } = getWebSocketCredentials(request, url);
+      const { pid, token } = getWebSocketCredentials(request);
 
       if (!pid || !token) {
         return new Response(JSON.stringify({ error: "Missing pid or token" }), { status: 400 });
@@ -1720,6 +1785,11 @@ export class RetroRoom extends DurableObject<Env> {
     if (!participantId) return;
 
     try {
+      const messageSize = typeof message === "string" ? message.length : message.byteLength;
+      if (messageSize > MAX_WEBSOCKET_MESSAGE_BYTES) {
+        ws.send(JSON.stringify({ type: "error", message: "Message is too large" }));
+        return;
+      }
       const msg = JSON.parse(typeof message === "string" ? message : new TextDecoder().decode(message)) as ClientToServerMessage;
       await this.handleMessage(participantId, msg);
     } catch {

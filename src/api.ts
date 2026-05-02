@@ -46,11 +46,12 @@ export async function joinRoom(
   roomId: string,
   participantId: string,
   displayName: string,
+  connectionToken?: string,
 ): Promise<{ success: boolean; error?: string; state?: RoomState; connectionToken?: string }> {
   const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/join`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ participantId, displayName }),
+    body: JSON.stringify({ participantId, displayName, connectionToken }),
   });
   return res.json() as Promise<{ success: boolean; error?: string; state?: RoomState; connectionToken?: string }>;
 }
@@ -58,12 +59,13 @@ export async function joinRoom(
 export async function setVoteBudget(
   roomId: string,
   participantId: string,
+  connectionToken: string | undefined,
   budget: number,
 ): Promise<{ success: boolean; error?: string }> {
   const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/vote-budget`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ participantId, budget }),
+    body: JSON.stringify({ participantId, connectionToken, budget }),
   });
   return res.json() as Promise<{ success: boolean; error?: string }>;
 }
@@ -71,12 +73,13 @@ export async function setVoteBudget(
 export async function setRankingMethod(
   roomId: string,
   participantId: string,
+  connectionToken: string | undefined,
   rankingMethod: RankingMethod,
 ): Promise<{ success: boolean; error?: string }> {
   const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/ranking-method`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ participantId, rankingMethod }),
+    body: JSON.stringify({ participantId, connectionToken, rankingMethod }),
   });
   return res.json() as Promise<{ success: boolean; error?: string }>;
 }
@@ -84,12 +87,13 @@ export async function setRankingMethod(
 export async function setPhase(
   roomId: string,
   participantId: string,
+  connectionToken: string | undefined,
   phase: Phase,
 ): Promise<{ success: boolean; error?: string }> {
   const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/phase`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ participantId, phase }),
+    body: JSON.stringify({ participantId, connectionToken, phase }),
   });
   return res.json() as Promise<{ success: boolean; error?: string }>;
 }
@@ -97,13 +101,14 @@ export async function setPhase(
 export async function addItem(
   roomId: string,
   participantId: string,
+  connectionToken: string | undefined,
   text: string,
   columnId: string,
 ): Promise<{ success: boolean; error?: string; item?: RetroItem }> {
   const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/items`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ participantId, text, columnId }),
+    body: JSON.stringify({ participantId, connectionToken, text, columnId }),
   });
   return res.json() as Promise<{ success: boolean; error?: string; item?: RetroItem }>;
 }
@@ -111,13 +116,14 @@ export async function addItem(
 export async function editItem(
   roomId: string,
   participantId: string,
+  connectionToken: string | undefined,
   itemId: string,
   text: string,
 ): Promise<{ success: boolean; error?: string; item?: RetroItem }> {
   const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/items/${encodeURIComponent(itemId)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ participantId, text }),
+    body: JSON.stringify({ participantId, connectionToken, text }),
   });
   return res.json() as Promise<{ success: boolean; error?: string; item?: RetroItem }>;
 }
@@ -125,12 +131,13 @@ export async function editItem(
 export async function deleteItem(
   roomId: string,
   participantId: string,
+  connectionToken: string | undefined,
   itemId: string,
 ): Promise<{ success: boolean; error?: string }> {
   const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/items/${encodeURIComponent(itemId)}`, {
     method: "DELETE",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ participantId }),
+    body: JSON.stringify({ participantId, connectionToken }),
   });
   return res.json() as Promise<{ success: boolean; error?: string }>;
 }
@@ -138,12 +145,13 @@ export async function deleteItem(
 export async function setTimer(
   roomId: string,
   participantId: string,
+  connectionToken: string | undefined,
   durationSeconds: number,
 ): Promise<{ success: boolean; error?: string }> {
   const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/timer`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ participantId, durationSeconds }),
+    body: JSON.stringify({ participantId, connectionToken, durationSeconds }),
   });
   return res.json() as Promise<{ success: boolean; error?: string }>;
 }
@@ -151,11 +159,12 @@ export async function setTimer(
 export async function purgeRoom(
   roomId: string,
   participantId: string,
+  connectionToken: string | undefined,
 ): Promise<{ success: boolean; error?: string }> {
   const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/purge`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ participantId }),
+    body: JSON.stringify({ participantId, connectionToken }),
   });
   return res.json() as Promise<{ success: boolean; error?: string }>;
 }

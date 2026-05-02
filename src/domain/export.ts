@@ -166,5 +166,6 @@ function formatResultLabel(method: RankingMethod, totalVotes: number, target: Vo
 }
 
 function escapeCsvCell(value: string): string {
-  return /[",\n\r]/.test(value) ? `"${value.replaceAll("\"", "\"\"")}"` : value;
+  const spreadsheetSafeValue = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+  return /[",\n\r]/.test(spreadsheetSafeValue) ? `"${spreadsheetSafeValue.replaceAll("\"", "\"\"")}"` : spreadsheetSafeValue;
 }

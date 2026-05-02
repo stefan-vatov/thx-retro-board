@@ -911,7 +911,7 @@ export function RoomPage() {
   const { roomId } = useParams<{ roomId: string }>();
   const [pageState, setPageState] = useState<PageState>("loading");
   const [identity] = useState(() => getStoredIdentity(roomId!));
-  const [participantId] = useState(() => identity.participantId);
+  const [participantId, setParticipantId] = useState(() => identity.participantId);
   const [displayName, setDisplayName] = useState(() => identity.displayName);
   const [joinError, setJoinError] = useState<string | null>(null);
   const [joinLoading, setJoinLoading] = useState(false);
@@ -952,6 +952,15 @@ export function RoomPage() {
   const sortedRoomColumns = roomState ? getSortedColumns(roomState) : [];
   const currentPhaseIndex = roomState ? PHASE_ORDER.indexOf(roomState.phase) : -1;
   const nextPhase = currentPhaseIndex >= 0 ? PHASE_ORDER[currentPhaseIndex + 1] : undefined;
+
+  const resetStoredIdentity = useCallback(() => {
+    if (!roomId) return;
+    const nextParticipantId = crypto.randomUUID();
+    localStorage.setItem(`retro-participant-${roomId}`, nextParticipantId);
+    localStorage.removeItem(`retro-token-${roomId}`);
+    setParticipantId(nextParticipantId);
+    setConnectionToken(undefined);
+  }, [roomId]);
 
   useEffect(() => {
     if (!roomPurged) return undefined;
@@ -1017,7 +1026,7 @@ export function RoomPage() {
       if (existing) {
         const name = identity.displayName || existing.displayName;
         try {
-          const result = await joinRoom(roomId, participantId, name);
+          const result = await joinRoom(roomId, participantId, name, identity.connectionToken);
           if (result.success) {
             localStorage.setItem(`retro-name-${roomId}`, name);
             setLocalRoomState(result.state ?? state);
@@ -1025,9 +1034,15 @@ export function RoomPage() {
               localStorage.setItem(`retro-token-${roomId}`, result.connectionToken);
               setConnectionToken(result.connectionToken);
             }
+          } else {
+            resetStoredIdentity();
+            setPageState("join");
+            return;
           }
         } catch {
-          // Re-join failed; still show room with stale token if available
+          resetStoredIdentity();
+          setPageState("join");
+          return;
         }
         setPageState("room");
       } else {
@@ -1041,7 +1056,7 @@ export function RoomPage() {
       setRoomLoadError(classifyRoomLoadError(error));
       setPageState("load-error");
     }
-  }, [roomId, participantId, identity.displayName]);
+  }, [roomId, participantId, identity.displayName, identity.connectionToken, resetStoredIdentity]);
 
   useEffect(() => {
     if (initialLoadStartedRef.current) return undefined;
@@ -1066,7 +1081,7 @@ export function RoomPage() {
 
     setJoinLoading(true);
     try {
-      const result = await joinRoom(roomId, participantId, trimmed);
+      const result = await joinRoom(roomId, participantId, trimmed, connectionToken);
       if (!result.success) {
         setJoinError(result.error ?? "Failed to join room. Please try again.");
         return;
@@ -1096,7 +1111,7 @@ export function RoomPage() {
     }
     setBudgetPending(true);
     try {
-      const result = await setVoteBudget(roomId, participantId, budget);
+      const result = await setVoteBudget(roomId, participantId, connectionToken, budget);
       if (result.success) {
         setBudgetMsg("Vote budget updated.");
         setVoteBudgetInput(String(budget));
@@ -1122,7 +1137,7 @@ export function RoomPage() {
     clearError();
     setRankingPending(true);
     try {
-      const result = await setRankingMethod(roomId, participantId, rankingMethod);
+      const result = await setRankingMethod(roomId, participantId, connectionToken, rankingMethod);
       if (result.success) {
         setRankingMsg(rankingMethod === "pairwise" ? "Pairwise ranking selected." : "Score voting selected.");
         try {
@@ -1147,7 +1162,7 @@ export function RoomPage() {
     if (!nextPhase) return;
     setPhasePending(true);
     try {
-      const result = await setPhase(roomId, participantId, nextPhase);
+      const result = await setPhase(roomId, participantId, connectionToken, nextPhase);
       if (result.success) {
         setPhaseMsg(`Advanced to ${nextPhase}.`);
         window.setTimeout(() => phaseStatusRef.current?.focus(), 0);
@@ -1188,7 +1203,7 @@ export function RoomPage() {
     const durationSeconds = minutes * 60;
     setTimerPending(true);
     try {
-      const result = await setTimer(roomId, participantId, durationSeconds);
+      const result = await setTimer(roomId, participantId, connectionToken, durationSeconds);
       if (!result.success) {
         setTimerInputError(result.error ?? "Failed to start timer.");
         return;
@@ -1215,7 +1230,7 @@ export function RoomPage() {
     setPurgeMsg(null);
     setPurgePending(true);
     try {
-      const result = await purgeRoom(roomId, participantId);
+      const result = await purgeRoom(roomId, participantId, connectionToken);
       if (!result.success) {
         setPurgeMsg(result.error ?? "Failed to delete room data.");
         return;
@@ -1250,7 +1265,7 @@ export function RoomPage() {
     const nextText = sanitizeItemText(rawText);
     setPendingColumnId(columnId);
     try {
-      const result = await addItem(roomId, participantId, nextText, columnId);
+      const result = await addItem(roomId, participantId, connectionToken, nextText, columnId);
       if (!result.success) {
         setColumnErrors((current) => ({ ...current, [columnId]: result.error ?? "Failed to add card." }));
         return;
@@ -1300,7 +1315,7 @@ export function RoomPage() {
     const nextText = sanitizeItemText(editingItemText);
     setPendingItemId(itemId);
     try {
-      const result = await editItem(roomId, participantId, itemId, nextText);
+      const result = await editItem(roomId, participantId, connectionToken, itemId, nextText);
       if (!result.success) {
         setColumnErrors((current) => ({ ...current, __global: result.error ?? "Failed to edit card." }));
         return;
@@ -1331,7 +1346,7 @@ export function RoomPage() {
     setColumnErrors((current) => ({ ...current, __global: undefined }));
     setPendingItemId(itemId);
     try {
-      const result = await deleteItem(roomId, participantId, itemId);
+      const result = await deleteItem(roomId, participantId, connectionToken, itemId);
       if (!result.success) {
         setColumnErrors((current) => ({ ...current, __global: result.error ?? "Failed to delete card." }));
         return;
