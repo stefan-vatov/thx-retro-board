@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import type { ServerToClientMessage } from "../src/domain";
 import { toRoomState } from "./room-presenter";
 import type { StoredState } from "./room-types";
@@ -14,6 +15,14 @@ export interface RoomWebSocketHost {
 }
 
 export async function handleRoomWebSocketRequest(host: RoomWebSocketHost, request: Request): Promise<Response | null> {
+  return Effect.runPromise(handleRoomWebSocketRequestEffect(host, request));
+}
+
+export function handleRoomWebSocketRequestEffect(
+  host: RoomWebSocketHost,
+  request: Request,
+): Effect.Effect<Response | null> {
+  return Effect.gen(function* () {
   const url = new URL(request.url);
   if (url.pathname !== "/ws" || request.headers.get("Upgrade") !== "websocket") {
     return null;
@@ -22,14 +31,14 @@ export async function handleRoomWebSocketRequest(host: RoomWebSocketHost, reques
   const pair = new WebSocketPair();
   const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
 
-  const ticket = await host.consumeWebSocketTicket(getWebSocketTicket(request));
+  const ticket = yield* Effect.promise(() => host.consumeWebSocketTicket(getWebSocketTicket(request)));
   if (!ticket.success) {
     return new Response(JSON.stringify({ error: ticket.error }), { status: 403 });
   }
 
   const participantId = ticket.participantId;
-  const s = await host.loadState();
-  await host.cancelEmptyRoomPurge();
+  const s = yield* Effect.promise(() => host.loadState());
+  yield* Effect.promise(() => host.cancelEmptyRoomPurge());
   host.closeParticipantSocket(participantId, "Participant opened a new connection");
   host.setSession(participantId, server);
   server.serializeAttachment({ participantId });
@@ -46,5 +55,6 @@ export async function handleRoomWebSocketRequest(host: RoomWebSocketHost, reques
     status: 101,
     webSocket: client,
     headers: { "Sec-WebSocket-Protocol": "retro-board" },
+  });
   });
 }
