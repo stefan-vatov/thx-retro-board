@@ -126,6 +126,7 @@ class RoomMutationValidationError extends Error {
 
 type VoteBudgetValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase">;
 type RankingMethodValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase">;
+type PhaseValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase" | "columns" | "rankingMethod">;
 
 const OptionalConnectionTokenSchema = Schema.Struct({
   participantId: Schema.String,
@@ -230,6 +231,35 @@ export function validateRankingMethodChangeEffect(
       return yield* Effect.fail(new RoomMutationValidationError("Invalid ranking method"));
     }
     return { rankingMethod };
+  });
+}
+
+export function validatePhaseChangeEffect(
+  state: PhaseValidationState,
+  participantId: string,
+  phase: Phase,
+  decisionTargetCount: number,
+): Effect.Effect<{ phase: Phase }, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    if (!state.participants.some((participant) => participant.id === participantId)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Participant not found"));
+    }
+    if (state.facilitatorId !== participantId) {
+      return yield* Effect.fail(new RoomMutationValidationError("Only the facilitator can change phase"));
+    }
+    if (!PHASE_ORDER.includes(phase)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Invalid phase"));
+    }
+    if (!canTransition(state.phase, phase)) {
+      return yield* Effect.fail(new RoomMutationValidationError(`Cannot transition from ${state.phase} to ${phase}`));
+    }
+    if (state.phase === "setup" && phase === "write" && (state.columns ?? []).length === 0) {
+      return yield* Effect.fail(new RoomMutationValidationError("Add at least one column before starting write phase"));
+    }
+    if (phase === "vote" && (state.rankingMethod ?? "score") === "pairwise" && decisionTargetCount > MAX_PAIRWISE_TARGETS) {
+      return yield* Effect.fail(new RoomMutationValidationError(`Pairwise ranking supports at most ${MAX_PAIRWISE_TARGETS} cards or groups`));
+    }
+    return { phase };
   });
 }
 
@@ -1260,31 +1290,18 @@ export class RetroRoom extends DurableObject<Env> {
 
   async setPhase(participantId: string, phase: Phase): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
-
-    if (!this.hasParticipant(s, participantId)) {
-      return { success: false, error: "Participant not found" };
+    let validated: { phase: Phase };
+    try {
+      validated = await Effect.runPromise(validatePhaseChangeEffect(s, participantId, phase, this.getDecisionTargetCount(s)));
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Phase validation failed",
+      };
     }
 
-    if (s.facilitatorId !== participantId) {
-      return { success: false, error: "Only the facilitator can change phase" };
-    }
-
-    if (!PHASE_ORDER.includes(phase)) {
-      return { success: false, error: "Invalid phase" };
-    }
-
-    if (!canTransition(s.phase, phase)) {
-      return { success: false, error: `Cannot transition from ${s.phase} to ${phase}` };
-    }
-    if (s.phase === "setup" && phase === "write" && (s.columns ?? []).length === 0) {
-      return { success: false, error: "Add at least one column before starting write phase" };
-    }
-    if (phase === "vote" && (s.rankingMethod ?? "score") === "pairwise" && this.getDecisionTargetCount(s) > MAX_PAIRWISE_TARGETS) {
-      return { success: false, error: `Pairwise ranking supports at most ${MAX_PAIRWISE_TARGETS} cards or groups` };
-    }
-
-    s.phase = phase;
-    if (phase === "vote") {
+    s.phase = validated.phase;
+    if (validated.phase === "vote") {
       s.votingParticipantIds = s.participants.map((participant) => participant.id);
     }
     // Reset timer on phase change
@@ -1292,7 +1309,7 @@ export class RetroRoom extends DurableObject<Env> {
     await this.saveState();
 
     // Broadcast phase change to all connected clients
-    const broadcast: ServerToClientMessage = { type: "phase-changed", phase };
+    const broadcast: ServerToClientMessage = { type: "phase-changed", phase: validated.phase };
     this.broadcast(broadcast);
 
     this.broadcastState(s);

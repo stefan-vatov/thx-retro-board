@@ -4,7 +4,12 @@ import { Effect, Exit } from "effect";
 import { describe, it, expect } from "vitest";
 import { getDefaultColumns, groupVoteTarget, itemVoteTarget } from "../src/domain";
 import type { RoomState } from "../src/domain";
-import { parseClientWebSocketMessageEffect, validateRankingMethodChangeEffect, validateVoteBudgetChangeEffect } from "./retro-room";
+import {
+  parseClientWebSocketMessageEffect,
+  validatePhaseChangeEffect,
+  validateRankingMethodChangeEffect,
+  validateVoteBudgetChangeEffect,
+} from "./retro-room";
 
 describe("RetroRoom Durable Object v2 schema", () => {
   it("parses valid websocket client messages through Effect", async () => {
@@ -93,6 +98,24 @@ describe("RetroRoom Durable Object v2 schema", () => {
       phase: "write",
     }, "fac1", "pairwise"));
     expect(Exit.isFailure(lateChange)).toBe(true);
+  });
+
+  it("validates phase transitions through Effect before state changes", async () => {
+    const state = {
+      participants: [{ id: "fac1", displayName: "Facilitator", isFacilitator: true }],
+      facilitatorId: "fac1",
+      phase: "setup",
+      columns: [{ id: "col-1", name: "Mad", order: 0 }],
+      rankingMethod: "score",
+    };
+
+    await expect(Effect.runPromise(validatePhaseChangeEffect(state, "fac1", "write", 0))).resolves.toEqual({ phase: "write" });
+
+    const invalidTransition = await Effect.runPromiseExit(validatePhaseChangeEffect(state, "fac1", "vote", 0));
+    expect(Exit.isFailure(invalidTransition)).toBe(true);
+
+    const noColumns = await Effect.runPromiseExit(validatePhaseChangeEffect({ ...state, columns: [] }, "fac1", "write", 0));
+    expect(Exit.isFailure(noColumns)).toBe(true);
   });
 
   async function initRaw(roomId: string) {
