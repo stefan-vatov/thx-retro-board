@@ -10,6 +10,7 @@ import {
   readJsonBody,
   readValidatedJsonBody,
 } from "./http-effect";
+import { verifyTurnstileToken } from "./turnstile";
 
 export interface Env {
   ASSETS?: Fetcher;
@@ -23,7 +24,6 @@ export interface Env {
 export { RetroRoom } from "./retro-room";
 
 const MAX_JSON_BODY_BYTES = 32 * 1024;
-const turnstileFailure = "Verification failed. Please retry and create the room again.";
 const OptionalConnectionTokenSchema = Schema.Struct({
   participantId: Schema.String,
   connectionToken: Schema.optional(Schema.String),
@@ -154,44 +154,6 @@ function withSecurityHeaders(response: Response): Response {
   return secured;
 }
 
-function verifyTurnstileTokenEffect(
-  env: Env,
-  token: unknown,
-  remoteIp: string,
-): Effect.Effect<{ success: true } | { success: false; error: string }> {
-  const secret = env.TURNSTILE_SECRET_KEY;
-  if (!secret) return Effect.succeed({ success: true });
-  if (typeof token !== "string" || token.trim().length === 0) {
-    return Effect.succeed({ success: false, error: "Verification is required before creating a room." });
-  }
-
-  const formData = new FormData();
-  formData.append("secret", secret);
-  formData.append("response", token);
-  if (remoteIp !== "unknown") {
-    formData.append("remoteip", remoteIp);
-  }
-
-  return Effect.gen(function* () {
-    const response = yield* Effect.promise(() =>
-      fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
-        method: "POST",
-        body: formData,
-      }).catch(() => undefined),
-    );
-    if (!response) return { success: false, error: turnstileFailure };
-
-    const result = yield* Effect.promise(() => (response.json() as Promise<{ success?: boolean } | null>).catch(() => null));
-    return result?.success === true
-      ? { success: true }
-      : { success: false, error: turnstileFailure };
-  });
-}
-
-function verifyTurnstileToken(env: Env, token: unknown, remoteIp: string): Promise<{ success: true } | { success: false; error: string }> {
-  return Effect.runPromise(verifyTurnstileTokenEffect(env, token, remoteIp));
-}
-
 export default {
   async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -223,7 +185,7 @@ export default {
           : await Effect.runPromiseExit(Schema.decodeUnknown(CreateRoomRequestSchema)(rawBody)).then((decoded) =>
               decoded._tag === "Success" ? decoded.value : {});
         const clientIp = getClientIp(request);
-        const turnstile = await verifyTurnstileToken(env, body?.turnstileToken, clientIp ?? "unknown");
+        const turnstile = await verifyTurnstileToken({ secret: env.TURNSTILE_SECRET_KEY }, body?.turnstileToken, clientIp ?? "unknown");
         if (!turnstile.success) {
           return Response.json({ error: turnstile.error }, { status: 403 });
         }
