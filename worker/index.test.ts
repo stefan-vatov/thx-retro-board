@@ -193,6 +193,40 @@ describe("POST /api/rooms", () => {
     });
   });
 
+  it("rejects malformed join bodies before forwarding to the Durable Object", async () => {
+    const createRes = await exports.default.fetch(createRoomRequest());
+    const { roomId } = await createRes.json() as { roomId: string };
+
+    const response = await exports.default.fetch(`http://localhost/api/rooms/${roomId}/join`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ participantId: "p1" }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      success: false,
+      error: "Valid JSON body is required",
+    });
+  });
+
+  it("rejects malformed room mutation bodies through Effect schema validation", async () => {
+    const createRes = await exports.default.fetch(createRoomRequest());
+    const { roomId } = await createRes.json() as { roomId: string };
+
+    const response = await exports.default.fetch(`http://localhost/api/rooms/${roomId}/phase`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ participantId: "fac", connectionToken: "wrong", phase: "done" }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      success: false,
+      error: "Valid JSON body is required",
+    });
+  });
+
   it("requires Turnstile when the secret is configured", async () => {
     const response = await worker.fetch(
       new Request("http://localhost/api/rooms", {

@@ -1,6 +1,11 @@
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import type { RetroRoom } from "./retro-room";
-import { generateRoomId, ROOM_ID_LENGTH } from "../src/domain";
+import {
+  generateRoomId,
+  PhaseSchema,
+  RankingMethodSchema,
+  ROOM_ID_LENGTH,
+} from "../src/domain";
 
 export interface Env {
   ASSETS?: Fetcher;
@@ -15,6 +20,55 @@ export { RetroRoom } from "./retro-room";
 
 const MAX_JSON_BODY_BYTES = 32 * 1024;
 const turnstileFailure = "Verification failed. Please retry and create the room again.";
+const OptionalConnectionTokenSchema = Schema.Struct({
+  participantId: Schema.String,
+  connectionToken: Schema.optional(Schema.String),
+});
+const CreateRoomRequestSchema = Schema.Struct({
+  turnstileToken: Schema.optional(Schema.String),
+});
+const JoinRoomRequestSchema = Schema.Struct({
+  participantId: Schema.String,
+  displayName: Schema.String,
+  connectionToken: Schema.optional(Schema.String),
+  facilitatorClaimToken: Schema.optional(Schema.String),
+});
+const VoteBudgetRequestSchema = Schema.Struct({
+  participantId: Schema.String,
+  connectionToken: Schema.optional(Schema.String),
+  budget: Schema.Number,
+});
+const RankingMethodRequestSchema = Schema.Struct({
+  participantId: Schema.String,
+  connectionToken: Schema.optional(Schema.String),
+  rankingMethod: RankingMethodSchema,
+});
+const PhaseRequestSchema = Schema.Struct({
+  participantId: Schema.String,
+  connectionToken: Schema.optional(Schema.String),
+  phase: PhaseSchema,
+});
+const AddItemRequestSchema = Schema.Struct({
+  participantId: Schema.String,
+  connectionToken: Schema.optional(Schema.String),
+  text: Schema.String,
+  columnId: Schema.optional(Schema.String),
+});
+const EditItemRequestSchema = Schema.Struct({
+  participantId: Schema.String,
+  connectionToken: Schema.optional(Schema.String),
+  text: Schema.String,
+});
+const TimerRequestSchema = Schema.Struct({
+  participantId: Schema.String,
+  connectionToken: Schema.optional(Schema.String),
+  durationSeconds: Schema.Number,
+});
+const ReviewTargetRequestSchema = Schema.Struct({
+  participantId: Schema.String,
+  connectionToken: Schema.optional(Schema.String),
+  reviewTargetKey: Schema.NullOr(Schema.String),
+});
 
 function getRoomStub(env: Env, roomId: string) {
   const id = env.RETRO_ROOM.idFromName(roomId);
@@ -136,9 +190,13 @@ function readJsonBody<T>(request: Request): Promise<T | null> {
   return Effect.runPromise(readJsonBodyEffect<T>(request));
 }
 
-async function readRequiredJsonBody<T>(request: Request): Promise<T | Response> {
-  const body = await readJsonBody<T>(request);
-  return body ?? Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
+async function readValidatedJsonBody<T>(request: Request, schema: Schema.Schema<T>): Promise<T | Response> {
+  const body = await readJsonBody<unknown>(request);
+  if (body === null) return Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
+  const decoded = await Effect.runPromiseExit(Schema.decodeUnknown(schema)(body));
+  return decoded._tag === "Success"
+    ? decoded.value
+    : Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
 }
 
 function verifyTurnstileTokenEffect(
@@ -204,7 +262,11 @@ export default {
           }
         }
 
-        const body = await readJsonBody<{ turnstileToken?: string }>(request);
+        const rawBody = await readJsonBody<unknown>(request);
+        const body = rawBody === null
+          ? {}
+          : await Effect.runPromiseExit(Schema.decodeUnknown(CreateRoomRequestSchema)(rawBody)).then((decoded) =>
+              decoded._tag === "Success" ? decoded.value : {});
         const clientIp = getClientIp(request);
         const turnstile = await verifyTurnstileToken(env, body?.turnstileToken, clientIp ?? "unknown");
         if (!turnstile.success) {
@@ -240,7 +302,7 @@ export default {
       }
 
       if (suffix === "join" && method === "POST") {
-        const body = await readRequiredJsonBody<{ participantId: string; displayName: string; connectionToken?: string }>(request);
+        const body = await readValidatedJsonBody(request, JoinRoomRequestSchema);
         if (body instanceof Response) return body;
         return forwardToDO(stub, "/join", request, body);
       }
@@ -250,68 +312,68 @@ export default {
       }
 
       if (suffix === "state" && method === "POST") {
-        const body = await readRequiredJsonBody<{ participantId: string; connectionToken?: string }>(request);
+        const body = await readValidatedJsonBody(request, OptionalConnectionTokenSchema);
         if (body instanceof Response) return body;
         return forwardToDO(stub, "/state", request, body);
       }
 
       if (suffix === "vote-budget" && method === "POST") {
-        const body = await readRequiredJsonBody<{ participantId: string; connectionToken?: string; budget: number }>(request);
+        const body = await readValidatedJsonBody(request, VoteBudgetRequestSchema);
         if (body instanceof Response) return body;
         return forwardToDO(stub, "/vote-budget", request, body);
       }
 
       if (suffix === "ranking-method" && method === "POST") {
-        const body = await readRequiredJsonBody<{ participantId: string; connectionToken?: string; rankingMethod: string }>(request);
+        const body = await readValidatedJsonBody(request, RankingMethodRequestSchema);
         if (body instanceof Response) return body;
         return forwardToDO(stub, "/ranking-method", request, body);
       }
 
       if (suffix === "phase" && method === "POST") {
-        const body = await readRequiredJsonBody<{ participantId: string; connectionToken?: string; phase: string }>(request);
+        const body = await readValidatedJsonBody(request, PhaseRequestSchema);
         if (body instanceof Response) return body;
         return forwardToDO(stub, "/phase", request, body);
       }
 
       if (suffix === "items" && method === "POST") {
-        const body = await readRequiredJsonBody<{ participantId: string; connectionToken?: string; text: string; columnId?: string }>(request);
+        const body = await readValidatedJsonBody(request, AddItemRequestSchema);
         if (body instanceof Response) return body;
         return forwardToDO(stub, "/items", request, body);
       }
 
       const itemMatch = suffix.match(/^items\/([^/]+)$/);
       if (itemMatch && method === "PATCH") {
-        const body = await readRequiredJsonBody<{ participantId: string; connectionToken?: string; text: string }>(request);
+        const body = await readValidatedJsonBody(request, EditItemRequestSchema);
         if (body instanceof Response) return body;
         return forwardToDO(stub, `/items/${itemMatch[1]}`, request, body);
       }
 
       if (itemMatch && method === "DELETE") {
-        const body = await readRequiredJsonBody<{ participantId: string; connectionToken?: string }>(request);
+        const body = await readValidatedJsonBody(request, OptionalConnectionTokenSchema);
         if (body instanceof Response) return body;
         return forwardToDO(stub, `/items/${itemMatch[1]}`, request, body);
       }
 
       if (suffix === "timer" && method === "POST") {
-        const body = await readRequiredJsonBody<{ participantId: string; connectionToken?: string; durationSeconds: number }>(request);
+        const body = await readValidatedJsonBody(request, TimerRequestSchema);
         if (body instanceof Response) return body;
         return forwardToDO(stub, "/timer", request, body);
       }
 
       if (suffix === "review-target" && method === "POST") {
-        const body = await readRequiredJsonBody<{ participantId: string; connectionToken?: string; reviewTargetKey: string | null }>(request);
+        const body = await readValidatedJsonBody(request, ReviewTargetRequestSchema);
         if (body instanceof Response) return body;
         return forwardToDO(stub, "/review-target", request, body);
       }
 
       if (suffix === "purge" && method === "POST") {
-        const body = await readRequiredJsonBody<{ participantId: string; connectionToken?: string }>(request);
+        const body = await readValidatedJsonBody(request, OptionalConnectionTokenSchema);
         if (body instanceof Response) return body;
         return forwardToDO(stub, "/purge", request, body);
       }
 
       if (suffix === "ws-ticket" && method === "POST") {
-        const body = await readRequiredJsonBody<{ participantId: string; connectionToken?: string }>(request);
+        const body = await readValidatedJsonBody(request, OptionalConnectionTokenSchema);
         if (body instanceof Response) return body;
         return forwardToDO(stub, "/ws-ticket", request, body);
       }
