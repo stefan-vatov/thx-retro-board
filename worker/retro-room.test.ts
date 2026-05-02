@@ -18,6 +18,8 @@ import {
   validateGroupReorderEffect,
   validateItemMoveEffect,
   validateItemReorderEffect,
+  validateVoteCastEffect,
+  validateVoteRemoveEffect,
   validateWriteItemCreateEffect,
   validateWriteItemDeleteEffect,
   validateWriteItemEditEffect,
@@ -429,6 +431,58 @@ describe("RetroRoom Durable Object v2 schema", () => {
       sourceIndex: 0,
     }));
     expect(Exit.isFailure(badIndex)).toBe(true);
+  });
+
+  it("validates score vote casting through Effect before state changes", async () => {
+    const state = {
+      participants: [{ id: "p1", displayName: "Pat", isFacilitator: false }],
+      votingParticipantIds: ["p1"],
+      phase: "vote",
+      rankingMethod: "score",
+      voteBudget: 3,
+      groups: [{ id: "group-1", columnId: "col-1", name: "Theme", order: 0 }],
+      items: [
+        { id: "item-1", text: "Free", authorId: "p1", columnId: "col-1", groupId: null, order: 0 },
+        { id: "item-2", text: "Grouped", authorId: "p1", columnId: "col-1", groupId: "group-1", order: 0 },
+      ],
+      votes: [],
+    };
+
+    await expect(Effect.runPromise(validateVoteCastEffect(state, "p1", itemVoteTarget("item-1"), 2))).resolves.toEqual({
+      votes: [{ participantId: "p1", target: itemVoteTarget("item-1"), count: 2 }],
+    });
+
+    const groupedItem = await Effect.runPromiseExit(validateVoteCastEffect(state, "p1", itemVoteTarget("item-2"), 1));
+    expect(Exit.isFailure(groupedItem)).toBe(true);
+
+    const overBudget = await Effect.runPromiseExit(validateVoteCastEffect({
+      ...state,
+      votes: [{ participantId: "p1", target: itemVoteTarget("item-1"), count: 3 }],
+    }, "p1", groupVoteTarget("group-1"), 1));
+    expect(Exit.isFailure(overBudget)).toBe(true);
+  });
+
+  it("validates score vote removal through Effect before state changes", async () => {
+    const state = {
+      participants: [{ id: "p1", displayName: "Pat", isFacilitator: false }],
+      votingParticipantIds: ["p1"],
+      phase: "vote",
+      rankingMethod: "score",
+      voteBudget: 3,
+      groups: [],
+      items: [{ id: "item-1", text: "Free", authorId: "p1", columnId: "col-1", groupId: null, order: 0 }],
+      votes: [{ participantId: "p1", target: itemVoteTarget("item-1"), count: 2 }],
+    };
+
+    await expect(Effect.runPromise(validateVoteRemoveEffect(state, "p1", itemVoteTarget("item-1")))).resolves.toEqual({
+      votes: [{ participantId: "p1", target: itemVoteTarget("item-1"), count: 1 }],
+    });
+
+    const missingVote = await Effect.runPromiseExit(validateVoteRemoveEffect({ ...state, votes: [] }, "p1", itemVoteTarget("item-1")));
+    expect(Exit.isFailure(missingVote)).toBe(true);
+
+    const wrongPhase = await Effect.runPromiseExit(validateVoteRemoveEffect({ ...state, phase: "review" }, "p1", itemVoteTarget("item-1")));
+    expect(Exit.isFailure(wrongPhase)).toBe(true);
   });
 
   it("validates review action mutations through Effect before state changes", async () => {

@@ -137,6 +137,7 @@ type GroupDeleteValidationState = Pick<StoredState, "participants" | "phase" | "
 type GroupReorderValidationState = Pick<StoredState, "participants" | "phase" | "groups" | "version">;
 type ItemReorderValidationState = Pick<StoredState, "participants" | "phase" | "items" | "version">;
 type ItemMoveValidationState = Pick<StoredState, "participants" | "phase" | "groups" | "items" | "version">;
+type ScoreVoteValidationState = Pick<StoredState, "participants" | "votingParticipantIds" | "phase" | "rankingMethod" | "voteBudget" | "groups" | "items" | "votes">;
 type ReviewActionValidationState = Pick<StoredState, "participants" | "phase">;
 type WriteItemCreateValidationState = Pick<StoredState, "participants" | "phase" | "items" | "columns">;
 type WriteItemEditValidationState = Pick<StoredState, "participants" | "phase" | "items">;
@@ -603,6 +604,89 @@ export function validateItemMoveEffect(
       return yield* Effect.fail(new RoomMutationValidationError("Target index out of bounds"));
     }
     return { items: applyMoveItemToGroup(state.items, itemId, targetGroupId, targetIndex) };
+  });
+}
+
+function resolveVoteTargetForState(
+  state: Pick<StoredState, "groups" | "items">,
+  target: VoteTarget,
+): { success: true; target: VoteTarget } | { success: false; error: string } {
+  if (target.type === "group") {
+    return state.groups.some((group) => group.id === target.id)
+      ? { success: true, target }
+      : { success: false, error: "Group not found" };
+  }
+  const item = state.items.find((candidate) => candidate.id === target.id);
+  if (!item) {
+    return { success: false, error: "Item not found" };
+  }
+  if (item.groupId !== null) {
+    return { success: false, error: "Cannot vote directly on a grouped item" };
+  }
+  return { success: true, target };
+}
+
+function validateScoreVoteContext(
+  state: ScoreVoteValidationState,
+  participantId: string,
+): Effect.Effect<void, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    if (state.phase !== "vote") {
+      return yield* Effect.fail(new RoomMutationValidationError("Cannot vote outside vote phase"));
+    }
+    if (!state.participants.some((participant) => participant.id === participantId)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Participant not found"));
+    }
+    if (state.votingParticipantIds?.length && !state.votingParticipantIds.includes(participantId)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Participant joined after voting started"));
+    }
+    if ((state.rankingMethod ?? "score") !== "score") {
+      return yield* Effect.fail(new RoomMutationValidationError("This room is using pairwise ranking"));
+    }
+  });
+}
+
+export function validateVoteCastEffect(
+  state: ScoreVoteValidationState,
+  participantId: string,
+  targetOrGroupId: VoteTarget | string,
+  count: number,
+): Effect.Effect<{ votes: VoteAllocation[] }, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    yield* validateScoreVoteContext(state, participantId);
+    const target = typeof targetOrGroupId === "string" ? groupVoteTarget(targetOrGroupId) : targetOrGroupId;
+    const targetValidation = resolveVoteTargetForState(state, target);
+    if (!targetValidation.success) {
+      return yield* Effect.fail(new RoomMutationValidationError(targetValidation.error));
+    }
+    const result = applyCastVote(state.votes, participantId, targetValidation.target, count, state.voteBudget);
+    if (result.error) {
+      return yield* Effect.fail(new RoomMutationValidationError(result.error));
+    }
+    return { votes: result.votes };
+  });
+}
+
+export function validateVoteRemoveEffect(
+  state: ScoreVoteValidationState,
+  participantId: string,
+  targetOrGroupId: VoteTarget | string,
+): Effect.Effect<{ votes: VoteAllocation[] }, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    yield* validateScoreVoteContext(state, participantId);
+    const target = typeof targetOrGroupId === "string" ? groupVoteTarget(targetOrGroupId) : targetOrGroupId;
+    const targetValidation = resolveVoteTargetForState(state, target);
+    if (!targetValidation.success) {
+      return yield* Effect.fail(new RoomMutationValidationError(targetValidation.error));
+    }
+    const existing = state.votes.find((vote) => {
+      const voteTarget = getVoteTarget(vote);
+      return vote.participantId === participantId && voteTarget !== null && sameVoteTarget(voteTarget, targetValidation.target);
+    });
+    if (!existing) {
+      return yield* Effect.fail(new RoomMutationValidationError("No votes to remove"));
+    }
+    return { votes: applyRemoveVote(state.votes, participantId, targetValidation.target) };
   });
 }
 
@@ -2209,33 +2293,12 @@ export class RetroRoom extends DurableObject<Env> {
 
   async castVote(participantId: string, targetOrGroupId: VoteTarget | string, count: number): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
-
-    if (s.phase !== "vote") {
-      return { success: false, error: "Cannot vote outside vote phase" };
+    const validation = await Effect.runPromise(Effect.either(validateVoteCastEffect(s, participantId, targetOrGroupId, count)));
+    if (validation._tag === "Left") {
+      return { success: false, error: validation.left.message };
     }
 
-    if (!this.hasParticipant(s, participantId)) {
-      return { success: false, error: "Participant not found" };
-    }
-    if (s.votingParticipantIds?.length && !s.votingParticipantIds.includes(participantId)) {
-      return { success: false, error: "Participant joined after voting started" };
-    }
-    if ((s.rankingMethod ?? "score") !== "score") {
-      return { success: false, error: "This room is using pairwise ranking" };
-    }
-
-    const target = typeof targetOrGroupId === "string" ? groupVoteTarget(targetOrGroupId) : targetOrGroupId;
-    const targetValidation = this.resolveVoteTarget(target);
-    if (!targetValidation.success) {
-      return { success: false, error: targetValidation.error };
-    }
-
-    const result = applyCastVote(s.votes, participantId, targetValidation.target, count, s.voteBudget);
-    if (result.error) {
-      return { success: false, error: result.error };
-    }
-
-    s.votes = result.votes;
+    s.votes = validation.right.votes;
     await this.saveState();
 
     this.broadcastState(s);
@@ -2245,38 +2308,12 @@ export class RetroRoom extends DurableObject<Env> {
 
   async removeVote(participantId: string, targetOrGroupId: VoteTarget | string): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
-
-    if (s.phase !== "vote") {
-      return { success: false, error: "Cannot remove votes outside vote phase" };
+    const validation = await Effect.runPromise(Effect.either(validateVoteRemoveEffect(s, participantId, targetOrGroupId)));
+    if (validation._tag === "Left") {
+      return { success: false, error: validation.left.message };
     }
 
-    if (!this.hasParticipant(s, participantId)) {
-      return { success: false, error: "Participant not found" };
-    }
-    if (s.votingParticipantIds?.length && !s.votingParticipantIds.includes(participantId)) {
-      return { success: false, error: "Participant joined after voting started" };
-    }
-    if ((s.rankingMethod ?? "score") !== "score") {
-      return { success: false, error: "This room is using pairwise ranking" };
-    }
-
-    const target = typeof targetOrGroupId === "string" ? groupVoteTarget(targetOrGroupId) : targetOrGroupId;
-    const targetValidation = this.resolveVoteTarget(target);
-    if (!targetValidation.success) {
-      return { success: false, error: targetValidation.error };
-    }
-
-    const existing = s.votes.find(
-      (v) => {
-        const voteTarget = getVoteTarget(v);
-        return v.participantId === participantId && voteTarget !== null && sameVoteTarget(voteTarget, targetValidation.target);
-      },
-    );
-    if (!existing) {
-      return { success: false, error: "No votes to remove" };
-    }
-
-    s.votes = applyRemoveVote(s.votes, participantId, targetValidation.target);
+    s.votes = validation.right.votes;
     await this.saveState();
 
     this.broadcastState(s);
