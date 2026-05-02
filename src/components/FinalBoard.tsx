@@ -9,6 +9,7 @@ import {
   formatRetroExportMarkdown,
   getAnonymousActions,
 } from "../domain";
+import { writeClipboardText } from "./clipboard-effect";
 
 interface ExportCard {
   id: string;
@@ -68,7 +69,7 @@ export function FinalBoard({ roomState }: { roomState: RoomState }) {
 
   async function handleCopy(card: ExportCard) {
     try {
-      await navigator.clipboard.writeText(card.content);
+      await writeClipboardText(card.content, navigator.clipboard);
       setCopiedId(card.id);
       window.setTimeout(() => setCopiedId((current) => current === card.id ? null : current), 1800);
     } catch {

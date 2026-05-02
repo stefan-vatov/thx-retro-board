@@ -14,6 +14,7 @@ import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Card } from "./ui/card";
 import { Input } from "./ui/input";
+import { writeClipboardText } from "./clipboard-effect";
 
 export function TimerDisplay({ timer }: { timer: RoomState["timer"] }) {
   const [now, setNow] = useState(() => Date.now());
@@ -110,19 +111,20 @@ export function InviteButton({ roomId }: { roomId: string }) {
     }
   }, [manualUrl]);
 
-  function handleInvite() {
+  async function handleInvite() {
     const inviteUrl = `${window.location.origin}/room/${roomId}`;
     if (copySupported) {
-      navigator.clipboard.writeText(inviteUrl).then(() => {
+      try {
+        await writeClipboardText(inviteUrl, navigator.clipboard);
         setCopied(true);
         setCopyFailed(false);
         setManualUrl(null);
         setTimeout(() => setCopied(false), 2000);
-      }).catch(() => {
+      } catch {
         setCopied(false);
         setCopyFailed(true);
         setManualUrl(inviteUrl);
-      });
+      }
     } else {
       setCopied(false);
       setCopyFailed(true);
