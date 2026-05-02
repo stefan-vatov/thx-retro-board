@@ -248,6 +248,30 @@ describe("POST /api/rooms/:roomId/join", () => {
     expect(result).toEqual({ success: false, error: "Invalid participant credentials" });
   });
 
+  it("does not cancel room cleanup on rejected rejoin attempts", async () => {
+    const createRes = await exports.default.fetch(createRoomRequest());
+    const { roomId } = await createRes.json() as { roomId: string };
+
+    await exports.default.fetch(`http://localhost/api/rooms/${roomId}/join`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ participantId: "p1", displayName: "Alice" }),
+    });
+    const beforeRes = await exports.default.fetch(`http://localhost/api/rooms/${roomId}`);
+    const before = await beforeRes.json() as { purgeScheduledAt: number | null };
+    expect(before.purgeScheduledAt).not.toBeNull();
+
+    await exports.default.fetch(`http://localhost/api/rooms/${roomId}/join`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ participantId: "p1", displayName: "Alice" }),
+    });
+    const afterRes = await exports.default.fetch(`http://localhost/api/rooms/${roomId}`);
+    const after = await afterRes.json() as { purgeScheduledAt: number | null };
+
+    expect(after.purgeScheduledAt).toBe(before.purgeScheduledAt);
+  });
+
   it("re-joining same participant with the current connection token returns a new token", async () => {
     const createRes = await exports.default.fetch(createRoomRequest());
     const { roomId } = await createRes.json() as { roomId: string };

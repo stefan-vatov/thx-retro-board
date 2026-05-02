@@ -631,7 +631,6 @@ export class RetroRoom extends DurableObject<Env> {
 
   async join(participantId: string, displayName: string, connectionToken?: string): Promise<{ success: boolean; error?: string; state?: RoomState; connectionToken?: string }> {
     const s = await this.loadState();
-    await this.cancelEmptyRoomPurge();
     if (typeof participantId !== "string" || participantId.trim().length === 0 || participantId.length > 128) {
       return { success: false, error: "Participant not found" };
     }
@@ -649,6 +648,7 @@ export class RetroRoom extends DurableObject<Env> {
       if (!this.hasValidConnectionToken(s, participantId, connectionToken)) {
         return { success: false, error: "Invalid participant credentials" };
       }
+      await this.cancelEmptyRoomPurge();
       const token = generateToken();
       s.connectionTokens[participantId] = token;
       await this.saveState();
@@ -671,6 +671,7 @@ export class RetroRoom extends DurableObject<Env> {
       return { success: false, error: `Rooms can have at most ${MAX_PARTICIPANTS_PER_ROOM} participants` };
     }
 
+    await this.cancelEmptyRoomPurge();
     const isFacilitator = s.participants.length === 0;
     const participant: Participant = {
       id: participantId,
