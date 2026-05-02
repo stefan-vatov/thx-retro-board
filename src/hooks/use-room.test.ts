@@ -8,6 +8,7 @@ import {
   MAX_RECONNECT_ATTEMPTS,
   MAX_RECONNECT_DELAY_MS,
   prepareRealtimeSendEffect,
+  runRealtimeMessageDecode,
   shouldResetRealtimeReconnectAttempts,
 } from "./use-room";
 
@@ -55,6 +56,17 @@ describe("realtime message decoding", () => {
     const exit = await Effect.runPromiseExit(decodeRealtimeMessageEffect("{not json"));
 
     expect(Exit.isFailure(exit)).toBe(true);
+  });
+
+  it("bridges realtime decoding to nullable Promise values for React event handlers", async () => {
+    await expect(runRealtimeMessageDecode(JSON.stringify({
+      type: "error",
+      message: "Nope",
+    }))).resolves.toEqual({
+      type: "error",
+      message: "Nope",
+    });
+    await expect(runRealtimeMessageDecode("{not json")).resolves.toBeNull();
   });
 });
 

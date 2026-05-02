@@ -51,6 +51,11 @@ export function prepareRealtimeSendEffect(message: unknown): Effect.Effect<strin
   );
 }
 
+export async function runRealtimeMessageDecode(raw: string): Promise<ServerToClientMessage | null> {
+  const exit = await Effect.runPromiseExit(decodeRealtimeMessageEffect(raw));
+  return Exit.isSuccess(exit) ? exit.value : null;
+}
+
 interface UseRoomResult {
   state: RoomState | null;
   connected: boolean;
@@ -145,9 +150,8 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
 
       ws.addEventListener("message", (event) => {
         if (wsRef.current !== ws || disposed) return;
-        void Effect.runPromiseExit(decodeRealtimeMessageEffect(event.data as string)).then((exit) => {
-          if (Exit.isFailure(exit) || wsRef.current !== ws || disposed) return;
-          const msg = exit.value;
+        void runRealtimeMessageDecode(event.data as string).then((msg) => {
+          if (!msg || wsRef.current !== ws || disposed) return;
           if (msg.type === "snapshot") {
             setState(msg.state as RoomState);
           } else if (msg.type === "participant-joined") {
