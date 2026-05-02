@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import type { ClientToServerMessage, Phase, ReactionTarget, VoteTarget } from "../src/domain";
 import { groupVoteTarget, itemVoteTarget } from "../src/domain";
 import type { ItemReorderPreconditions, MoveItemPreconditions } from "./room-types";
@@ -65,98 +66,125 @@ function parseVoteTargetMessage(
   return { success: false, error: "Vote target is required" };
 }
 
-async function reportFailedResult(room: RoomRealtimeController, participantId: string, result: { success: boolean; error?: string }) {
-  if (!result.success) {
-    room.sendParticipantError(participantId, result.error ?? "Request failed");
-  }
-}
-
 export async function handleRoomRealtimeMessage(
   room: RoomRealtimeController,
   participantId: string,
   msg: ClientToServerMessage,
 ): Promise<void> {
+  return Effect.runPromise(handleRoomRealtimeMessageEffect(room, participantId, msg));
+}
+
+function reportFailedResultEffect(
+  room: RoomRealtimeController,
+  participantId: string,
+  result: { success: boolean; error?: string },
+): Effect.Effect<void> {
+  return Effect.sync(() => {
+    if (!result.success) {
+      room.sendParticipantError(participantId, result.error ?? "Request failed");
+    }
+  });
+}
+
+function runRoomResultEffect(
+  room: RoomRealtimeController,
+  participantId: string,
+  run: () => RoomResult,
+): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    const result = yield* Effect.promise(run);
+    yield* reportFailedResultEffect(room, participantId, result);
+  });
+}
+
+export function handleRoomRealtimeMessageEffect(
+  room: RoomRealtimeController,
+  participantId: string,
+  msg: ClientToServerMessage,
+): Effect.Effect<void> {
+  return Effect.gen(function* () {
   switch (msg.type) {
     case "join":
-      await room.join(participantId, msg.displayName);
+      yield* Effect.promise(() => room.join(participantId, msg.displayName));
       return;
     case "add-item":
-      return reportFailedResult(room, participantId, await room.addItem(participantId, msg.text, msg.columnId ?? null));
+      return yield* runRoomResultEffect(room, participantId, () => room.addItem(participantId, msg.text, msg.columnId ?? null));
     case "edit-item":
-      return reportFailedResult(room, participantId, await room.editItem(participantId, msg.itemId, msg.text));
+      return yield* runRoomResultEffect(room, participantId, () => room.editItem(participantId, msg.itemId, msg.text));
     case "delete-item":
-      return reportFailedResult(room, participantId, await room.deleteItem(participantId, msg.itemId));
+      return yield* runRoomResultEffect(room, participantId, () => room.deleteItem(participantId, msg.itemId));
     case "set-vote-budget":
-      return reportFailedResult(room, participantId, await room.setVoteBudget(participantId, msg.budget));
+      return yield* runRoomResultEffect(room, participantId, () => room.setVoteBudget(participantId, msg.budget));
     case "set-ranking-method":
-      return reportFailedResult(room, participantId, await room.setRankingMethod(participantId, msg.rankingMethod));
+      return yield* runRoomResultEffect(room, participantId, () => room.setRankingMethod(participantId, msg.rankingMethod));
     case "set-phase":
-      return reportFailedResult(room, participantId, await room.setPhase(participantId, msg.phase));
+      return yield* runRoomResultEffect(room, participantId, () => room.setPhase(participantId, msg.phase));
     case "create-group":
-      return reportFailedResult(room, participantId, await room.createGroup(participantId, msg.name, msg.columnId));
+      return yield* runRoomResultEffect(room, participantId, () => room.createGroup(participantId, msg.name, msg.columnId));
     case "edit-group":
-      return reportFailedResult(room, participantId, await room.editGroup(participantId, msg.groupId, msg.name));
+      return yield* runRoomResultEffect(room, participantId, () => room.editGroup(participantId, msg.groupId, msg.name));
     case "delete-group":
-      return reportFailedResult(room, participantId, await room.deleteGroup(participantId, msg.groupId));
+      return yield* runRoomResultEffect(room, participantId, () => room.deleteGroup(participantId, msg.groupId));
     case "create-column":
-      return reportFailedResult(room, participantId, await room.createColumn(participantId, msg.name));
+      return yield* runRoomResultEffect(room, participantId, () => room.createColumn(participantId, msg.name));
     case "edit-column":
-      return reportFailedResult(room, participantId, await room.editColumn(participantId, msg.columnId, msg.name));
+      return yield* runRoomResultEffect(room, participantId, () => room.editColumn(participantId, msg.columnId, msg.name));
     case "reorder-columns":
-      return reportFailedResult(room, participantId, await room.reorderColumns(participantId, msg.columnIds));
+      return yield* runRoomResultEffect(room, participantId, () => room.reorderColumns(participantId, msg.columnIds));
     case "delete-column":
-      return reportFailedResult(room, participantId, await room.deleteColumn(participantId, msg.columnId));
+      return yield* runRoomResultEffect(room, participantId, () => room.deleteColumn(participantId, msg.columnId));
     case "reorder-items":
-      return reportFailedResult(
-        room,
-        participantId,
-        await room.reorderItems(participantId, msg.itemIds, {
+      return yield* runRoomResultEffect(room, participantId, () =>
+        room.reorderItems(participantId, msg.itemIds, {
           expectedVersion: msg.expectedVersion,
           sourceColumnId: msg.sourceColumnId,
           sourceGroupId: msg.sourceGroupId,
-        }),
+        })
       );
     case "reorder-groups":
-      return reportFailedResult(room, participantId, await room.reorderGroups(participantId, msg.groupIds, msg.expectedVersion));
+      return yield* runRoomResultEffect(room, participantId, () =>
+        room.reorderGroups(participantId, msg.groupIds, msg.expectedVersion)
+      );
     case "move-item-to-group":
-      return reportFailedResult(
-        room,
-        participantId,
-        await room.moveItemToGroup(participantId, msg.itemId, msg.groupId, msg.index, {
+      return yield* runRoomResultEffect(room, participantId, () =>
+        room.moveItemToGroup(participantId, msg.itemId, msg.groupId, msg.index, {
           expectedVersion: msg.expectedVersion,
           sourceGroupId: msg.sourceGroupId,
           sourceIndex: msg.sourceIndex,
-        }),
+        })
       );
     case "set-timer":
-      return reportFailedResult(room, participantId, await room.setTimer(participantId, msg.durationSeconds));
+      return yield* runRoomResultEffect(room, participantId, () => room.setTimer(participantId, msg.durationSeconds));
     case "set-review-target":
-      return reportFailedResult(room, participantId, await room.setReviewTarget(participantId, msg.reviewTargetKey));
+      return yield* runRoomResultEffect(room, participantId, () => room.setReviewTarget(participantId, msg.reviewTargetKey));
     case "cast-vote": {
       const target = parseVoteTargetMessage(msg);
-      const result = target.success
-        ? await room.castVote(participantId, target.target, msg.count)
-        : { success: false, error: target.error };
-      return reportFailedResult(room, participantId, result);
+      return yield* runRoomResultEffect(room, participantId, () =>
+        target.success
+          ? room.castVote(participantId, target.target, msg.count)
+          : Promise.resolve({ success: false, error: target.error })
+      );
     }
     case "remove-vote": {
       const target = parseVoteTargetMessage(msg);
-      const result = target.success
-        ? await room.removeVote(participantId, target.target)
-        : { success: false, error: target.error };
-      return reportFailedResult(room, participantId, result);
+      return yield* runRoomResultEffect(room, participantId, () =>
+        target.success
+          ? room.removeVote(participantId, target.target)
+          : Promise.resolve({ success: false, error: target.error })
+      );
     }
     case "choose-pairwise":
-      return reportFailedResult(room, participantId, await room.choosePairwise(participantId, msg.winner, msg.loser));
+      return yield* runRoomResultEffect(room, participantId, () => room.choosePairwise(participantId, msg.winner, msg.loser));
     case "toggle-reaction":
-      return reportFailedResult(room, participantId, await room.toggleReaction(participantId, msg.target, msg.emoji));
+      return yield* runRoomResultEffect(room, participantId, () => room.toggleReaction(participantId, msg.target, msg.emoji));
     case "create-action":
-      return reportFailedResult(room, participantId, await room.createAction(participantId, msg.text));
+      return yield* runRoomResultEffect(room, participantId, () => room.createAction(participantId, msg.text));
     case "edit-action":
-      return reportFailedResult(room, participantId, await room.editAction(participantId, msg.actionId, msg.text));
+      return yield* runRoomResultEffect(room, participantId, () => room.editAction(participantId, msg.actionId, msg.text));
     case "delete-action":
-      return reportFailedResult(room, participantId, await room.deleteAction(participantId, msg.actionId));
+      return yield* runRoomResultEffect(room, participantId, () => room.deleteAction(participantId, msg.actionId));
     default:
       return;
   }
+  });
 }
