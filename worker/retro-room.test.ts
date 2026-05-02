@@ -1,10 +1,31 @@
 // @ts-expect-error -- cloudflare:workers vitest module
 import { env } from "cloudflare:workers";
+import { Effect, Exit } from "effect";
 import { describe, it, expect } from "vitest";
 import { getDefaultColumns, groupVoteTarget, itemVoteTarget } from "../src/domain";
 import type { RoomState } from "../src/domain";
+import { parseClientWebSocketMessageEffect } from "./retro-room";
 
 describe("RetroRoom Durable Object v2 schema", () => {
+  it("parses valid websocket client messages through Effect", async () => {
+    await expect(Effect.runPromise(parseClientWebSocketMessageEffect(JSON.stringify({
+      type: "create-action",
+      text: "Follow up",
+    })))).resolves.toEqual({
+      type: "create-action",
+      text: "Follow up",
+    });
+  });
+
+  it("rejects malformed websocket client messages through Effect", async () => {
+    const exit = await Effect.runPromiseExit(parseClientWebSocketMessageEffect(JSON.stringify({
+      type: "set-phase",
+      phase: "done",
+    })));
+
+    expect(Exit.isFailure(exit)).toBe(true);
+  });
+
   async function initRaw(roomId: string) {
     const id = env.RETRO_ROOM.idFromName(roomId);
     const stub = env.RETRO_ROOM.get(id);

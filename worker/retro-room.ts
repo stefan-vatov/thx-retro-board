@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { Effect, Schema } from "effect";
 import type { Env } from "./index";
 import type {
   RoomState,
@@ -51,6 +52,7 @@ import {
   pairwiseComparisonKey,
   getDefaultColumns,
   isAllowedReactionEmoji,
+  ClientToServerMessageSchema,
 } from "../src/domain";
 
 interface StoredTimer {
@@ -105,6 +107,28 @@ const MAX_ROOM_WEBSOCKET_MESSAGES_PER_WINDOW = 60;
 const WEBSOCKET_RATE_WINDOW_MS = 10 * 1000;
 const WEBSOCKET_TICKET_TTL_MS = 30 * 1000;
 const ANONYMOUS_VOTE_PARTICIPANT_ID = "__anonymous__";
+
+class ClientWebSocketMessageError extends Error {
+  constructor() {
+    super("Invalid websocket client message");
+    this.name = "ClientWebSocketMessageError";
+  }
+}
+
+export function parseClientWebSocketMessageEffect(
+  message: string | ArrayBuffer,
+): Effect.Effect<ClientToServerMessage, ClientWebSocketMessageError> {
+  return Effect.gen(function* () {
+    const text = typeof message === "string" ? message : new TextDecoder().decode(message);
+    const parsed = yield* Effect.try({
+      try: () => JSON.parse(text) as unknown,
+      catch: () => new ClientWebSocketMessageError(),
+    });
+    return yield* Schema.decodeUnknown(ClientToServerMessageSchema)(parsed).pipe(
+      Effect.mapError(() => new ClientWebSocketMessageError()),
+    );
+  });
+}
 
 interface MoveItemPreconditions {
   expectedVersion: number;
@@ -2050,7 +2074,7 @@ export class RetroRoom extends DurableObject<Env> {
         ws.send(JSON.stringify({ type: "error", message: "Message is too large" }));
         return;
       }
-      const msg = JSON.parse(typeof message === "string" ? message : new TextDecoder().decode(message)) as ClientToServerMessage;
+      const msg = await Effect.runPromise(parseClientWebSocketMessageEffect(message));
       await this.handleMessage(participantId, msg);
     } catch {
       ws.send(JSON.stringify({ type: "error", message: "Invalid message" }));
