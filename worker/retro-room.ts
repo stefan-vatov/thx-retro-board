@@ -127,6 +127,7 @@ class RoomMutationValidationError extends Error {
 type VoteBudgetValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase">;
 type RankingMethodValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase">;
 type PhaseValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase" | "columns" | "rankingMethod">;
+type ReviewActionValidationState = Pick<StoredState, "participants" | "phase">;
 
 const OptionalConnectionTokenSchema = Schema.Struct({
   participantId: Schema.String,
@@ -260,6 +261,25 @@ export function validatePhaseChangeEffect(
       return yield* Effect.fail(new RoomMutationValidationError(`Pairwise ranking supports at most ${MAX_PAIRWISE_TARGETS} cards or groups`));
     }
     return { phase };
+  });
+}
+
+export function validateReviewActionEffect(
+  state: ReviewActionValidationState,
+  participantId: string,
+  rawText: string,
+): Effect.Effect<{ text: string }, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    if (state.phase !== "review") {
+      return yield* Effect.fail(new RoomMutationValidationError("Cannot change actions outside review phase"));
+    }
+    if (!state.participants.some((participant) => participant.id === participantId)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Participant not found"));
+    }
+    if (!isValidActionText(rawText)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Action text cannot be empty"));
+    }
+    return { text: sanitizeActionText(rawText) };
   });
 }
 
@@ -1199,21 +1219,21 @@ export class RetroRoom extends DurableObject<Env> {
 
   async createAction(participantId: string, rawText: string): Promise<{ success: boolean; error?: string; action?: ActionItem }> {
     const s = await this.loadState();
-
-    if (s.phase !== "review") {
-      return { success: false, error: "Cannot add actions outside review phase" };
-    }
-    if (!this.hasParticipant(s, participantId)) {
-      return { success: false, error: "Participant not found" };
-    }
-    if (!isValidActionText(rawText)) {
-      return { success: false, error: "Action text cannot be empty" };
+    let validated: { text: string };
+    try {
+      validated = await Effect.runPromise(validateReviewActionEffect(s, participantId, rawText));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Action validation failed";
+      return {
+        success: false,
+        error: message === "Cannot change actions outside review phase" ? "Cannot add actions outside review phase" : message,
+      };
     }
     if ((s.actions ?? []).length >= MAX_ACTIONS_PER_ROOM) {
       return { success: false, error: `Rooms can have at most ${MAX_ACTIONS_PER_ROOM} actions` };
     }
 
-    const action = createActionItem(crypto.randomUUID(), rawText, participantId, (s.actions ?? []).length);
+    const action = createActionItem(crypto.randomUUID(), validated.text, participantId, (s.actions ?? []).length);
     s.actions = [...(s.actions ?? []), action];
     await this.saveState();
 
@@ -1225,18 +1245,18 @@ export class RetroRoom extends DurableObject<Env> {
 
   async editAction(participantId: string, actionId: string, rawText: string): Promise<{ success: boolean; error?: string; action?: ActionItem }> {
     const s = await this.loadState();
-
-    if (s.phase !== "review") {
-      return { success: false, error: "Cannot edit actions outside review phase" };
-    }
-    if (!this.hasParticipant(s, participantId)) {
-      return { success: false, error: "Participant not found" };
+    let validated: { text: string };
+    try {
+      validated = await Effect.runPromise(validateReviewActionEffect(s, participantId, rawText));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Action validation failed";
+      return {
+        success: false,
+        error: message === "Cannot change actions outside review phase" ? "Cannot edit actions outside review phase" : message,
+      };
     }
     if (typeof actionId !== "string" || actionId.trim().length === 0) {
       return { success: false, error: "Action not found" };
-    }
-    if (!isValidActionText(rawText)) {
-      return { success: false, error: "Action text cannot be empty" };
     }
 
     const actionIndex = (s.actions ?? []).findIndex((action) => action.id === actionId);
@@ -1249,7 +1269,7 @@ export class RetroRoom extends DurableObject<Env> {
     if (!existing) {
       return { success: false, error: "Action not found" };
     }
-    s.actions[actionIndex] = { ...existing, text: sanitizeActionText(rawText) };
+    s.actions[actionIndex] = { ...existing, text: validated.text };
     await this.saveState();
 
     this.broadcast({ type: "actions-changed", actions: s.actions });

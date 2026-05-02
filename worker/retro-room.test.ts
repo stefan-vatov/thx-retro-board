@@ -8,6 +8,7 @@ import {
   parseClientWebSocketMessageEffect,
   validatePhaseChangeEffect,
   validateRankingMethodChangeEffect,
+  validateReviewActionEffect,
   validateVoteBudgetChangeEffect,
 } from "./retro-room";
 
@@ -116,6 +117,24 @@ describe("RetroRoom Durable Object v2 schema", () => {
 
     const noColumns = await Effect.runPromiseExit(validatePhaseChangeEffect({ ...state, columns: [] }, "fac1", "write", 0));
     expect(Exit.isFailure(noColumns)).toBe(true);
+  });
+
+  it("validates review action mutations through Effect before state changes", async () => {
+    const state = {
+      participants: [{ id: "p1", displayName: "Pat", isFacilitator: false }],
+      phase: "review",
+      actions: [],
+    };
+
+    await expect(Effect.runPromise(validateReviewActionEffect(state, "p1", "Follow up"))).resolves.toEqual({
+      text: "Follow up",
+    });
+
+    const blankText = await Effect.runPromiseExit(validateReviewActionEffect(state, "p1", "   "));
+    expect(Exit.isFailure(blankText)).toBe(true);
+
+    const wrongPhase = await Effect.runPromiseExit(validateReviewActionEffect({ ...state, phase: "finalize" }, "p1", "Follow up"));
+    expect(Exit.isFailure(wrongPhase)).toBe(true);
   });
 
   async function initRaw(roomId: string) {
