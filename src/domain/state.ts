@@ -19,6 +19,7 @@ export function createRoomState(roomId: string, voteBudget: number = 5): RoomSta
     roomId,
     schemaVersion: 2,
     startedAt: Date.now(),
+    purgeScheduledAt: null,
     phase: "setup",
     participants: [],
     items: [],

@@ -14,6 +14,7 @@ function makeRoomState(groups: Group[] = [], items: RetroItem[] = [], votes: Roo
     schemaVersion: 2,
     roomId: "room-vote-groups",
     startedAt: 1000,
+    purgeScheduledAt: null,
     phase: "vote",
     participants: [
       { id: "fac1", displayName: "Alice", isFacilitator: true },

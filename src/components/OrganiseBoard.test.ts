@@ -9,6 +9,7 @@ function makeRoomState(columns: Column[], phase: RoomState["phase"] = "organise"
     schemaVersion: 2,
     roomId: "room-organise-columns",
     startedAt: 1000,
+    purgeScheduledAt: null,
     phase,
     participants: [{ id: "fac1", displayName: "Alice", isFacilitator: true }],
     items,

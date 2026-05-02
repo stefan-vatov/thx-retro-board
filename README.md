@@ -184,6 +184,8 @@ tests/
 - Room invite links are room-only links.
 - Reconnect credentials are stored locally in the participant browser.
 - WebSocket credentials are passed through protocols rather than exposed in invite links.
+- Room data auto-deletes after one hour without active participants, and facilitators can delete a room immediately.
+- Room creation is protected by a Worker rate-limit binding, with optional Cloudflare Turnstile verification when configured.
 - Exported retros are anonymous and omit participant identities.
 
 ## License

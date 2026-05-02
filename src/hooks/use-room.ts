@@ -6,6 +6,7 @@ interface UseRoomResult {
   state: RoomState | null;
   connected: boolean;
   lastError: string | null;
+  roomPurged: boolean;
   clearError: () => void;
   send: (message: unknown) => boolean;
 }
@@ -14,6 +15,7 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
   const [state, setState] = useState<RoomState | null>(null);
   const [connected, setConnected] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
+  const [roomPurgedState, setRoomPurgedState] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
 
@@ -30,6 +32,7 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
   useEffect(() => {
     if (!connectionToken) return;
     let disposed = false;
+    let roomPurged = false;
 
     function clearReconnectTimer() {
       if (reconnectTimerRef.current !== null) {
@@ -55,6 +58,7 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
       clearReconnectTimer();
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const wsUrl = `${protocol}//${window.location.host}/api/rooms/${encodeURIComponent(roomId)}/ws`;
+      setRoomPurgedState(false);
       const ws = new WebSocket(wsUrl, [
         "retro-board",
         `pid-${participantId}`,
@@ -120,6 +124,13 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
             setState((prev) => prev ? { ...prev, reviewTargetKey: msg.reviewTargetKey } : prev);
           } else if (msg.type === "timer-updated") {
             setState((prev) => prev ? { ...prev, timer: msg.timer } : prev);
+          } else if (msg.type === "room-purged") {
+            roomPurged = true;
+            setState(null);
+            setConnected(false);
+            setLastError(msg.reason);
+            setRoomPurgedState(true);
+            ws.close(1000, "Room data deleted");
           } else if (msg.type === "error") {
             setLastError(msg.message);
           }
@@ -131,6 +142,7 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
       ws.addEventListener("close", () => {
         if (wsRef.current !== ws || disposed) return;
         setConnected(false);
+        if (roomPurged) return;
         scheduleReconnect();
       });
 
@@ -176,5 +188,5 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
 
   const clearError = useCallback(() => setLastError(null), []);
 
-  return { state, connected, lastError, clearError, send };
+  return { state, connected, lastError, roomPurged: roomPurgedState, clearError, send };
 }

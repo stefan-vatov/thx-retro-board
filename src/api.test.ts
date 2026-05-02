@@ -6,6 +6,7 @@ const roomState: RoomState = {
   schemaVersion: 2,
   roomId: "ROOM123",
   startedAt: 1000,
+  purgeScheduledAt: null,
   phase: "write",
   participants: [],
   columns: [],

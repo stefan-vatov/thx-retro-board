@@ -15,6 +15,7 @@ function makeRoomState(groups: Group[], items: RetroItem[] = [], votes: RoomStat
     schemaVersion: 2,
     roomId: "room-review-slideshow",
     startedAt: 1000,
+    purgeScheduledAt: null,
     phase: "review",
     participants: [{ id: "fac1", displayName: "Alice", isFacilitator: true }],
     columns,

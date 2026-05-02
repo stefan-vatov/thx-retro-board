@@ -1,25 +1,49 @@
-import { useState, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowRight, CheckCircle2, Columns3, Loader2, ShieldCheck, Sparkles, Timer, UsersRound, Vote } from "lucide-react";
-import { createRoom } from "../api";
+import { createRoom, getPublicConfig } from "../api";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
+import { TurnstileWidget } from "./TurnstileWidget";
 
 export function HomePage() {
   const navigate = useNavigate();
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [turnstileSiteKey, setTurnstileSiteKey] = useState<string | null>(null);
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  const [turnstileResetNonce, setTurnstileResetNonce] = useState(0);
   const createButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    void getPublicConfig().then((config) => {
+      if (!disposed) setTurnstileSiteKey(config.turnstileSiteKey);
+    });
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
+  const handleTurnstileTokenChange = useCallback((token: string | null) => {
+    setTurnstileToken(token);
+  }, []);
 
   async function handleCreate() {
     if (creating) return;
+    if (turnstileSiteKey && !turnstileToken) {
+      setError("Please complete the verification before creating a room.");
+      return;
+    }
     setCreating(true);
     setError(null);
     try {
-      const { roomId } = await createRoom();
+      const { roomId } = await createRoom(turnstileToken ?? undefined);
       navigate(`/room/${roomId}`);
-    } catch {
-      setError("Failed to create room. Please check your connection and try again.");
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : "Failed to create room. Please check your connection and try again.");
+      setTurnstileToken(null);
+      setTurnstileResetNonce((current) => current + 1);
       setCreating(false);
       createButtonRef.current?.focus();
     }
@@ -40,7 +64,7 @@ export function HomePage() {
             size="sm"
             className="home-nav__cta"
             onClick={handleCreate}
-            disabled={creating}
+            disabled={creating || Boolean(turnstileSiteKey && !turnstileToken)}
             aria-busy={creating}
           >
             {creating ? "Creating…" : "Start"}
@@ -58,12 +82,15 @@ export function HomePage() {
             Create a private room, collect feedback, group themes, vote by column, and walk away with clear next actions.
           </p>
           <div className="home-hero__actions">
+            {turnstileSiteKey && (
+              <TurnstileWidget key={turnstileResetNonce} siteKey={turnstileSiteKey} onTokenChange={handleTurnstileTokenChange} />
+            )}
             <Button
               ref={createButtonRef}
               size="lg"
               className="home-hero__cta"
               onClick={handleCreate}
-              disabled={creating}
+              disabled={creating || Boolean(turnstileSiteKey && !turnstileToken)}
               aria-busy={creating}
             >
               {creating ? (

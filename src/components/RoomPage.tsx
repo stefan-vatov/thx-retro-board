@@ -22,7 +22,7 @@ import {
   Vote,
   X,
 } from "lucide-react";
-import { ApiError, addItem, deleteItem, editItem, joinRoom, getRoomState, setVoteBudget, setRankingMethod, setPhase, setTimer } from "../api";
+import { ApiError, addItem, deleteItem, editItem, joinRoom, getRoomState, purgeRoom, setVoteBudget, setRankingMethod, setPhase, setTimer } from "../api";
 import { useRoom } from "../hooks";
 import type { RoomState, Phase, Column, RetroItem, RankingMethod } from "../domain";
 import { sanitizeItemText, isValidItemText, PHASE_ORDER, sanitizeColumnName, isValidColumnName, MAX_COLUMN_NAME_LENGTH, MAX_COLUMNS, itemVoteTarget } from "../domain";
@@ -930,6 +930,8 @@ export function RoomPage() {
   const [rankingPending, setRankingPending] = useState(false);
   const [phasePending, setPhasePending] = useState(false);
   const [timerPending, setTimerPending] = useState(false);
+  const [purgePending, setPurgePending] = useState(false);
+  const [purgeMsg, setPurgeMsg] = useState<string | null>(null);
   const [pendingColumnId, setPendingColumnId] = useState<string | null>(null);
   const [pendingItemId, setPendingItemId] = useState<string | null>(null);
   const phaseStatusRef = useRef<HTMLDivElement>(null);
@@ -937,7 +939,7 @@ export function RoomPage() {
   const initialLoadStartedRef = useRef(false);
   const lastAuthoritativeVoteBudgetRef = useRef<number | null>(null);
 
-  const { state: wsState, connected, lastError, clearError, send } = useRoom(roomId ?? "", participantId, connectionToken);
+  const { state: wsState, connected, lastError, roomPurged, clearError, send } = useRoom(roomId ?? "", participantId, connectionToken);
 
   const roomState = mergeRoomState(localRoomState, wsState);
 
@@ -950,6 +952,15 @@ export function RoomPage() {
   const sortedRoomColumns = roomState ? getSortedColumns(roomState) : [];
   const currentPhaseIndex = roomState ? PHASE_ORDER.indexOf(roomState.phase) : -1;
   const nextPhase = currentPhaseIndex >= 0 ? PHASE_ORDER[currentPhaseIndex + 1] : undefined;
+
+  useEffect(() => {
+    if (!roomPurged) return undefined;
+    const timeout = window.setTimeout(() => {
+      setLocalRoomState(null);
+      setPageState("not-found");
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [roomPurged]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => setTimerPending(false), 0);
@@ -1193,6 +1204,28 @@ export function RoomPage() {
       setTimerInputError("Failed to start timer. Check the room connection and try again.");
     } finally {
       setTimerPending(false);
+    }
+  }
+
+  async function handlePurgeRoom() {
+    if (!roomId || purgePending) return;
+    const confirmed = window.confirm("Delete this room and scrub all retro data now? This cannot be undone.");
+    if (!confirmed) return;
+
+    setPurgeMsg(null);
+    setPurgePending(true);
+    try {
+      const result = await purgeRoom(roomId, participantId);
+      if (!result.success) {
+        setPurgeMsg(result.error ?? "Failed to delete room data.");
+        return;
+      }
+      setLocalRoomState(null);
+      setPageState("not-found");
+    } catch {
+      setPurgeMsg("Failed to delete room data. Check the room connection and try again.");
+    } finally {
+      setPurgePending(false);
     }
   }
 
@@ -1655,6 +1688,28 @@ export function RoomPage() {
               {timerMsg && !timerInputError && (
                 <span className="status-msg status-msg--info facilitator-panel__message" role="status">
                   {timerMsg}
+                </span>
+              )}
+            </div>
+            <div className="facilitator-panel__row facilitator-panel__row--danger">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="room-delete-button"
+                onClick={handlePurgeRoom}
+                disabled={purgePending}
+                aria-busy={purgePending}
+              >
+                {purgePending ? <Loader2 className="loading-spinner" aria-hidden="true" /> : <Trash2 aria-hidden="true" />}
+                {purgePending ? "Deleting…" : "Delete room data"}
+              </Button>
+              <span className="facilitator-panel__message text-muted">
+                Rooms also auto-delete one hour after the last active participant leaves.
+              </span>
+              {purgeMsg && (
+                <span className="status-msg status-msg--error facilitator-panel__message" role="alert">
+                  {purgeMsg}
                 </span>
               )}
             </div>

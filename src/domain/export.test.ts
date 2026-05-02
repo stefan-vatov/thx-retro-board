@@ -15,6 +15,7 @@ function makeExportState(): RoomState {
     schemaVersion: 2,
     roomId: "room-export",
     startedAt: 1000,
+    purgeScheduledAt: null,
     phase: "finalize",
     participants: [
       { id: "fac1", displayName: "Alice", isFacilitator: true },

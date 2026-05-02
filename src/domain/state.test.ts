@@ -49,6 +49,7 @@ function makeState(overrides: Partial<RoomState> & { roomId: string }): RoomStat
   return {
     schemaVersion: 2,
     startedAt: 1000,
+    purgeScheduledAt: null,
     phase: "write",
     participants: [],
     items: [],

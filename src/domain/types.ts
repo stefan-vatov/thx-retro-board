@@ -76,6 +76,7 @@ export interface RoomState {
   schemaVersion: 2;
   roomId: string;
   startedAt: number;
+  purgeScheduledAt: number | null;
   phase: Phase;
   participants: Participant[];
   items: RetroItem[];

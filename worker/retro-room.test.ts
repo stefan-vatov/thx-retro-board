@@ -263,6 +263,81 @@ describe("RetroRoom Durable Object v2 schema", () => {
     expect((await stub.getRoomState()).voteBudget).toBe(8);
   });
 
+  it("purges stored room data after the empty-room alarm fires", async () => {
+    const stub = await initRaw("test-v2-empty-room-purge");
+
+    const state = await stub.getRoomState();
+    expect(state.purgeScheduledAt).toBeGreaterThan(Date.now());
+
+    await stub.runEmptyRoomAlarmForTest();
+
+    await expect(stub.hasRoom()).resolves.toBe(false);
+  });
+
+  it("lets only the facilitator manually purge room data", async () => {
+    const stub = await initRaw("test-v2-manual-purge");
+    await stub.join("fac1", "Facilitator");
+    await stub.join("p2", "Participant");
+
+    await expect(stub.purgeByFacilitator("p2")).resolves.toMatchObject({
+      success: false,
+      error: "Only the facilitator can delete room data",
+    });
+    await expect(stub.hasRoom()).resolves.toBe(true);
+
+    await expect(stub.purgeByFacilitator("fac1")).resolves.toMatchObject({ success: true });
+    await expect(stub.hasRoom()).resolves.toBe(false);
+  });
+
+  it("enforces generous public-room caps before storing more data", async () => {
+    const roomId = "test-v2-public-room-caps";
+    const id = env.RETRO_ROOM.idFromName(roomId);
+    const stub = env.RETRO_ROOM.get(id);
+    const columns = getDefaultColumns();
+    const firstColumnId = columns[0]!.id;
+
+    await stub.seedStoredStateForTest({
+      roomId,
+      phase: "setup",
+      columns,
+      groups: [],
+      items: [],
+      votes: [],
+      participants: Array.from({ length: 100 }, (_, index) => ({
+        id: `p${index}`,
+        displayName: `Participant ${index}`,
+        isFacilitator: index === 0,
+      })),
+      facilitatorId: "p0",
+    });
+    await expect(stub.join("p-over-limit", "Overflow")).resolves.toMatchObject({
+      success: false,
+      error: "Rooms can have at most 100 participants",
+    });
+
+    await stub.seedStoredStateForTest({
+      roomId,
+      phase: "write",
+      columns,
+      groups: [],
+      items: Array.from({ length: 1000 }, (_, index) => ({
+        id: `item-${index}`,
+        text: `Item ${index}`,
+        authorId: "fac1",
+        columnId: firstColumnId,
+        groupId: null,
+        order: index,
+      })),
+      votes: [],
+      participants: [{ id: "fac1", displayName: "Facilitator", isFacilitator: true }],
+      facilitatorId: "fac1",
+    });
+    await expect(stub.addItem("fac1", "One too many", firstColumnId)).resolves.toMatchObject({
+      success: false,
+      error: "Rooms can have at most 1000 cards",
+    });
+  });
+
   it("stores distinct columns, column-scoped groups, original item column IDs, and group votes", async () => {
     const stub = await init("test-v2-shape");
     await stub.join("fac1", "Facilitator");

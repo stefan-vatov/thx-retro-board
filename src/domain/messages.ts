@@ -12,6 +12,7 @@ export type ServerToClientMessage =
   | { type: "ranking-method-changed"; rankingMethod: import("./types").RankingMethod }
   | { type: "pairwise-choice-changed"; choice: import("./types").PairwiseChoice }
   | { type: "review-target-changed"; reviewTargetKey: string | null }
+  | { type: "room-purged"; reason: string }
   // delta > 0 for cast-vote (always +count), delta < 0 for remove-vote (always -1).
   // The vote-changed message is informational; authoritative state arrives via snapshot broadcast.
   | { type: "timer-updated"; timer: import("./types").TimerState }

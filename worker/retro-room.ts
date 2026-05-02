@@ -65,6 +65,7 @@ interface StoredState {
   schemaVersion?: 2;
   roomId: string;
   startedAt?: number;
+  purgeScheduledAt?: number | null;
   phase: RoomState["phase"];
   participants: Participant[];
   items: RetroItem[];
@@ -82,6 +83,14 @@ interface StoredState {
   connectionTokens: Record<string, string>;
   timer: StoredTimer;
 }
+
+const EMPTY_ROOM_PURGE_DELAY_MS = 60 * 60 * 1000;
+const MAX_PARTICIPANTS_PER_ROOM = 100;
+const MAX_ITEMS_PER_ROOM = 1000;
+const MAX_GROUPS_PER_ROOM = 300;
+const MAX_ACTIONS_PER_ROOM = 500;
+const MAX_REACTIONS_PER_ROOM = 10000;
+const MAX_REACTIONS_PER_TARGET = 1000;
 
 interface MoveItemPreconditions {
   expectedVersion: number;
@@ -453,6 +462,7 @@ export class RetroRoom extends DurableObject<Env> {
           ...stored,
           schemaVersion: 2,
           startedAt: Number.isFinite(stored.startedAt) ? stored.startedAt : Date.now(),
+          purgeScheduledAt: Number.isFinite(stored.purgeScheduledAt) ? stored.purgeScheduledAt : null,
           phase: "setup",
           items: [],
           columns: getDefaultColumns(),
@@ -473,6 +483,7 @@ export class RetroRoom extends DurableObject<Env> {
         ...stored,
         schemaVersion: 2,
         startedAt: Number.isFinite(stored.startedAt) ? stored.startedAt : Date.now(),
+        purgeScheduledAt: Number.isFinite(stored.purgeScheduledAt) ? stored.purgeScheduledAt : null,
         columns,
         groups,
         items: normalizeItems(stored.items ?? [], columns, groups),
@@ -490,6 +501,46 @@ export class RetroRoom extends DurableObject<Env> {
       return this.state;
     }
     return this.state!;
+  }
+
+  private async cancelEmptyRoomPurge(): Promise<void> {
+    await this.ctx.storage.deleteAlarm();
+    if (this.state && this.state.purgeScheduledAt !== null) {
+      this.state.purgeScheduledAt = null;
+      await this.saveState();
+    }
+  }
+
+  private async scheduleEmptyRoomPurge(): Promise<void> {
+    if (this.sessions.size > 0) return;
+    const s = await this.loadState();
+    const purgeScheduledAt = Date.now() + EMPTY_ROOM_PURGE_DELAY_MS;
+    s.purgeScheduledAt = purgeScheduledAt;
+    await this.ctx.storage.setAlarm(purgeScheduledAt);
+    await this.saveState();
+  }
+
+  private async purgeRoom(reason: string): Promise<void> {
+    this.broadcast({ type: "room-purged", reason });
+    for (const ws of this.sessions.values()) {
+      try {
+        ws.close(1000, "Room data deleted");
+      } catch {
+        // Ignore already-closing sockets.
+      }
+    }
+    this.sessions.clear();
+    this.state = null;
+    await this.ctx.storage.deleteAlarm();
+    await this.ctx.storage.deleteAll();
+  }
+
+  override async alarm(): Promise<void> {
+    if (this.sessions.size > 0) {
+      await this.cancelEmptyRoomPurge();
+      return;
+    }
+    await this.purgeRoom("Room data was deleted after one hour without active participants.");
   }
 
   private async saveState(): Promise<void> {
@@ -511,6 +562,7 @@ export class RetroRoom extends DurableObject<Env> {
       schemaVersion: 2,
       roomId,
       startedAt: Date.now(),
+      purgeScheduledAt: null,
       phase: "setup",
       participants: [],
       items: [],
@@ -529,6 +581,7 @@ export class RetroRoom extends DurableObject<Env> {
       timer: { startedAt: null, durationSeconds: null, expired: false },
     };
     await this.saveState();
+    await this.scheduleEmptyRoomPurge();
   }
 
   async getRoomState(): Promise<RoomState> {
@@ -538,6 +591,7 @@ export class RetroRoom extends DurableObject<Env> {
       schemaVersion: 2,
       roomId: s.roomId,
       startedAt: s.startedAt ?? Date.now(),
+      purgeScheduledAt: s.purgeScheduledAt ?? null,
       phase: s.phase,
       participants: s.participants,
       items: s.items,
@@ -572,6 +626,7 @@ export class RetroRoom extends DurableObject<Env> {
 
   async join(participantId: string, displayName: string): Promise<{ success: boolean; error?: string; state?: RoomState; connectionToken?: string }> {
     const s = await this.loadState();
+    await this.cancelEmptyRoomPurge();
     const trimmed = displayName.trim();
     if (trimmed.length === 0) {
       return { success: false, error: "Display name cannot be blank" };
@@ -591,7 +646,15 @@ export class RetroRoom extends DurableObject<Env> {
       };
       this.broadcast(broadcast, participantId);
 
+      if (this.sessions.size === 0) {
+        await this.scheduleEmptyRoomPurge();
+      }
+
       return { success: true, state: await this.getRoomState(), connectionToken: token };
+    }
+
+    if (s.participants.length >= MAX_PARTICIPANTS_PER_ROOM) {
+      return { success: false, error: `Rooms can have at most ${MAX_PARTICIPANTS_PER_ROOM} participants` };
     }
 
     const isFacilitator = s.participants.length === 0;
@@ -615,8 +678,23 @@ export class RetroRoom extends DurableObject<Env> {
     this.broadcast(broadcast, participantId);
 
     this.broadcastState(s, participantId);
+    if (this.sessions.size === 0) {
+      await this.scheduleEmptyRoomPurge();
+    }
 
     return { success: true, state: await this.getRoomState(), connectionToken: token };
+  }
+
+  async purgeByFacilitator(participantId: string): Promise<{ success: boolean; error?: string }> {
+    const s = await this.loadState();
+    if (!this.hasParticipant(s, participantId)) {
+      return { success: false, error: "Participant not found" };
+    }
+    if (s.facilitatorId !== participantId) {
+      return { success: false, error: "Only the facilitator can delete room data" };
+    }
+    await this.purgeRoom("The facilitator deleted this room's data.");
+    return { success: true };
   }
 
   async setVoteBudget(participantId: string, budget: number): Promise<{ success: boolean; error?: string }> {
@@ -676,6 +754,9 @@ export class RetroRoom extends DurableObject<Env> {
     }
     if (!s.participants.some((participant) => participant.id === participantId)) {
       return { success: false, error: "Participant not found" };
+    }
+    if (s.items.length >= MAX_ITEMS_PER_ROOM) {
+      return { success: false, error: `Rooms can have at most ${MAX_ITEMS_PER_ROOM} cards` };
     }
     const columnValidation = validateExistingColumnId(s.columns ?? [], columnId);
     if (!columnValidation.valid) {
@@ -783,6 +864,9 @@ export class RetroRoom extends DurableObject<Env> {
     }
     if (!isValidActionText(rawText)) {
       return { success: false, error: "Action text cannot be empty" };
+    }
+    if ((s.actions ?? []).length >= MAX_ACTIONS_PER_ROOM) {
+      return { success: false, error: `Rooms can have at most ${MAX_ACTIONS_PER_ROOM} actions` };
     }
 
     const action = createActionItem(crypto.randomUUID(), rawText, participantId, (s.actions ?? []).length);
@@ -1071,6 +1155,9 @@ export class RetroRoom extends DurableObject<Env> {
     if (hasDuplicateGroupNameInColumn(s.groups, columnId, sanitized)) {
       return { success: false, error: "Group name already exists in this column" };
     }
+    if (s.groups.length >= MAX_GROUPS_PER_ROOM) {
+      return { success: false, error: `Rooms can have at most ${MAX_GROUPS_PER_ROOM} groups` };
+    }
 
     const group: Group = {
       id: crypto.randomUUID(),
@@ -1323,6 +1410,15 @@ export class RetroRoom extends DurableObject<Env> {
     const hasReaction = existing.some((reaction) =>
       `${reaction.participantId}:${voteTargetKey(reaction.target)}:${reaction.emoji}` === reactionKey,
     );
+    if (!hasReaction) {
+      if (existing.length >= MAX_REACTIONS_PER_ROOM) {
+        return { success: false, error: `Rooms can have at most ${MAX_REACTIONS_PER_ROOM} reactions` };
+      }
+      const targetReactionCount = existing.filter((reaction) => sameVoteTarget(reaction.target, targetValidation.target)).length;
+      if (targetReactionCount >= MAX_REACTIONS_PER_TARGET) {
+        return { success: false, error: `A card or group can have at most ${MAX_REACTIONS_PER_TARGET} reactions` };
+      }
+    }
     s.reactions = hasReaction
       ? existing.filter((reaction) => `${reaction.participantId}:${voteTargetKey(reaction.target)}:${reaction.emoji}` !== reactionKey)
       : [...existing, { participantId, target: targetValidation.target, emoji }];
@@ -1485,6 +1581,7 @@ export class RetroRoom extends DurableObject<Env> {
       schemaVersion: 2,
       roomId: s.roomId,
       startedAt: s.startedAt ?? Date.now(),
+      purgeScheduledAt: s.purgeScheduledAt ?? null,
       phase: s.phase,
       participants: s.participants,
       items: s.items,
@@ -1566,6 +1663,12 @@ export class RetroRoom extends DurableObject<Env> {
       return Response.json(result);
     }
 
+    if (url.pathname === "/purge" && request.method === "POST") {
+      const body = await request.json() as { participantId: string };
+      const result = await this.purgeByFacilitator(body.participantId);
+      return Response.json(result);
+    }
+
     if (url.pathname === "/ws" && request.headers.get("Upgrade") === "websocket") {
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
@@ -1577,6 +1680,7 @@ export class RetroRoom extends DurableObject<Env> {
       }
 
       const s = await this.loadState();
+      await this.cancelEmptyRoomPurge();
       const expectedToken = s.connectionTokens[pid];
       if (!expectedToken || expectedToken !== token) {
         return new Response(JSON.stringify({ error: "Invalid participant credentials" }), { status: 403 });
@@ -1631,6 +1735,7 @@ export class RetroRoom extends DurableObject<Env> {
     this.sessions.delete(participantId);
     const leftMsg: ServerToClientMessage = { type: "participant-left", participantId };
     this.broadcast(leftMsg);
+    this.ctx.waitUntil(this.scheduleEmptyRoomPurge());
   }
 
   private async handleMessage(participantId: string, msg: ClientToServerMessage): Promise<void> {
@@ -1871,10 +1976,15 @@ export class RetroRoom extends DurableObject<Env> {
     await this.saveState();
   }
 
+  async runEmptyRoomAlarmForTest(): Promise<void> {
+    await this.alarm();
+  }
+
   async seedStoredStateForTest(state: Partial<StoredState> & Pick<StoredState, "roomId">): Promise<void> {
     const stored: StoredState = {
       schemaVersion: 2,
       startedAt: Date.now(),
+      purgeScheduledAt: null,
       phase: "setup",
       participants: [],
       items: [],

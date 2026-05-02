@@ -11,6 +11,22 @@ describe("Worker fetch", () => {
     expect(body).toEqual({ message: "Retro Board API" });
   });
 
+  it("returns public anti-abuse config without exposing Turnstile secrets", async () => {
+    const response = await worker.fetch(
+      new Request("http://localhost/api/config"),
+      {
+        ASSETS: undefined,
+        RETRO_ROOM: undefined as unknown as Env["RETRO_ROOM"],
+        TURNSTILE_SITE_KEY: "site-key",
+        TURNSTILE_SECRET_KEY: "secret-key",
+      },
+      {} as ExecutionContext,
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ turnstileSiteKey: "site-key" });
+  });
+
   it("returns 404 for unknown routes", async () => {
     const response = await exports.default.fetch("http://localhost/nonexistent-path");
     expect(response.status).toBe(404);
@@ -48,6 +64,46 @@ describe("Worker fetch", () => {
 });
 
 describe("POST /api/rooms", () => {
+  it("rate limits room creation before allocating a Durable Object", async () => {
+    const response = await worker.fetch(
+      new Request("http://localhost/api/rooms", { method: "POST" }),
+      {
+        ASSETS: undefined,
+        RETRO_ROOM: undefined as unknown as Env["RETRO_ROOM"],
+        ROOM_CREATE_RATE_LIMITER: {
+          limit: async () => ({ success: false }),
+        },
+      },
+      {} as ExecutionContext,
+    );
+
+    expect(response.status).toBe(429);
+    await expect(response.json()).resolves.toEqual({
+      error: "Too many rooms created from this network. Please wait a minute and try again.",
+    });
+  });
+
+  it("requires Turnstile when the secret is configured", async () => {
+    const response = await worker.fetch(
+      new Request("http://localhost/api/rooms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      }),
+      {
+        ASSETS: undefined,
+        RETRO_ROOM: undefined as unknown as Env["RETRO_ROOM"],
+        TURNSTILE_SECRET_KEY: "secret-key",
+      },
+      {} as ExecutionContext,
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "Verification is required before creating a room.",
+    });
+  });
+
   it("creates a room and returns roomId", async () => {
     const response = await exports.default.fetch("http://localhost/api/rooms", {
       method: "POST",

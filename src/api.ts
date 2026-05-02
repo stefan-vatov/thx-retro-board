@@ -1,5 +1,9 @@
 import type { RoomState, Phase, RetroItem, RankingMethod } from "./domain";
 
+export interface PublicConfig {
+  turnstileSiteKey: string | null;
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -10,9 +14,22 @@ export class ApiError extends Error {
   }
 }
 
-export async function createRoom(): Promise<{ roomId: string }> {
-  const res = await fetch("/api/rooms", { method: "POST" });
-  if (!res.ok) throw new Error("Failed to create room");
+export async function getPublicConfig(): Promise<PublicConfig> {
+  const res = await fetch("/api/config");
+  if (!res.ok) return { turnstileSiteKey: null };
+  return res.json() as Promise<PublicConfig>;
+}
+
+export async function createRoom(turnstileToken?: string): Promise<{ roomId: string }> {
+  const res = await fetch("/api/rooms", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ turnstileToken }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null) as { error?: string } | null;
+    throw new Error(body?.error ?? "Failed to create room");
+  }
   return res.json() as Promise<{ roomId: string }>;
 }
 
@@ -127,6 +144,18 @@ export async function setTimer(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ participantId, durationSeconds }),
+  });
+  return res.json() as Promise<{ success: boolean; error?: string }>;
+}
+
+export async function purgeRoom(
+  roomId: string,
+  participantId: string,
+): Promise<{ success: boolean; error?: string }> {
+  const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/purge`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ participantId }),
   });
   return res.json() as Promise<{ success: boolean; error?: string }>;
 }

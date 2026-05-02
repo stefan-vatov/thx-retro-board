@@ -3893,6 +3893,18 @@ select.input {
   margin-top: 1.6rem;
 }
 
+.turnstile-box {
+  display: flex;
+  flex-basis: 100%;
+  justify-content: center;
+}
+
+.turnstile-box__error {
+  margin: 0;
+  color: #f0b4b4;
+  font-size: var(--text-sm);
+}
+
 .home-hero__cta {
   min-height: 3.35rem;
   padding-inline: 1.35rem;
@@ -4376,6 +4388,23 @@ textarea.input:focus-visible {
   background: rgba(9, 10, 14, 0.48);
   border-color: rgba(255, 255, 255, 0.075);
   border-radius: 0.65rem;
+}
+
+.facilitator-panel__row--danger {
+  background: rgba(255, 94, 94, 0.045);
+  border-color: rgba(255, 118, 118, 0.12);
+}
+
+.room-delete-button {
+  color: #f0b4b4 !important;
+  border: 1px solid rgba(255, 118, 118, 0.16) !important;
+  background: rgba(255, 118, 118, 0.055) !important;
+}
+
+.room-delete-button:hover {
+  color: #ffd2d2 !important;
+  border-color: rgba(255, 118, 118, 0.26) !important;
+  background: rgba(255, 118, 118, 0.09) !important;
 }
 
 .board-area {
