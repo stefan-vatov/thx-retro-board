@@ -131,6 +131,8 @@ type ReviewActionValidationState = Pick<StoredState, "participants" | "phase">;
 type WriteItemCreateValidationState = Pick<StoredState, "participants" | "phase" | "items" | "columns">;
 type WriteItemEditValidationState = Pick<StoredState, "participants" | "phase" | "items">;
 type WriteItemDeleteValidationState = Pick<StoredState, "participants" | "phase" | "items">;
+type TimerValidationState = Pick<StoredState, "facilitatorId" | "participants">;
+type ReviewTargetValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase" | "groups" | "items">;
 
 const OptionalConnectionTokenSchema = Schema.Struct({
   participantId: Schema.String,
@@ -364,6 +366,48 @@ export function validateWriteItemDeleteEffect(
       return yield* Effect.fail(new RoomMutationValidationError("Only the author can delete this item"));
     }
     return { target: itemVoteTarget(itemId) };
+  });
+}
+
+export function validateTimerChangeEffect(
+  state: TimerValidationState,
+  participantId: string,
+  durationSeconds: number,
+): Effect.Effect<{ durationSeconds: number }, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    if (!state.participants.some((participant) => participant.id === participantId)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Participant not found"));
+    }
+    if (state.facilitatorId !== participantId) {
+      return yield* Effect.fail(new RoomMutationValidationError("Only the facilitator can set timers"));
+    }
+    if (typeof durationSeconds !== "number" || durationSeconds < 1 || !Number.isInteger(durationSeconds)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Timer duration must be a positive integer (seconds)"));
+    }
+    return { durationSeconds };
+  });
+}
+
+export function validateReviewTargetChangeEffect(
+  state: ReviewTargetValidationState,
+  participantId: string,
+  reviewTargetKey: string | null,
+): Effect.Effect<{ reviewTargetKey: string | null }, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    if (!state.participants.some((participant) => participant.id === participantId)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Participant not found"));
+    }
+    if (state.facilitatorId !== participantId) {
+      return yield* Effect.fail(new RoomMutationValidationError("Only the facilitator can change review slide"));
+    }
+    if (state.phase !== "review") {
+      return yield* Effect.fail(new RoomMutationValidationError("Review slide can only be changed during review"));
+    }
+    const normalizedTargetKey = normalizeReviewTargetKey(reviewTargetKey, state.groups, state.items);
+    if (reviewTargetKey !== null && normalizedTargetKey === null) {
+      return yield* Effect.fail(new RoomMutationValidationError("Review target not found"));
+    }
+    return { reviewTargetKey: normalizedTargetKey };
   });
 }
 
@@ -1397,22 +1441,19 @@ export class RetroRoom extends DurableObject<Env> {
 
   async setTimer(participantId: string, durationSeconds: number): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
-
-    if (!this.hasParticipant(s, participantId)) {
-      return { success: false, error: "Participant not found" };
-    }
-
-    if (s.facilitatorId !== participantId) {
-      return { success: false, error: "Only the facilitator can set timers" };
-    }
-
-    if (typeof durationSeconds !== "number" || durationSeconds < 1 || !Number.isInteger(durationSeconds)) {
-      return { success: false, error: "Timer duration must be a positive integer (seconds)" };
+    let validated: { durationSeconds: number };
+    try {
+      validated = await Effect.runPromise(validateTimerChangeEffect(s, participantId, durationSeconds));
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Timer validation failed",
+      };
     }
 
     s.timer = {
       startedAt: Date.now(),
-      durationSeconds,
+      durationSeconds: validated.durationSeconds,
       expired: false,
     };
     await this.saveState();
@@ -1429,25 +1470,19 @@ export class RetroRoom extends DurableObject<Env> {
 
   async setReviewTarget(participantId: string, reviewTargetKey: string | null): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
-
-    if (!this.hasParticipant(s, participantId)) {
-      return { success: false, error: "Participant not found" };
-    }
-    if (s.facilitatorId !== participantId) {
-      return { success: false, error: "Only the facilitator can change review slide" };
-    }
-    if (s.phase !== "review") {
-      return { success: false, error: "Review slide can only be changed during review" };
-    }
-
-    const normalizedTargetKey = normalizeReviewTargetKey(reviewTargetKey, s.groups, s.items);
-    if (reviewTargetKey !== null && normalizedTargetKey === null) {
-      return { success: false, error: "Review target not found" };
+    let validated: { reviewTargetKey: string | null };
+    try {
+      validated = await Effect.runPromise(validateReviewTargetChangeEffect(s, participantId, reviewTargetKey));
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Review target validation failed",
+      };
     }
 
-    s.reviewTargetKey = normalizedTargetKey;
+    s.reviewTargetKey = validated.reviewTargetKey;
     await this.saveState();
-    this.broadcast({ type: "review-target-changed", reviewTargetKey: normalizedTargetKey });
+    this.broadcast({ type: "review-target-changed", reviewTargetKey: validated.reviewTargetKey });
     this.broadcastState(s);
     return { success: true };
   }

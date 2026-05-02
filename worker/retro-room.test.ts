@@ -11,7 +11,9 @@ import {
   validateWriteItemCreateEffect,
   validateWriteItemDeleteEffect,
   validateWriteItemEditEffect,
+  validateReviewTargetChangeEffect,
   validateReviewActionEffect,
+  validateTimerChangeEffect,
   validateVoteBudgetChangeEffect,
 } from "./retro-room";
 
@@ -200,6 +202,44 @@ describe("RetroRoom Durable Object v2 schema", () => {
       participants: [...state.participants, { id: "p2", displayName: "Other", isFacilitator: false }],
     }, "p2", "item-1"));
     expect(Exit.isFailure(wrongAuthor)).toBe(true);
+  });
+
+  it("validates timer changes through Effect before state changes", async () => {
+    const state = {
+      participants: [{ id: "fac1", displayName: "Facilitator", isFacilitator: true }],
+      facilitatorId: "fac1",
+    };
+
+    await expect(Effect.runPromise(validateTimerChangeEffect(state, "fac1", 300))).resolves.toEqual({ durationSeconds: 300 });
+
+    const invalidDuration = await Effect.runPromiseExit(validateTimerChangeEffect(state, "fac1", 0));
+    expect(Exit.isFailure(invalidDuration)).toBe(true);
+
+    const nonFacilitator = await Effect.runPromiseExit(validateTimerChangeEffect({
+      ...state,
+      participants: [...state.participants, { id: "p2", displayName: "Pat", isFacilitator: false }],
+    }, "p2", 300));
+    expect(Exit.isFailure(nonFacilitator)).toBe(true);
+  });
+
+  it("validates review target changes through Effect before state changes", async () => {
+    const state = {
+      participants: [{ id: "fac1", displayName: "Facilitator", isFacilitator: true }],
+      facilitatorId: "fac1",
+      phase: "review",
+      groups: [{ id: "group-1", name: "Group", columnId: "col-1", order: 0 }],
+      items: [{ id: "item-1", text: "Card", authorId: "fac1", columnId: "col-1", groupId: null, order: 0 }],
+    };
+
+    await expect(Effect.runPromise(validateReviewTargetChangeEffect(state, "fac1", "group:group-1"))).resolves.toEqual({
+      reviewTargetKey: "group:group-1",
+    });
+    await expect(Effect.runPromise(validateReviewTargetChangeEffect(state, "fac1", null))).resolves.toEqual({
+      reviewTargetKey: null,
+    });
+
+    const missingTarget = await Effect.runPromiseExit(validateReviewTargetChangeEffect(state, "fac1", "item:missing"));
+    expect(Exit.isFailure(missingTarget)).toBe(true);
   });
 
   async function initRaw(roomId: string) {
