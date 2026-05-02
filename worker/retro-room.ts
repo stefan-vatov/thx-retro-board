@@ -138,6 +138,7 @@ type GroupReorderValidationState = Pick<StoredState, "participants" | "phase" | 
 type ItemReorderValidationState = Pick<StoredState, "participants" | "phase" | "items" | "version">;
 type ItemMoveValidationState = Pick<StoredState, "participants" | "phase" | "groups" | "items" | "version">;
 type ScoreVoteValidationState = Pick<StoredState, "participants" | "votingParticipantIds" | "phase" | "rankingMethod" | "voteBudget" | "groups" | "items" | "votes">;
+type ReactionToggleValidationState = Pick<StoredState, "participants" | "groups" | "items" | "reactions">;
 type ReviewActionValidationState = Pick<StoredState, "participants" | "phase">;
 type WriteItemCreateValidationState = Pick<StoredState, "participants" | "phase" | "items" | "columns">;
 type WriteItemEditValidationState = Pick<StoredState, "participants" | "phase" | "items">;
@@ -626,6 +627,23 @@ function resolveVoteTargetForState(
   return { success: true, target };
 }
 
+function resolveReactionTargetForState(
+  state: Pick<StoredState, "groups" | "items">,
+  target: ReactionTarget,
+): { success: true; target: ReactionTarget } | { success: false; error: string } {
+  if (!target || (target.type !== "group" && target.type !== "item") || typeof target.id !== "string") {
+    return { success: false, error: "Reaction target not found" };
+  }
+  if (target.type === "group") {
+    return state.groups.some((group) => group.id === target.id)
+      ? { success: true, target }
+      : { success: false, error: "Group not found" };
+  }
+  return state.items.some((item) => item.id === target.id)
+    ? { success: true, target }
+    : { success: false, error: "Item not found" };
+}
+
 function validateScoreVoteContext(
   state: ScoreVoteValidationState,
   participantId: string,
@@ -687,6 +705,45 @@ export function validateVoteRemoveEffect(
       return yield* Effect.fail(new RoomMutationValidationError("No votes to remove"));
     }
     return { votes: applyRemoveVote(state.votes, participantId, targetValidation.target) };
+  });
+}
+
+export function validateReactionToggleEffect(
+  state: ReactionToggleValidationState,
+  participantId: string,
+  target: ReactionTarget,
+  emoji: string,
+): Effect.Effect<{ reactions: Reaction[] }, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    if (!state.participants.some((participant) => participant.id === participantId)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Participant not found"));
+    }
+    if (!isAllowedReactionEmoji(emoji)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Reaction emoji is not supported"));
+    }
+    const targetValidation = resolveReactionTargetForState(state, target);
+    if (!targetValidation.success) {
+      return yield* Effect.fail(new RoomMutationValidationError(targetValidation.error));
+    }
+    const reactionKey = `${participantId}:${voteTargetKey(targetValidation.target)}:${emoji}`;
+    const existing = state.reactions ?? [];
+    const hasReaction = existing.some((reaction) =>
+      `${reaction.participantId}:${voteTargetKey(reaction.target)}:${reaction.emoji}` === reactionKey,
+    );
+    if (!hasReaction) {
+      if (existing.length >= MAX_REACTIONS_PER_ROOM) {
+        return yield* Effect.fail(new RoomMutationValidationError(`Rooms can have at most ${MAX_REACTIONS_PER_ROOM} reactions`));
+      }
+      const targetReactionCount = existing.filter((reaction) => sameVoteTarget(reaction.target, targetValidation.target)).length;
+      if (targetReactionCount >= MAX_REACTIONS_PER_TARGET) {
+        return yield* Effect.fail(new RoomMutationValidationError(`A card or group can have at most ${MAX_REACTIONS_PER_TARGET} reactions`));
+      }
+    }
+    return {
+      reactions: hasReaction
+        ? existing.filter((reaction) => `${reaction.participantId}:${voteTargetKey(reaction.target)}:${reaction.emoji}` !== reactionKey)
+        : [...existing, { participantId, target: targetValidation.target, emoji }],
+    };
   });
 }
 
@@ -2242,50 +2299,13 @@ export class RetroRoom extends DurableObject<Env> {
     return { success: true, target };
   }
 
-  private resolveReactionTarget(target: ReactionTarget): { success: true; target: ReactionTarget } | { success: false; error: string } {
-    if (!target || (target.type !== "group" && target.type !== "item") || typeof target.id !== "string") {
-      return { success: false, error: "Reaction target not found" };
-    }
-    if (target.type === "group") {
-      return this.state?.groups.some((group) => group.id === target.id)
-        ? { success: true, target }
-        : { success: false, error: "Group not found" };
-    }
-    return this.state?.items.some((item) => item.id === target.id)
-      ? { success: true, target }
-      : { success: false, error: "Item not found" };
-  }
-
   async toggleReaction(participantId: string, target: ReactionTarget, emoji: string): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
-    if (!this.hasParticipant(s, participantId)) {
-      return { success: false, error: "Participant not found" };
+    const validation = await Effect.runPromise(Effect.either(validateReactionToggleEffect(s, participantId, target, emoji)));
+    if (validation._tag === "Left") {
+      return { success: false, error: validation.left.message };
     }
-    if (!isAllowedReactionEmoji(emoji)) {
-      return { success: false, error: "Reaction emoji is not supported" };
-    }
-    const targetValidation = this.resolveReactionTarget(target);
-    if (!targetValidation.success) {
-      return { success: false, error: targetValidation.error };
-    }
-
-    const reactionKey = `${participantId}:${voteTargetKey(targetValidation.target)}:${emoji}`;
-    const existing = s.reactions ?? [];
-    const hasReaction = existing.some((reaction) =>
-      `${reaction.participantId}:${voteTargetKey(reaction.target)}:${reaction.emoji}` === reactionKey,
-    );
-    if (!hasReaction) {
-      if (existing.length >= MAX_REACTIONS_PER_ROOM) {
-        return { success: false, error: `Rooms can have at most ${MAX_REACTIONS_PER_ROOM} reactions` };
-      }
-      const targetReactionCount = existing.filter((reaction) => sameVoteTarget(reaction.target, targetValidation.target)).length;
-      if (targetReactionCount >= MAX_REACTIONS_PER_TARGET) {
-        return { success: false, error: `A card or group can have at most ${MAX_REACTIONS_PER_TARGET} reactions` };
-      }
-    }
-    s.reactions = hasReaction
-      ? existing.filter((reaction) => `${reaction.participantId}:${voteTargetKey(reaction.target)}:${reaction.emoji}` !== reactionKey)
-      : [...existing, { participantId, target: targetValidation.target, emoji }];
+    s.reactions = validation.right.reactions;
     await this.saveState();
     this.broadcastState(s);
     return { success: true };
