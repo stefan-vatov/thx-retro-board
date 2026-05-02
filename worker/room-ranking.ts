@@ -15,20 +15,26 @@ export async function setVoteBudgetForRoom(
   participantId: string,
   budget: number,
 ): Promise<{ success: boolean; error?: string }> {
-  const s = await host.loadState();
-  let validated: { budget: number };
-  try {
-    validated = await Effect.runPromise(validateVoteBudgetChangeEffect(s, participantId, budget));
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : "Vote budget validation failed",
-    };
-  }
-  s.voteBudget = validated.budget;
-  await host.saveState();
-  host.broadcastState(s);
-  return { success: true };
+  return Effect.runPromise(setVoteBudgetForRoomEffect(host, participantId, budget));
+}
+
+export function setVoteBudgetForRoomEffect(
+  host: RoomCommandHost,
+  participantId: string,
+  budget: number,
+): Effect.Effect<{ success: boolean; error?: string }> {
+  return Effect.gen(function* () {
+    const s = yield* Effect.promise(() => host.loadState());
+    const validation = yield* Effect.either(validateVoteBudgetChangeEffect(s, participantId, budget));
+    if (validation._tag === "Left") {
+      return { success: false, error: validation.left.message };
+    }
+
+    s.voteBudget = validation.right.budget;
+    yield* Effect.promise(() => host.saveState());
+    host.broadcastState(s);
+    return { success: true };
+  });
 }
 
 export async function setRankingMethodForRoom(
@@ -36,24 +42,29 @@ export async function setRankingMethodForRoom(
   participantId: string,
   rankingMethod: RankingMethod,
 ): Promise<{ success: boolean; error?: string }> {
-  const s = await host.loadState();
-  let validated: { rankingMethod: RankingMethod };
-  try {
-    validated = await Effect.runPromise(validateRankingMethodChangeEffect(s, participantId, rankingMethod));
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : "Ranking method validation failed",
-    };
-  }
+  return Effect.runPromise(setRankingMethodForRoomEffect(host, participantId, rankingMethod));
+}
 
-  s.rankingMethod = validated.rankingMethod;
-  s.votes = [];
-  s.pairwiseChoices = [];
-  await host.saveState();
-  host.broadcast({ type: "ranking-method-changed", rankingMethod: validated.rankingMethod });
-  host.broadcastState(s);
-  return { success: true };
+export function setRankingMethodForRoomEffect(
+  host: RoomCommandHost,
+  participantId: string,
+  rankingMethod: RankingMethod,
+): Effect.Effect<{ success: boolean; error?: string }> {
+  return Effect.gen(function* () {
+    const s = yield* Effect.promise(() => host.loadState());
+    const validation = yield* Effect.either(validateRankingMethodChangeEffect(s, participantId, rankingMethod));
+    if (validation._tag === "Left") {
+      return { success: false, error: validation.left.message };
+    }
+
+    s.rankingMethod = validation.right.rankingMethod;
+    s.votes = [];
+    s.pairwiseChoices = [];
+    yield* Effect.promise(() => host.saveState());
+    host.broadcast({ type: "ranking-method-changed", rankingMethod: validation.right.rankingMethod });
+    host.broadcastState(s);
+    return { success: true };
+  });
 }
 
 export async function toggleReactionForRoom(
@@ -62,15 +73,26 @@ export async function toggleReactionForRoom(
   target: ReactionTarget,
   emoji: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const s = await host.loadState();
-  const validation = await Effect.runPromise(Effect.either(validateReactionToggleEffect(s, participantId, target, emoji)));
-  if (validation._tag === "Left") {
-    return { success: false, error: validation.left.message };
-  }
-  s.reactions = validation.right.reactions;
-  await host.saveState();
-  host.broadcastState(s);
-  return { success: true };
+  return Effect.runPromise(toggleReactionForRoomEffect(host, participantId, target, emoji));
+}
+
+export function toggleReactionForRoomEffect(
+  host: RoomCommandHost,
+  participantId: string,
+  target: ReactionTarget,
+  emoji: string,
+): Effect.Effect<{ success: boolean; error?: string }> {
+  return Effect.gen(function* () {
+    const s = yield* Effect.promise(() => host.loadState());
+    const validation = yield* Effect.either(validateReactionToggleEffect(s, participantId, target, emoji));
+    if (validation._tag === "Left") {
+      return { success: false, error: validation.left.message };
+    }
+    s.reactions = validation.right.reactions;
+    yield* Effect.promise(() => host.saveState());
+    host.broadcastState(s);
+    return { success: true };
+  });
 }
 
 export async function castVoteForRoom(
@@ -79,17 +101,28 @@ export async function castVoteForRoom(
   targetOrGroupId: VoteTarget | string,
   count: number,
 ): Promise<{ success: boolean; error?: string }> {
-  const s = await host.loadState();
-  const validation = await Effect.runPromise(Effect.either(validateVoteCastEffect(s, participantId, targetOrGroupId, count)));
-  if (validation._tag === "Left") {
-    return { success: false, error: validation.left.message };
-  }
+  return Effect.runPromise(castVoteForRoomEffect(host, participantId, targetOrGroupId, count));
+}
 
-  s.votes = validation.right.votes;
-  await host.saveState();
-  host.broadcastState(s);
+export function castVoteForRoomEffect(
+  host: RoomCommandHost,
+  participantId: string,
+  targetOrGroupId: VoteTarget | string,
+  count: number,
+): Effect.Effect<{ success: boolean; error?: string }> {
+  return Effect.gen(function* () {
+    const s = yield* Effect.promise(() => host.loadState());
+    const validation = yield* Effect.either(validateVoteCastEffect(s, participantId, targetOrGroupId, count));
+    if (validation._tag === "Left") {
+      return { success: false, error: validation.left.message };
+    }
 
-  return { success: true };
+    s.votes = validation.right.votes;
+    yield* Effect.promise(() => host.saveState());
+    host.broadcastState(s);
+
+    return { success: true };
+  });
 }
 
 export async function removeVoteForRoom(
@@ -97,17 +130,27 @@ export async function removeVoteForRoom(
   participantId: string,
   targetOrGroupId: VoteTarget | string,
 ): Promise<{ success: boolean; error?: string }> {
-  const s = await host.loadState();
-  const validation = await Effect.runPromise(Effect.either(validateVoteRemoveEffect(s, participantId, targetOrGroupId)));
-  if (validation._tag === "Left") {
-    return { success: false, error: validation.left.message };
-  }
+  return Effect.runPromise(removeVoteForRoomEffect(host, participantId, targetOrGroupId));
+}
 
-  s.votes = validation.right.votes;
-  await host.saveState();
-  host.broadcastState(s);
+export function removeVoteForRoomEffect(
+  host: RoomCommandHost,
+  participantId: string,
+  targetOrGroupId: VoteTarget | string,
+): Effect.Effect<{ success: boolean; error?: string }> {
+  return Effect.gen(function* () {
+    const s = yield* Effect.promise(() => host.loadState());
+    const validation = yield* Effect.either(validateVoteRemoveEffect(s, participantId, targetOrGroupId));
+    if (validation._tag === "Left") {
+      return { success: false, error: validation.left.message };
+    }
 
-  return { success: true };
+    s.votes = validation.right.votes;
+    yield* Effect.promise(() => host.saveState());
+    host.broadcastState(s);
+
+    return { success: true };
+  });
 }
 
 export async function choosePairwiseForRoom(
@@ -116,15 +159,26 @@ export async function choosePairwiseForRoom(
   winner: VoteTarget,
   loser: VoteTarget,
 ): Promise<{ success: boolean; error?: string }> {
-  const s = await host.loadState();
-  const validation = await Effect.runPromise(Effect.either(validatePairwiseChoiceEffect(s, participantId, winner, loser)));
-  if (validation._tag === "Left") {
-    return { success: false, error: validation.left.message };
-  }
+  return Effect.runPromise(choosePairwiseForRoomEffect(host, participantId, winner, loser));
+}
 
-  s.pairwiseChoices = validation.right.pairwiseChoices;
-  await host.saveState();
-  host.broadcastState(s);
+export function choosePairwiseForRoomEffect(
+  host: RoomCommandHost,
+  participantId: string,
+  winner: VoteTarget,
+  loser: VoteTarget,
+): Effect.Effect<{ success: boolean; error?: string }> {
+  return Effect.gen(function* () {
+    const s = yield* Effect.promise(() => host.loadState());
+    const validation = yield* Effect.either(validatePairwiseChoiceEffect(s, participantId, winner, loser));
+    if (validation._tag === "Left") {
+      return { success: false, error: validation.left.message };
+    }
 
-  return { success: true };
+    s.pairwiseChoices = validation.right.pairwiseChoices;
+    yield* Effect.promise(() => host.saveState());
+    host.broadcastState(s);
+
+    return { success: true };
+  });
 }
