@@ -131,6 +131,7 @@ type ColumnCreateValidationState = Pick<StoredState, "facilitatorId" | "particip
 type ColumnEditValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase" | "columns">;
 type ColumnReorderValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase" | "columns">;
 type ColumnDeleteValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase" | "columns" | "groups" | "items" | "votes">;
+type GroupCreateValidationState = Pick<StoredState, "participants" | "phase" | "columns" | "groups">;
 type ReviewActionValidationState = Pick<StoredState, "participants" | "phase">;
 type WriteItemCreateValidationState = Pick<StoredState, "participants" | "phase" | "items" | "columns">;
 type WriteItemEditValidationState = Pick<StoredState, "participants" | "phase" | "items">;
@@ -387,6 +388,40 @@ export function validateColumnDeleteEffect(
       groups: result.groups,
       items: result.items,
       votes: result.votes,
+    };
+  });
+}
+
+export function validateGroupCreateEffect(
+  state: GroupCreateValidationState,
+  participantId: string,
+  rawName: string,
+  columnId: unknown,
+): Effect.Effect<{ name: string; columnId: string; order: number }, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    if (state.phase !== "organise") {
+      return yield* Effect.fail(new RoomMutationValidationError("Cannot create groups outside organise phase"));
+    }
+    if (!state.participants.some((participant) => participant.id === participantId)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Participant not found"));
+    }
+    if (typeof columnId !== "string" || !state.columns?.some((column) => column.id === columnId)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Column not found"));
+    }
+    if (!isValidColumnName(rawName)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Group name cannot be empty"));
+    }
+    const sanitized = sanitizeColumnName(rawName);
+    if (hasDuplicateGroupNameInColumn(state.groups, columnId, sanitized)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Group name already exists in this column"));
+    }
+    if (state.groups.length >= MAX_GROUPS_PER_ROOM) {
+      return yield* Effect.fail(new RoomMutationValidationError(`Rooms can have at most ${MAX_GROUPS_PER_ROOM} groups`));
+    }
+    return {
+      name: sanitized,
+      columnId,
+      order: state.groups.filter((candidate) => candidate.columnId === columnId).length,
     };
   });
 }
@@ -1816,32 +1851,17 @@ export class RetroRoom extends DurableObject<Env> {
 
   async createGroup(participantId: string, rawName: string, columnId?: string): Promise<{ success: boolean; error?: string; group?: Group }> {
     const s = await this.loadState();
-    if (s.phase !== "organise") {
-      return { success: false, error: "Cannot create groups outside organise phase" };
+    const validation = await Effect.runPromise(Effect.either(validateGroupCreateEffect(s, participantId, rawName, columnId)));
+    if (validation._tag === "Left") {
+      return { success: false, error: validation.left.message };
     }
-    if (!this.hasParticipant(s, participantId)) {
-      return { success: false, error: "Participant not found" };
-    }
-    if (typeof columnId !== "string" || !s.columns?.some((column) => column.id === columnId)) {
-      return { success: false, error: "Column not found" };
-    }
-
-    const sanitized = sanitizeColumnName(rawName);
-    if (!isValidColumnName(rawName)) {
-      return { success: false, error: "Group name cannot be empty" };
-    }
-    if (hasDuplicateGroupNameInColumn(s.groups, columnId, sanitized)) {
-      return { success: false, error: "Group name already exists in this column" };
-    }
-    if (s.groups.length >= MAX_GROUPS_PER_ROOM) {
-      return { success: false, error: `Rooms can have at most ${MAX_GROUPS_PER_ROOM} groups` };
-    }
+    const validated = validation.right;
 
     const group: Group = {
       id: crypto.randomUUID(),
-      name: sanitized,
-      columnId,
-      order: s.groups.filter((candidate) => candidate.columnId === columnId).length,
+      name: validated.name,
+      columnId: validated.columnId,
+      order: validated.order,
     };
     s.groups.push(group);
     await this.saveState();

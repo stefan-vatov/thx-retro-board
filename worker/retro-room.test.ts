@@ -12,6 +12,7 @@ import {
   validateColumnDeleteEffect,
   validateColumnEditEffect,
   validateColumnReorderEffect,
+  validateGroupCreateEffect,
   validateWriteItemCreateEffect,
   validateWriteItemDeleteEffect,
   validateWriteItemEditEffect,
@@ -240,6 +241,30 @@ describe("RetroRoom Durable Object v2 schema", () => {
 
     const wrongPhase = await Effect.runPromiseExit(validateColumnDeleteEffect({ ...state, phase: "write" }, "fac1", "col-1"));
     expect(Exit.isFailure(wrongPhase)).toBe(true);
+  });
+
+  it("validates group creation through Effect before state changes", async () => {
+    const state = {
+      participants: [{ id: "p1", displayName: "Pat", isFacilitator: false }],
+      phase: "organise",
+      columns: [{ id: "col-1", name: "Mad", order: 0 }],
+      groups: [{ id: "group-1", columnId: "col-1", name: "Existing", order: 0 }],
+    };
+
+    await expect(Effect.runPromise(validateGroupCreateEffect(state, "p1", "  New theme  ", "col-1"))).resolves.toEqual({
+      name: "New theme",
+      columnId: "col-1",
+      order: 1,
+    });
+
+    const wrongPhase = await Effect.runPromiseExit(validateGroupCreateEffect({ ...state, phase: "write" }, "p1", "New theme", "col-1"));
+    expect(Exit.isFailure(wrongPhase)).toBe(true);
+
+    const duplicateName = await Effect.runPromiseExit(validateGroupCreateEffect(state, "p1", "Existing", "col-1"));
+    expect(Exit.isFailure(duplicateName)).toBe(true);
+
+    const missingColumn = await Effect.runPromiseExit(validateGroupCreateEffect(state, "p1", "New theme", "missing"));
+    expect(Exit.isFailure(missingColumn)).toBe(true);
   });
 
   it("validates review action mutations through Effect before state changes", async () => {
