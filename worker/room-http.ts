@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import type { Phase, RankingMethod, RoomState } from "../src/domain";
-import { readValidatedJsonBody } from "./http-effect";
+import { readValidatedJsonBodyEffect } from "./http-effect";
 import {
   AddItemRequestSchema,
   EditItemRequestSchema,
@@ -59,9 +59,9 @@ export async function handleRoomHttpRequest(room: RoomHttpController, request: R
 
 function readBodyEffect<T>(
   request: Request,
-  schema: Parameters<typeof readValidatedJsonBody<T>>[1],
+  schema: Parameters<typeof readValidatedJsonBodyEffect<T>>[1],
 ): Effect.Effect<T | Response> {
-  return Effect.promise(() => readValidatedJsonBody(request, schema, { maxBytes: MAX_WEBSOCKET_MESSAGE_BYTES }));
+  return readValidatedJsonBodyEffect(request, schema, { maxBytes: MAX_WEBSOCKET_MESSAGE_BYTES });
 }
 
 function authorizeBodyEffect(

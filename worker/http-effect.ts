@@ -40,18 +40,27 @@ export function readJsonBody<T>(
   return Effect.runPromise(readJsonBodyEffect<T>(request, options));
 }
 
-export async function readValidatedJsonBody<T>(
+export function readValidatedJsonBodyEffect<T>(
+  request: Request,
+  schema: Schema.Schema<T>,
+  options: JsonBodyOptions,
+): Effect.Effect<T | Response> {
+  return Effect.gen(function* () {
+    const body = yield* readJsonBodyEffect<unknown>(request, options);
+    if (body === null) return Response.json(validJsonBodyError, { status: 400 });
+
+    return yield* Schema.decodeUnknown(schema)(body).pipe(
+      Effect.catchAll(() => Effect.succeed<T | Response>(Response.json(validJsonBodyError, { status: 400 }))),
+    );
+  });
+}
+
+export function readValidatedJsonBody<T>(
   request: Request,
   schema: Schema.Schema<T>,
   options: JsonBodyOptions,
 ): Promise<T | Response> {
-  const body = await readJsonBody<unknown>(request, options);
-  if (body === null) return Response.json(validJsonBodyError, { status: 400 });
-
-  const decoded = await Effect.runPromiseExit(Schema.decodeUnknown(schema)(body));
-  return decoded._tag === "Success"
-    ? decoded.value
-    : Response.json(validJsonBodyError, { status: 400 });
+  return Effect.runPromise(readValidatedJsonBodyEffect(request, schema, options));
 }
 
 async function readBoundedRequestBody(request: Request, maxBytes: number): Promise<string | null> {

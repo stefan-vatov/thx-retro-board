@@ -2,6 +2,7 @@ import { Effect, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   readJsonBodyEffect,
+  readValidatedJsonBodyEffect,
   readValidatedJsonBody,
   validJsonBodyError,
 } from "./http-effect";
@@ -39,11 +40,20 @@ describe("Effect HTTP body helpers", () => {
   });
 
   it("decodes JSON with Effect Schema and returns the shared 400 response on invalid input", async () => {
-    await expect(readValidatedJsonBody(jsonRequest({ name: "retro", count: 2 }), ExampleSchema, { maxBytes: 128 })).resolves.toEqual({ name: "retro", count: 2 });
+    await expect(Effect.runPromise(
+      readValidatedJsonBodyEffect(jsonRequest({ name: "retro", count: 2 }), ExampleSchema, { maxBytes: 128 }),
+    )).resolves.toEqual({ name: "retro", count: 2 });
 
-    const response = await readValidatedJsonBody(jsonRequest({ name: "retro" }), ExampleSchema, { maxBytes: 128 });
+    const response = await Effect.runPromise(
+      readValidatedJsonBodyEffect(jsonRequest({ name: "retro" }), ExampleSchema, { maxBytes: 128 }),
+    );
     expect(response).toBeInstanceOf(Response);
     expect((response as Response).status).toBe(400);
     await expect((response as Response).json()).resolves.toEqual(validJsonBodyError);
+  });
+
+  it("keeps the Promise wrapper behavior aligned with the Effect validator", async () => {
+    await expect(readValidatedJsonBody(jsonRequest({ name: "retro", count: 2 }), ExampleSchema, { maxBytes: 128 }))
+      .resolves.toEqual({ name: "retro", count: 2 });
   });
 });
