@@ -28,13 +28,7 @@ import {
 import {
   authorizeParticipantEffect,
   parseClientWebSocketMessageEffect,
-  validatePairwiseChoiceEffect,
   validateParticipantJoinEffect,
-  validateRankingMethodChangeEffect,
-  validateReactionToggleEffect,
-  validateVoteBudgetChangeEffect,
-  validateVoteCastEffect,
-  validateVoteRemoveEffect,
 } from "./validation";
 import { handleRoomHttpRequest } from "./room-http";
 import {
@@ -60,6 +54,14 @@ import {
 import { addItemForRoom, deleteItemForRoom, editItemForRoom } from "./room-items";
 import { toRoomState } from "./room-presenter";
 import { setPhaseForRoom, setReviewTargetForRoom, setTimerForRoom } from "./room-phase";
+import {
+  castVoteForRoom,
+  choosePairwiseForRoom,
+  removeVoteForRoom,
+  setRankingMethodForRoom,
+  setVoteBudgetForRoom,
+  toggleReactionForRoom,
+} from "./room-ranking";
 import { handleRoomRealtimeMessage } from "./room-realtime";
 import { RoomRealtimeLimiter } from "./room-realtime-limits";
 import { createInitialStoredState, hydrateStoredState } from "./room-storage";
@@ -294,41 +296,11 @@ export class RetroRoom extends DurableObject<Env> {
   }
 
   async setVoteBudget(participantId: string, budget: number): Promise<{ success: boolean; error?: string }> {
-    const s = await this.loadState();
-    let validated: { budget: number };
-    try {
-      validated = await Effect.runPromise(validateVoteBudgetChangeEffect(s, participantId, budget));
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : "Vote budget validation failed",
-      };
-    }
-    s.voteBudget = validated.budget;
-    await this.saveState();
-    this.broadcastState(s);
-    return { success: true };
+    return setVoteBudgetForRoom(this.commandHost(), participantId, budget);
   }
 
   async setRankingMethod(participantId: string, rankingMethod: RankingMethod): Promise<{ success: boolean; error?: string }> {
-    const s = await this.loadState();
-    let validated: { rankingMethod: RankingMethod };
-    try {
-      validated = await Effect.runPromise(validateRankingMethodChangeEffect(s, participantId, rankingMethod));
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : "Ranking method validation failed",
-      };
-    }
-
-    s.rankingMethod = validated.rankingMethod;
-    s.votes = [];
-    s.pairwiseChoices = [];
-    await this.saveState();
-    this.broadcast({ type: "ranking-method-changed", rankingMethod: validated.rankingMethod });
-    this.broadcastState(s);
-    return { success: true };
+    return setRankingMethodForRoom(this.commandHost(), participantId, rankingMethod);
   }
 
   async addItem(participantId: string, rawText: string, columnId?: unknown): Promise<{ success: boolean; error?: string; item?: RetroItem }> {
@@ -515,60 +487,19 @@ export class RetroRoom extends DurableObject<Env> {
   }
 
   async toggleReaction(participantId: string, target: ReactionTarget, emoji: string): Promise<{ success: boolean; error?: string }> {
-    const s = await this.loadState();
-    const validation = await Effect.runPromise(Effect.either(validateReactionToggleEffect(s, participantId, target, emoji)));
-    if (validation._tag === "Left") {
-      return { success: false, error: validation.left.message };
-    }
-    s.reactions = validation.right.reactions;
-    await this.saveState();
-    this.broadcastState(s);
-    return { success: true };
+    return toggleReactionForRoom(this.commandHost(), participantId, target, emoji);
   }
 
   async castVote(participantId: string, targetOrGroupId: VoteTarget | string, count: number): Promise<{ success: boolean; error?: string }> {
-    const s = await this.loadState();
-    const validation = await Effect.runPromise(Effect.either(validateVoteCastEffect(s, participantId, targetOrGroupId, count)));
-    if (validation._tag === "Left") {
-      return { success: false, error: validation.left.message };
-    }
-
-    s.votes = validation.right.votes;
-    await this.saveState();
-
-    this.broadcastState(s);
-
-    return { success: true };
+    return castVoteForRoom(this.commandHost(), participantId, targetOrGroupId, count);
   }
 
   async removeVote(participantId: string, targetOrGroupId: VoteTarget | string): Promise<{ success: boolean; error?: string }> {
-    const s = await this.loadState();
-    const validation = await Effect.runPromise(Effect.either(validateVoteRemoveEffect(s, participantId, targetOrGroupId)));
-    if (validation._tag === "Left") {
-      return { success: false, error: validation.left.message };
-    }
-
-    s.votes = validation.right.votes;
-    await this.saveState();
-
-    this.broadcastState(s);
-
-    return { success: true };
+    return removeVoteForRoom(this.commandHost(), participantId, targetOrGroupId);
   }
 
   async choosePairwise(participantId: string, winner: VoteTarget, loser: VoteTarget): Promise<{ success: boolean; error?: string }> {
-    const s = await this.loadState();
-    const validation = await Effect.runPromise(Effect.either(validatePairwiseChoiceEffect(s, participantId, winner, loser)));
-    if (validation._tag === "Left") {
-      return { success: false, error: validation.left.message };
-    }
-
-    s.pairwiseChoices = validation.right.pairwiseChoices;
-    await this.saveState();
-
-    this.broadcastState(s);
-
-    return { success: true };
+    return choosePairwiseForRoom(this.commandHost(), participantId, winner, loser);
   }
 
   private broadcast(message: ServerToClientMessage, excludeId?: string) {
