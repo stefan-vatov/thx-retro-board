@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { createWebSocketTicket } from "../api";
 import { pairwiseComparisonKey } from "../domain";
 import type { RoomState, ServerToClientMessage } from "../domain";
 
@@ -47,22 +48,29 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
         reconnectTimerRef.current = null;
         if (disposed) return;
         if (navigator.onLine) {
-          connect();
+          void connect();
         } else {
           scheduleReconnect();
         }
       }, delay);
     }
 
-    function connect() {
+    async function connect() {
       clearReconnectTimer();
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const wsUrl = `${protocol}//${window.location.host}/api/rooms/${encodeURIComponent(roomId)}/ws`;
       setRoomPurgedState(false);
+      const ticket = await createWebSocketTicket(roomId, participantId, connectionToken);
+      if (disposed) return;
+      if (!ticket.success || !ticket.ticket) {
+        setConnected(false);
+        setLastError(ticket.error ?? "Could not establish realtime connection.");
+        scheduleReconnect();
+        return;
+      }
       const ws = new WebSocket(wsUrl, [
         "retro-board",
-        `pid-${participantId}`,
-        `auth-${connectionToken}`,
+        `ticket-${ticket.ticket}`,
       ]);
       wsRef.current = ws;
 
@@ -160,7 +168,7 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
     }
 
     window.addEventListener("online", handleOnline);
-    connect();
+    void connect();
 
     return () => {
       disposed = true;

@@ -56,6 +56,19 @@ export async function joinRoom(
   return res.json() as Promise<{ success: boolean; error?: string; state?: RoomState; connectionToken?: string }>;
 }
 
+export async function createWebSocketTicket(
+  roomId: string,
+  participantId: string,
+  connectionToken: string | undefined,
+): Promise<{ success: boolean; error?: string; ticket?: string }> {
+  const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/ws-ticket`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ participantId, connectionToken }),
+  });
+  return res.json() as Promise<{ success: boolean; error?: string; ticket?: string }>;
+}
+
 export async function setVoteBudget(
   roomId: string,
   participantId: string,

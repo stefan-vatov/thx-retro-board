@@ -7,6 +7,9 @@
     "binding": "ASSETS",
     "not_found_handling": "single-page-application"
   },
+  "vars": {
+    "TURNSTILE_SITE_KEY": "0x4AAAAAADHM_ojgn8qs2Xcr"
+  },
   "ratelimits": [
     {
       "name": "ROOM_CREATE_RATE_LIMITER",

@@ -338,6 +338,38 @@ describe("RetroRoom Durable Object v2 schema", () => {
     });
   });
 
+  it("caps pairwise target counts before storing large comparison sets", async () => {
+    const roomId = "test-v2-pairwise-target-cap";
+    const id = env.RETRO_ROOM.idFromName(roomId);
+    const stub = env.RETRO_ROOM.get(id);
+    const columns = getDefaultColumns();
+    const firstColumnId = columns[0]!.id;
+
+    await stub.seedStoredStateForTest({
+      roomId,
+      phase: "vote",
+      rankingMethod: "pairwise",
+      columns,
+      groups: [],
+      votes: [],
+      participants: [{ id: "fac1", displayName: "Facilitator", isFacilitator: true }],
+      facilitatorId: "fac1",
+      items: Array.from({ length: 81 }, (_, index) => ({
+        id: `item-${index}`,
+        text: `Item ${index}`,
+        authorId: "fac1",
+        columnId: firstColumnId,
+        groupId: null,
+        order: index,
+      })),
+    });
+
+    await expect(stub.choosePairwise("fac1", itemVoteTarget("item-0"), itemVoteTarget("item-1"))).resolves.toMatchObject({
+      success: false,
+      error: "Pairwise ranking supports at most 80 cards or groups",
+    });
+  });
+
   it("stores distinct columns, column-scoped groups, original item column IDs, and group votes", async () => {
     const stub = await init("test-v2-shape");
     await stub.join("fac1", "Facilitator");

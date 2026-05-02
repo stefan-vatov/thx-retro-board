@@ -84,6 +84,11 @@ interface StoredState {
   timer: StoredTimer;
 }
 
+interface WebSocketTicket {
+  participantId: string;
+  expiresAt: number;
+}
+
 const EMPTY_ROOM_PURGE_DELAY_MS = 60 * 60 * 1000;
 const MAX_PARTICIPANTS_PER_ROOM = 100;
 const MAX_ITEMS_PER_ROOM = 1000;
@@ -91,7 +96,12 @@ const MAX_GROUPS_PER_ROOM = 300;
 const MAX_ACTIONS_PER_ROOM = 500;
 const MAX_REACTIONS_PER_ROOM = 10000;
 const MAX_REACTIONS_PER_TARGET = 1000;
+const MAX_PAIRWISE_CHOICES_PER_ROOM = 20000;
+const MAX_PAIRWISE_TARGETS = 80;
 const MAX_WEBSOCKET_MESSAGE_BYTES = 16 * 1024;
+const MAX_WEBSOCKET_MESSAGES_PER_WINDOW = 120;
+const WEBSOCKET_RATE_WINDOW_MS = 10 * 1000;
+const WEBSOCKET_TICKET_TTL_MS = 30 * 1000;
 
 interface MoveItemPreconditions {
   expectedVersion: number;
@@ -420,17 +430,12 @@ function generateToken(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-function getWebSocketCredentials(request: Request): { pid: string | null; token: string | null } {
+function getWebSocketTicket(request: Request): string | null {
   const protocols = (request.headers.get("Sec-WebSocket-Protocol") ?? "")
     .split(",")
     .map((protocol) => protocol.trim());
-  const pidProtocol = protocols.find((protocol) => protocol.startsWith("pid-"));
-  const authProtocol = protocols.find((protocol) => protocol.startsWith("auth-"));
-
-  return {
-    pid: pidProtocol ? pidProtocol.slice("pid-".length) : null,
-    token: authProtocol ? authProtocol.slice("auth-".length) : null,
-  };
+  const ticketProtocol = protocols.find((protocol) => protocol.startsWith("ticket-"));
+  return ticketProtocol ? ticketProtocol.slice("ticket-".length) : null;
 }
 
 async function readJsonBody<T>(request: Request): Promise<T | null> {
@@ -446,6 +451,7 @@ async function readJsonBody<T>(request: Request): Promise<T | null> {
 export class RetroRoom extends DurableObject<Env> {
   private state: StoredState | null = null;
   private sessions = new Map<string, WebSocket>();
+  private messageWindows = new Map<string, { startedAt: number; count: number }>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -649,6 +655,7 @@ export class RetroRoom extends DurableObject<Env> {
         return { success: false, error: "Invalid participant credentials" };
       }
       await this.cancelEmptyRoomPurge();
+      this.closeParticipantSocket(participantId, "Participant reconnected");
       const token = generateToken();
       s.connectionTokens[participantId] = token;
       await this.saveState();
@@ -1073,6 +1080,67 @@ export class RetroRoom extends DurableObject<Env> {
     return typeof connectionToken === "string"
       && connectionToken.length > 0
       && s.connectionTokens[participantId] === connectionToken;
+  }
+
+  private closeParticipantSocket(participantId: string, reason: string): void {
+    const existing = this.sessions.get(participantId);
+    if (!existing) return;
+    try {
+      existing.close(1000, reason);
+    } catch {
+      // Ignore already-closing sockets.
+    }
+    this.sessions.delete(participantId);
+    this.messageWindows.delete(participantId);
+  }
+
+  async createWebSocketTicket(participantId: string, connectionToken: unknown): Promise<{ success: boolean; error?: string; ticket?: string }> {
+    const s = await this.loadState();
+    const auth = this.authorizeHttpMutation(s, participantId, connectionToken);
+    if (!auth.success) return auth;
+
+    const ticket = generateToken();
+    const record: WebSocketTicket = {
+      participantId: auth.participantId,
+      expiresAt: Date.now() + WEBSOCKET_TICKET_TTL_MS,
+    };
+    await this.ctx.storage.put(`ws-ticket:${ticket}`, record);
+    return { success: true, ticket };
+  }
+
+  private async consumeWebSocketTicket(ticket: string | null): Promise<{ success: true; participantId: string } | { success: false; error: string }> {
+    if (typeof ticket !== "string" || ticket.length !== 64 || !/^[a-f0-9]+$/.test(ticket)) {
+      return { success: false, error: "Missing or invalid websocket ticket" };
+    }
+
+    const key = `ws-ticket:${ticket}`;
+    const record = await this.ctx.storage.get<WebSocketTicket>(key);
+    await this.ctx.storage.delete(key);
+    if (!record || typeof record.participantId !== "string" || typeof record.expiresAt !== "number") {
+      return { success: false, error: "Missing or invalid websocket ticket" };
+    }
+    if (record.expiresAt < Date.now()) {
+      return { success: false, error: "Websocket ticket expired" };
+    }
+
+    const s = await this.loadState();
+    if (!this.hasParticipant(s, record.participantId)) {
+      return { success: false, error: "Participant not found" };
+    }
+    return { success: true, participantId: record.participantId };
+  }
+
+  private allowWebSocketMessage(participantId: string, now = Date.now()): boolean {
+    const existing = this.messageWindows.get(participantId);
+    if (!existing || now - existing.startedAt >= WEBSOCKET_RATE_WINDOW_MS) {
+      this.messageWindows.set(participantId, { startedAt: now, count: 1 });
+      return true;
+    }
+    if (existing.count >= MAX_WEBSOCKET_MESSAGES_PER_WINDOW) {
+      return false;
+    }
+    existing.count += 1;
+    return true;
   }
 
   private authorizeHttpMutation(
@@ -1585,6 +1653,14 @@ export class RetroRoom extends DurableObject<Env> {
       return { success: false, error: "Pairwise targets must be different" };
     }
 
+    const targetKeys = new Set<string>([
+      ...s.groups.map((group) => voteTargetKey(groupVoteTarget(group.id))),
+      ...s.items.filter((item) => item.groupId === null).map((item) => voteTargetKey(itemVoteTarget(item.id))),
+    ]);
+    if (targetKeys.size > MAX_PAIRWISE_TARGETS) {
+      return { success: false, error: `Pairwise ranking supports at most ${MAX_PAIRWISE_TARGETS} cards or groups` };
+    }
+
     const choice: PairwiseChoice = {
       participantId,
       winner: winnerValidation.target,
@@ -1592,6 +1668,10 @@ export class RetroRoom extends DurableObject<Env> {
     };
     const choiceKey = `${participantId}:${pairwiseComparisonKey(choice.winner, choice.loser)}`;
     const existingChoices = s.pairwiseChoices ?? [];
+    const isReplacingChoice = existingChoices.some((candidate) => `${candidate.participantId}:${pairwiseComparisonKey(candidate.winner, candidate.loser)}` === choiceKey);
+    if (!isReplacingChoice && existingChoices.length >= MAX_PAIRWISE_CHOICES_PER_ROOM) {
+      return { success: false, error: `Rooms can have at most ${MAX_PAIRWISE_CHOICES_PER_ROOM} pairwise choices` };
+    }
     s.pairwiseChoices = [
       ...existingChoices.filter((candidate) => `${candidate.participantId}:${pairwiseComparisonKey(candidate.winner, candidate.loser)}` !== choiceKey),
       choice,
@@ -1735,24 +1815,26 @@ export class RetroRoom extends DurableObject<Env> {
       return Response.json(result);
     }
 
+    if (url.pathname === "/ws-ticket" && request.method === "POST") {
+      const body = await readJsonBody<{ participantId: string; connectionToken?: string }>(request);
+      if (!body) return Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
+      const result = await this.createWebSocketTicket(body.participantId, body.connectionToken);
+      return Response.json(result, { status: result.success ? 200 : 403 });
+    }
+
     if (url.pathname === "/ws" && request.headers.get("Upgrade") === "websocket") {
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
 
-      const { pid, token } = getWebSocketCredentials(request);
-
-      if (!pid || !token) {
-        return new Response(JSON.stringify({ error: "Missing pid or token" }), { status: 400 });
+      const ticket = await this.consumeWebSocketTicket(getWebSocketTicket(request));
+      if (!ticket.success) {
+        return new Response(JSON.stringify({ error: ticket.error }), { status: 403 });
       }
 
+      const participantId = ticket.participantId;
       const s = await this.loadState();
       await this.cancelEmptyRoomPurge();
-      const expectedToken = s.connectionTokens[pid];
-      if (!expectedToken || expectedToken !== token) {
-        return new Response(JSON.stringify({ error: "Invalid participant credentials" }), { status: 403 });
-      }
-
-      const participantId = pid;
+      this.closeParticipantSocket(participantId, "Participant opened a new connection");
       this.sessions.set(participantId, server);
       server.serializeAttachment({ participantId });
       this.ctx.acceptWebSocket(server);
@@ -1784,8 +1866,21 @@ export class RetroRoom extends DurableObject<Env> {
     const attachment = ws.deserializeAttachment() as { participantId: string } | null;
     const participantId = attachment?.participantId;
     if (!participantId) return;
+    if (this.sessions.get(participantId) !== ws) {
+      try {
+        ws.close(1008, "Obsolete realtime session");
+      } catch {
+        // Ignore already-closing sockets.
+      }
+      return;
+    }
 
     try {
+      if (!this.allowWebSocketMessage(participantId)) {
+        ws.send(JSON.stringify({ type: "error", message: "Too many realtime updates. Reconnect and slow down." }));
+        ws.close(1008, "Realtime rate limit exceeded");
+        return;
+      }
       const messageSize = typeof message === "string" ? message.length : message.byteLength;
       if (messageSize > MAX_WEBSOCKET_MESSAGE_BYTES) {
         ws.send(JSON.stringify({ type: "error", message: "Message is too large" }));
@@ -1803,7 +1898,9 @@ export class RetroRoom extends DurableObject<Env> {
     const participantId = attachment?.participantId;
     if (!participantId) return;
 
+    if (this.sessions.get(participantId) !== ws) return;
     this.sessions.delete(participantId);
+    this.messageWindows.delete(participantId);
     const leftMsg: ServerToClientMessage = { type: "participant-left", participantId };
     this.broadcast(leftMsg);
     this.ctx.waitUntil(this.scheduleEmptyRoomPurge());

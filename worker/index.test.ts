@@ -67,6 +67,24 @@ describe("Worker fetch", () => {
     expect(response.status).toBe(404);
   });
 
+  it("rejects malformed room ids before touching Durable Objects", async () => {
+    const response = await worker.fetch(
+      new Request("http://localhost/api/rooms/not-a-valid-room-id"),
+      {
+        ASSETS: undefined,
+        RETRO_ROOM: {
+          idFromName: () => {
+            throw new Error("RETRO_ROOM should not be touched for malformed ids");
+          },
+        } as unknown as Env["RETRO_ROOM"],
+      },
+      {} as ExecutionContext,
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: "Room not found" });
+  });
+
   it("returns 404 for unsupported methods on valid paths", async () => {
     const response = await exports.default.fetch("http://localhost/api/rooms", {
       method: "DELETE",
@@ -116,6 +134,27 @@ describe("POST /api/rooms", () => {
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toEqual({
       error: "Verification is required before creating a room.",
+    });
+  });
+
+  it("fails closed for production room creation when anti-abuse config is incomplete", async () => {
+    const response = await worker.fetch(
+      new Request("https://retro.thethracian.com/api/rooms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "CF-Connecting-IP": "198.51.100.20" },
+        body: JSON.stringify({ turnstileToken: "token" }),
+      }),
+      {
+        ASSETS: undefined,
+        RETRO_ROOM: undefined as unknown as Env["RETRO_ROOM"],
+        TURNSTILE_SITE_KEY: "site-key",
+      },
+      {} as ExecutionContext,
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: "Room creation is temporarily unavailable.",
     });
   });
 
@@ -292,6 +331,39 @@ describe("POST /api/rooms/:roomId/join", () => {
     expect(result2.success).toBe(true);
     expect(typeof result2.connectionToken).toBe("string");
     expect(result2.connectionToken).not.toBe(result1.connectionToken);
+  });
+
+  it("issues websocket tickets only for valid participant credentials", async () => {
+    const createRes = await exports.default.fetch(createRoomRequest());
+    const { roomId } = await createRes.json() as { roomId: string };
+
+    const joinRes = await exports.default.fetch(`http://localhost/api/rooms/${roomId}/join`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ participantId: "p1", displayName: "Alice" }),
+    });
+    const join = await joinRes.json() as { connectionToken?: string };
+
+    const rejected = await exports.default.fetch(`http://localhost/api/rooms/${roomId}/ws-ticket`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ participantId: "p1", connectionToken: "wrong" }),
+    });
+    expect(rejected.status).toBe(403);
+    await expect(rejected.json()).resolves.toEqual({
+      success: false,
+      error: "Invalid participant credentials",
+    });
+
+    const accepted = await exports.default.fetch(`http://localhost/api/rooms/${roomId}/ws-ticket`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ participantId: "p1", connectionToken: join.connectionToken }),
+    });
+    expect(accepted.status).toBe(200);
+    const ticket = await accepted.json() as { success: boolean; ticket?: string };
+    expect(ticket.success).toBe(true);
+    expect(ticket.ticket).toMatch(/^[a-f0-9]{64}$/);
   });
 });
 
