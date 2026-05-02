@@ -20,6 +20,7 @@ import {
   validateItemReorderEffect,
   validateReactionToggleEffect,
   validatePairwiseChoiceEffect,
+  validateParticipantJoinEffect,
   validateVoteCastEffect,
   validateVoteRemoveEffect,
   validateWriteItemCreateEffect,
@@ -554,6 +555,48 @@ describe("RetroRoom Durable Object v2 schema", () => {
       })),
     }, "p1", itemVoteTarget("item-0"), itemVoteTarget("item-1")));
     expect(Exit.isFailure(capped)).toBe(true);
+  });
+
+  it("validates participant joins through Effect before state changes", async () => {
+    const emptyState = {
+      participants: [],
+      facilitatorId: null,
+      facilitatorClaimToken: null,
+      connectionTokens: {},
+    };
+
+    await expect(Effect.runPromise(validateParticipantJoinEffect(emptyState, "fac1", "  Facilitator  "))).resolves.toEqual({
+      displayName: "Facilitator",
+      existing: null,
+      isFacilitator: true,
+      shouldClaimFacilitator: false,
+    });
+
+    const blankName = await Effect.runPromiseExit(validateParticipantJoinEffect(emptyState, "fac1", "   "));
+    expect(Exit.isFailure(blankName)).toBe(true);
+
+    const existingState = {
+      participants: [{ id: "p1", displayName: "Pat", isFacilitator: false }],
+      facilitatorId: null,
+      facilitatorClaimToken: "claim-token",
+      connectionTokens: { p1: "connection-token" },
+    };
+
+    await expect(Effect.runPromise(validateParticipantJoinEffect(
+      existingState,
+      "p1",
+      "Pat",
+      "connection-token",
+      "claim-token",
+    ))).resolves.toEqual({
+      displayName: "Pat",
+      existing: { id: "p1", displayName: "Pat", isFacilitator: false },
+      isFacilitator: true,
+      shouldClaimFacilitator: true,
+    });
+
+    const invalidCredentials = await Effect.runPromiseExit(validateParticipantJoinEffect(existingState, "p1", "Pat", "wrong"));
+    expect(Exit.isFailure(invalidCredentials)).toBe(true);
   });
 
   it("validates review action mutations through Effect before state changes", async () => {

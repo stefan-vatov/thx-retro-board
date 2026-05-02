@@ -140,6 +140,7 @@ type ItemMoveValidationState = Pick<StoredState, "participants" | "phase" | "gro
 type ScoreVoteValidationState = Pick<StoredState, "participants" | "votingParticipantIds" | "phase" | "rankingMethod" | "voteBudget" | "groups" | "items" | "votes">;
 type ReactionToggleValidationState = Pick<StoredState, "participants" | "groups" | "items" | "reactions">;
 type PairwiseChoiceValidationState = Pick<StoredState, "participants" | "votingParticipantIds" | "phase" | "rankingMethod" | "groups" | "items" | "pairwiseChoices">;
+type ParticipantJoinValidationState = Pick<StoredState, "participants" | "facilitatorId" | "facilitatorClaimToken" | "connectionTokens">;
 type ReviewActionValidationState = Pick<StoredState, "participants" | "phase">;
 type WriteItemCreateValidationState = Pick<StoredState, "participants" | "phase" | "items" | "columns">;
 type WriteItemEditValidationState = Pick<StoredState, "participants" | "phase" | "items">;
@@ -801,6 +802,67 @@ export function validatePairwiseChoiceEffect(
         ...existingChoices.filter((candidate) => `${candidate.participantId}:${pairwiseComparisonKey(candidate.winner, candidate.loser)}` !== choiceKey),
         choice,
       ],
+    };
+  });
+}
+
+export function validateParticipantJoinEffect(
+  state: ParticipantJoinValidationState,
+  participantId: string,
+  displayName: string,
+  connectionToken?: string,
+  facilitatorClaimToken?: unknown,
+): Effect.Effect<{
+  displayName: string;
+  existing: Participant | null;
+  isFacilitator: boolean;
+  shouldClaimFacilitator: boolean;
+}, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    if (typeof participantId !== "string" || participantId.trim().length === 0 || participantId.length > 128) {
+      return yield* Effect.fail(new RoomMutationValidationError("Participant not found"));
+    }
+    if (typeof displayName !== "string") {
+      return yield* Effect.fail(new RoomMutationValidationError("Display name cannot be blank"));
+    }
+    const trimmed = displayName.trim();
+    if (trimmed.length === 0) {
+      return yield* Effect.fail(new RoomMutationValidationError("Display name cannot be blank"));
+    }
+    const sanitized = trimmed.slice(0, 50);
+    const existing = state.participants.find((participant) => participant.id === participantId) ?? null;
+    const canClaimFacilitator = state.facilitatorId === null
+      && typeof facilitatorClaimToken === "string"
+      && typeof state.facilitatorClaimToken === "string"
+      && facilitatorClaimToken === state.facilitatorClaimToken;
+
+    if (existing) {
+      if (
+        typeof connectionToken !== "string"
+        || connectionToken.length === 0
+        || state.connectionTokens[participantId] !== connectionToken
+      ) {
+        return yield* Effect.fail(new RoomMutationValidationError("Invalid participant credentials"));
+      }
+      return {
+        displayName: sanitized,
+        existing,
+        isFacilitator: canClaimFacilitator ? true : existing.isFacilitator,
+        shouldClaimFacilitator: canClaimFacilitator,
+      };
+    }
+
+    if (state.participants.length >= MAX_PARTICIPANTS_PER_ROOM) {
+      return yield* Effect.fail(new RoomMutationValidationError(`Rooms can have at most ${MAX_PARTICIPANTS_PER_ROOM} participants`));
+    }
+    const isFacilitator = state.participants.length === 0 && state.facilitatorClaimToken === null
+      ? true
+      : canClaimFacilitator;
+    return {
+      displayName: sanitized,
+      existing: null,
+      isFacilitator,
+      shouldClaimFacilitator: canClaimFacilitator,
     };
   });
 }
@@ -1629,29 +1691,20 @@ export class RetroRoom extends DurableObject<Env> {
 
   async join(participantId: string, displayName: string, connectionToken?: string, facilitatorClaimToken?: unknown): Promise<{ success: boolean; error?: string; state?: RoomState; connectionToken?: string }> {
     const s = await this.loadState();
-    if (typeof participantId !== "string" || participantId.trim().length === 0 || participantId.length > 128) {
-      return { success: false, error: "Participant not found" };
+    const validation = await Effect.runPromise(Effect.either(validateParticipantJoinEffect(
+      s,
+      participantId,
+      displayName,
+      connectionToken,
+      facilitatorClaimToken,
+    )));
+    if (validation._tag === "Left") {
+      return { success: false, error: validation.left.message };
     }
-    if (typeof displayName !== "string") {
-      return { success: false, error: "Display name cannot be blank" };
-    }
-    const trimmed = displayName.trim();
-    if (trimmed.length === 0) {
-      return { success: false, error: "Display name cannot be blank" };
-    }
-    const sanitized = trimmed.slice(0, 50);
+    const validated = validation.right;
 
-    const existing = s.participants.find((p) => p.id === participantId);
-    if (existing) {
-      if (!this.hasValidConnectionToken(s, participantId, connectionToken)) {
-        return { success: false, error: "Invalid participant credentials" };
-      }
-      if (
-        s.facilitatorId === null
-        && typeof facilitatorClaimToken === "string"
-        && typeof s.facilitatorClaimToken === "string"
-        && facilitatorClaimToken === s.facilitatorClaimToken
-      ) {
+    if (validated.existing) {
+      if (validated.shouldClaimFacilitator) {
         s.facilitatorId = participantId;
         s.facilitatorClaimToken = null;
         s.participants = s.participants.map((participant) =>
@@ -1668,7 +1721,7 @@ export class RetroRoom extends DurableObject<Env> {
       // Broadcast participant presence to other clients on reconnect
       const broadcast: ServerToClientMessage = {
         type: "participant-joined",
-        participant: existing,
+        participant: validated.existing,
       };
       this.broadcast(broadcast, participantId);
 
@@ -1679,25 +1732,14 @@ export class RetroRoom extends DurableObject<Env> {
       return { success: true, state: this.toRoomState(s, participantId), connectionToken: token };
     }
 
-    if (s.participants.length >= MAX_PARTICIPANTS_PER_ROOM) {
-      return { success: false, error: `Rooms can have at most ${MAX_PARTICIPANTS_PER_ROOM} participants` };
-    }
-
     await this.cancelEmptyRoomPurge();
-    const canClaimFacilitator = s.facilitatorId === null
-      && typeof facilitatorClaimToken === "string"
-      && typeof s.facilitatorClaimToken === "string"
-      && facilitatorClaimToken === s.facilitatorClaimToken;
-    const isFacilitator = s.participants.length === 0 && s.facilitatorClaimToken === null
-      ? true
-      : canClaimFacilitator;
     const participant: Participant = {
       id: participantId,
-      displayName: sanitized,
-      isFacilitator,
+      displayName: validated.displayName,
+      isFacilitator: validated.isFacilitator,
     };
     s.participants.push(participant);
-    if (isFacilitator) {
+    if (validated.isFacilitator) {
       s.facilitatorId = participantId;
       s.facilitatorClaimToken = null;
     }
