@@ -128,6 +128,7 @@ type VoteBudgetValidationState = Pick<StoredState, "facilitatorId" | "participan
 type RankingMethodValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase">;
 type PhaseValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase" | "columns" | "rankingMethod">;
 type ColumnCreateValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase" | "columns">;
+type ColumnEditValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase" | "columns">;
 type ReviewActionValidationState = Pick<StoredState, "participants" | "phase">;
 type WriteItemCreateValidationState = Pick<StoredState, "participants" | "phase" | "items" | "columns">;
 type WriteItemEditValidationState = Pick<StoredState, "participants" | "phase" | "items">;
@@ -295,6 +296,37 @@ export function validateColumnCreateEffect(
       name: sanitizeColumnName(rawName),
       order: (state.columns ?? []).length,
     };
+  });
+}
+
+export function validateColumnEditEffect(
+  state: ColumnEditValidationState,
+  participantId: string,
+  columnId: string,
+  rawName: string,
+): Effect.Effect<{ columns: Column[]; column: Column }, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    if (!state.participants.some((participant) => participant.id === participantId)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Participant not found"));
+    }
+    if (state.facilitatorId !== participantId) {
+      return yield* Effect.fail(new RoomMutationValidationError("Only the facilitator can configure columns"));
+    }
+    if (state.phase !== "setup") {
+      return yield* Effect.fail(new RoomMutationValidationError("Columns can only be configured during setup"));
+    }
+    if (typeof columnId !== "string" || columnId.trim().length === 0) {
+      return yield* Effect.fail(new RoomMutationValidationError("Column not found"));
+    }
+    const result = applyEditColumn(state.columns ?? [], columnId, rawName);
+    if (result.error) {
+      return yield* Effect.fail(new RoomMutationValidationError(result.error));
+    }
+    const column = result.columns.find((candidate) => candidate.id === columnId);
+    if (!column) {
+      return yield* Effect.fail(new RoomMutationValidationError("Column not found"));
+    }
+    return { columns: result.columns, column };
   });
 }
 
@@ -1674,20 +1706,19 @@ export class RetroRoom extends DurableObject<Env> {
 
   async editColumn(participantId: string, columnId: string, rawName: string): Promise<{ success: boolean; error?: string; column?: Column }> {
     const s = await this.loadState();
-    const allowed = this.canMutateColumns(s, participantId);
-    if (!allowed.success) return allowed;
-    if (typeof columnId !== "string" || columnId.trim().length === 0) {
-      return { success: false, error: "Column not found" };
+    let validated: { columns: Column[]; column: Column };
+    try {
+      validated = await Effect.runPromise(validateColumnEditEffect(s, participantId, columnId, rawName));
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof RoomMutationValidationError ? error.message : "Column could not be updated",
+      };
     }
-
-    const result = applyEditColumn(s.columns ?? [], columnId, rawName);
-    if (result.error) {
-      return { success: false, error: result.error };
-    }
-    s.columns = result.columns;
+    s.columns = validated.columns;
     await this.saveState();
     this.broadcastState(s);
-    return { success: true, column: s.columns.find((column) => column.id === columnId) };
+    return { success: true, column: validated.column };
   }
 
   async reorderColumns(participantId: string, orderedIds: unknown): Promise<{ success: boolean; error?: string }> {

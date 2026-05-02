@@ -9,6 +9,7 @@ import {
   validatePhaseChangeEffect,
   validateRankingMethodChangeEffect,
   validateColumnCreateEffect,
+  validateColumnEditEffect,
   validateWriteItemCreateEffect,
   validateWriteItemDeleteEffect,
   validateWriteItemEditEffect,
@@ -152,6 +153,32 @@ describe("RetroRoom Durable Object v2 schema", () => {
       phase: "write",
     }, "fac1", "New lane"));
     expect(Exit.isFailure(wrongPhase)).toBe(true);
+  });
+
+  it("validates column edits through Effect before state changes", async () => {
+    const state = {
+      participants: [{ id: "fac1", displayName: "Facilitator", isFacilitator: true }],
+      facilitatorId: "fac1",
+      phase: "setup",
+      columns: [{ id: "col-1", name: "Mad", order: 0 }],
+    };
+
+    await expect(Effect.runPromise(validateColumnEditEffect(state, "fac1", "col-1", "  Glad  "))).resolves.toEqual({
+      columns: [{ id: "col-1", name: "Glad", order: 0 }],
+      column: { id: "col-1", name: "Glad", order: 0 },
+    });
+
+    const missingColumn = await Effect.runPromiseExit(validateColumnEditEffect(state, "fac1", "missing", "Glad"));
+    expect(Exit.isFailure(missingColumn)).toBe(true);
+
+    const blankName = await Effect.runPromiseExit(validateColumnEditEffect(state, "fac1", "col-1", "   "));
+    expect(Exit.isFailure(blankName)).toBe(true);
+
+    const nonFacilitator = await Effect.runPromiseExit(validateColumnEditEffect({
+      ...state,
+      participants: [...state.participants, { id: "p2", displayName: "Pat", isFacilitator: false }],
+    }, "p2", "col-1", "Glad"));
+    expect(Exit.isFailure(nonFacilitator)).toBe(true);
   });
 
   it("validates review action mutations through Effect before state changes", async () => {
