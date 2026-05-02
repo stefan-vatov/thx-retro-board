@@ -16,7 +16,6 @@ import type {
   ServerToClientMessage,
 } from "../src/domain";
 import {
-  createActionItem,
   getVoteTarget,
   groupVoteTarget,
   sameVoteTarget,
@@ -30,12 +29,8 @@ import type {
 } from "./room-types";
 import {
   EMPTY_ROOM_PURGE_DELAY_MS,
-  MAX_ACTIONS_PER_ROOM,
   MAX_ROOM_LIFETIME_MS,
-  MAX_ROOM_WEBSOCKET_MESSAGES_PER_WINDOW,
   MAX_WEBSOCKET_MESSAGE_BYTES,
-  MAX_WEBSOCKET_MESSAGES_PER_WINDOW,
-  WEBSOCKET_RATE_WINDOW_MS,
   WEBSOCKET_TICKET_TTL_MS,
 } from "./room-types";
 
@@ -58,7 +53,6 @@ import {
   validatePhaseChangeEffect,
   validateRankingMethodChangeEffect,
   validateReactionToggleEffect,
-  validateReviewActionEffect,
   validateReviewTargetChangeEffect,
   validateTimerChangeEffect,
   validateVoteBudgetChangeEffect,
@@ -69,30 +63,23 @@ import {
   validateWriteItemEditEffect,
 } from "./validation";
 import { handleRoomHttpRequest } from "./room-http";
+import {
+  createActionForRoom,
+  deleteActionForRoom,
+  editActionForRoom,
+  type RoomCommandHost,
+} from "./room-actions";
 import { normalizePairwiseChoices, normalizeReactions } from "./room-normalize";
 import { getDecisionTargetCount, toRoomState } from "./room-presenter";
 import { handleRoomRealtimeMessage } from "./room-realtime";
+import { RoomRealtimeLimiter } from "./room-realtime-limits";
 import { createInitialStoredState, hydrateStoredState } from "./room-storage";
-
-function generateToken(): string {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-function getWebSocketTicket(request: Request): string | null {
-  const protocols = (request.headers.get("Sec-WebSocket-Protocol") ?? "")
-    .split(",")
-    .map((protocol) => protocol.trim());
-  const ticketProtocol = protocols.find((protocol) => protocol.startsWith("ticket-"));
-  return ticketProtocol ? ticketProtocol.slice("ticket-".length) : null;
-}
+import { generateToken, getWebSocketTicket } from "./room-tickets";
 
 export class RetroRoom extends DurableObject<Env> {
   private state: StoredState | null = null;
   private sessions = new Map<string, WebSocket>();
-  private messageWindows = new Map<string, { startedAt: number; count: number }>();
-  private roomMessageWindow: { startedAt: number; count: number } | null = null;
+  private realtimeLimiter = new RoomRealtimeLimiter();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -160,6 +147,15 @@ export class RetroRoom extends DurableObject<Env> {
 
   private isPastAbsoluteRoomLifetime(s: Pick<StoredState, "startedAt">): boolean {
     return Date.now() >= this.getAbsoluteRoomExpiresAt(s);
+  }
+
+  private commandHost(): RoomCommandHost {
+    return {
+      loadState: () => this.loadState(),
+      saveState: () => this.saveState(),
+      broadcast: (message, excludeId) => this.broadcast(message, excludeId),
+      broadcastState: (state, excludeId) => this.broadcastState(state, excludeId),
+    };
   }
 
   private async purgeIfExpired(stored?: StoredState | null): Promise<boolean> {
@@ -433,94 +429,15 @@ export class RetroRoom extends DurableObject<Env> {
   }
 
   async createAction(participantId: string, rawText: string): Promise<{ success: boolean; error?: string; action?: ActionItem }> {
-    const s = await this.loadState();
-    let validated: { text: string };
-    try {
-      validated = await Effect.runPromise(validateReviewActionEffect(s, participantId, rawText));
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Action validation failed";
-      return {
-        success: false,
-        error: message === "Cannot change actions outside review phase" ? "Cannot add actions outside review phase" : message,
-      };
-    }
-    if ((s.actions ?? []).length >= MAX_ACTIONS_PER_ROOM) {
-      return { success: false, error: `Rooms can have at most ${MAX_ACTIONS_PER_ROOM} actions` };
-    }
-
-    const action = createActionItem(crypto.randomUUID(), validated.text, participantId, (s.actions ?? []).length);
-    s.actions = [...(s.actions ?? []), action];
-    await this.saveState();
-
-    this.broadcast({ type: "actions-changed", actions: s.actions });
-    this.broadcastState(s);
-
-    return { success: true, action };
+    return createActionForRoom(this.commandHost(), participantId, rawText);
   }
 
   async editAction(participantId: string, actionId: string, rawText: string): Promise<{ success: boolean; error?: string; action?: ActionItem }> {
-    const s = await this.loadState();
-    let validated: { text: string };
-    try {
-      validated = await Effect.runPromise(validateReviewActionEffect(s, participantId, rawText));
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Action validation failed";
-      return {
-        success: false,
-        error: message === "Cannot change actions outside review phase" ? "Cannot edit actions outside review phase" : message,
-      };
-    }
-    if (typeof actionId !== "string" || actionId.trim().length === 0) {
-      return { success: false, error: "Action not found" };
-    }
-
-    const actionIndex = (s.actions ?? []).findIndex((action) => action.id === actionId);
-    if (actionIndex === -1) {
-      return { success: false, error: "Action not found" };
-    }
-
-    s.actions = [...(s.actions ?? [])];
-    const existing = s.actions[actionIndex];
-    if (!existing) {
-      return { success: false, error: "Action not found" };
-    }
-    s.actions[actionIndex] = { ...existing, text: validated.text };
-    await this.saveState();
-
-    this.broadcast({ type: "actions-changed", actions: s.actions });
-    this.broadcastState(s);
-
-    return { success: true, action: s.actions[actionIndex] };
+    return editActionForRoom(this.commandHost(), participantId, actionId, rawText);
   }
 
   async deleteAction(participantId: string, actionId: string): Promise<{ success: boolean; error?: string }> {
-    const s = await this.loadState();
-
-    if (s.phase !== "review") {
-      return { success: false, error: "Cannot delete actions outside review phase" };
-    }
-    if (!this.hasParticipant(s, participantId)) {
-      return { success: false, error: "Participant not found" };
-    }
-    if (typeof actionId !== "string" || actionId.trim().length === 0) {
-      return { success: false, error: "Action not found" };
-    }
-
-    const existing = s.actions ?? [];
-    if (!existing.some((action) => action.id === actionId)) {
-      return { success: false, error: "Action not found" };
-    }
-
-    s.actions = existing
-      .filter((action) => action.id !== actionId)
-      .sort((a, b) => a.order - b.order)
-      .map((action, order) => ({ ...action, order }));
-    await this.saveState();
-
-    this.broadcast({ type: "actions-changed", actions: s.actions });
-    this.broadcastState(s);
-
-    return { success: true };
+    return deleteActionForRoom(this.commandHost(), participantId, actionId);
   }
 
   async setPhase(participantId: string, phase: Phase): Promise<{ success: boolean; error?: string }> {
@@ -613,7 +530,7 @@ export class RetroRoom extends DurableObject<Env> {
       // Ignore already-closing sockets.
     }
     this.sessions.delete(participantId);
-    this.messageWindows.delete(participantId);
+    this.realtimeLimiter.removeParticipant(participantId);
   }
 
   private async deleteOutstandingWebSocketTicket(participantId: string): Promise<void> {
@@ -675,25 +592,7 @@ export class RetroRoom extends DurableObject<Env> {
   }
 
   private allowWebSocketMessage(participantId: string, now = Date.now()): { allowed: true } | { allowed: false; reason: string } {
-    const existing = this.messageWindows.get(participantId);
-    if (!existing || now - existing.startedAt >= WEBSOCKET_RATE_WINDOW_MS) {
-      this.messageWindows.set(participantId, { startedAt: now, count: 1 });
-    } else {
-      if (existing.count >= MAX_WEBSOCKET_MESSAGES_PER_WINDOW) {
-        return { allowed: false, reason: "Too many realtime updates. Reconnect and slow down." };
-      }
-      existing.count += 1;
-    }
-
-    if (!this.roomMessageWindow || now - this.roomMessageWindow.startedAt >= WEBSOCKET_RATE_WINDOW_MS) {
-      this.roomMessageWindow = { startedAt: now, count: 1 };
-      return { allowed: true };
-    }
-    if (this.roomMessageWindow.count >= MAX_ROOM_WEBSOCKET_MESSAGES_PER_WINDOW) {
-      return { allowed: false, reason: "This room is receiving too many realtime updates. Please slow down." };
-    }
-    this.roomMessageWindow.count += 1;
-    return { allowed: true };
+    return this.realtimeLimiter.allow(participantId, now);
   }
 
   authorizeHttpParticipant(
@@ -1071,7 +970,7 @@ export class RetroRoom extends DurableObject<Env> {
 
     if (this.sessions.get(participantId) !== ws) return;
     this.sessions.delete(participantId);
-    this.messageWindows.delete(participantId);
+    this.realtimeLimiter.removeParticipant(participantId);
     const leftMsg: ServerToClientMessage = { type: "participant-left", participantId };
     this.broadcast(leftMsg);
     this.ctx.waitUntil(this.scheduleEmptyRoomPurge());
