@@ -16,6 +16,8 @@ import {
   validateGroupDeleteEffect,
   validateGroupEditEffect,
   validateGroupReorderEffect,
+  validateItemMoveEffect,
+  validateItemReorderEffect,
   validateWriteItemCreateEffect,
   validateWriteItemDeleteEffect,
   validateWriteItemEditEffect,
@@ -352,6 +354,81 @@ describe("RetroRoom Durable Object v2 schema", () => {
 
     const missingGroup = await Effect.runPromiseExit(validateGroupReorderEffect(state, "p1", ["group-2"], 7));
     expect(Exit.isFailure(missingGroup)).toBe(true);
+  });
+
+  it("validates item reorders through Effect before state changes", async () => {
+    const state = {
+      participants: [{ id: "p1", displayName: "Pat", isFacilitator: false }],
+      phase: "organise",
+      version: 5,
+      items: [
+        { id: "item-1", text: "First", authorId: "p1", columnId: "col-1", groupId: null, order: 0 },
+        { id: "item-2", text: "Second", authorId: "p1", columnId: "col-1", groupId: null, order: 1 },
+      ],
+    };
+
+    await expect(Effect.runPromise(validateItemReorderEffect(state, "p1", ["item-2", "item-1"], {
+      expectedVersion: 5,
+      sourceColumnId: "col-1",
+      sourceGroupId: null,
+    }))).resolves.toEqual({
+      items: [
+        { id: "item-2", text: "Second", authorId: "p1", columnId: "col-1", groupId: null, order: 0 },
+        { id: "item-1", text: "First", authorId: "p1", columnId: "col-1", groupId: null, order: 1 },
+      ],
+    });
+
+    const staleVersion = await Effect.runPromiseExit(validateItemReorderEffect(state, "p1", ["item-2", "item-1"], {
+      expectedVersion: 4,
+      sourceColumnId: "col-1",
+      sourceGroupId: null,
+    }));
+    expect(Exit.isFailure(staleVersion)).toBe(true);
+
+    const missingItem = await Effect.runPromiseExit(validateItemReorderEffect(state, "p1", ["item-2"], {
+      expectedVersion: 5,
+      sourceColumnId: "col-1",
+      sourceGroupId: null,
+    }));
+    expect(Exit.isFailure(missingItem)).toBe(true);
+  });
+
+  it("validates item moves through Effect before state changes", async () => {
+    const state = {
+      participants: [{ id: "p1", displayName: "Pat", isFacilitator: false }],
+      phase: "organise",
+      version: 5,
+      groups: [{ id: "group-1", columnId: "col-1", name: "Theme", order: 0 }],
+      items: [
+        { id: "item-1", text: "First", authorId: "p1", columnId: "col-1", groupId: null, order: 0 },
+        { id: "item-2", text: "Second", authorId: "p1", columnId: "col-1", groupId: "group-1", order: 0 },
+      ],
+    };
+
+    await expect(Effect.runPromise(validateItemMoveEffect(state, "p1", "item-1", "group-1", 1, {
+      expectedVersion: 5,
+      sourceGroupId: null,
+      sourceIndex: 0,
+    }))).resolves.toEqual({
+      items: [
+        { id: "item-2", text: "Second", authorId: "p1", columnId: "col-1", groupId: "group-1", order: 0 },
+        { id: "item-1", text: "First", authorId: "p1", columnId: "col-1", groupId: "group-1", order: 1 },
+      ],
+    });
+
+    const staleSource = await Effect.runPromiseExit(validateItemMoveEffect(state, "p1", "item-1", "group-1", 0, {
+      expectedVersion: 5,
+      sourceGroupId: "group-1",
+      sourceIndex: 0,
+    }));
+    expect(Exit.isFailure(staleSource)).toBe(true);
+
+    const badIndex = await Effect.runPromiseExit(validateItemMoveEffect(state, "p1", "item-1", "group-1", 5, {
+      expectedVersion: 5,
+      sourceGroupId: null,
+      sourceIndex: 0,
+    }));
+    expect(Exit.isFailure(badIndex)).toBe(true);
   });
 
   it("validates review action mutations through Effect before state changes", async () => {

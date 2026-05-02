@@ -135,6 +135,8 @@ type GroupCreateValidationState = Pick<StoredState, "participants" | "phase" | "
 type GroupEditValidationState = Pick<StoredState, "participants" | "phase" | "groups">;
 type GroupDeleteValidationState = Pick<StoredState, "participants" | "phase" | "groups" | "items" | "votes">;
 type GroupReorderValidationState = Pick<StoredState, "participants" | "phase" | "groups" | "version">;
+type ItemReorderValidationState = Pick<StoredState, "participants" | "phase" | "items" | "version">;
+type ItemMoveValidationState = Pick<StoredState, "participants" | "phase" | "groups" | "items" | "version">;
 type ReviewActionValidationState = Pick<StoredState, "participants" | "phase">;
 type WriteItemCreateValidationState = Pick<StoredState, "participants" | "phase" | "items" | "columns">;
 type WriteItemEditValidationState = Pick<StoredState, "participants" | "phase" | "items">;
@@ -513,6 +515,94 @@ export function validateGroupReorderEffect(
       return yield* Effect.fail(new RoomMutationValidationError(validation.error));
     }
     return { groups: applyReorderColumnGroups(state.groups, validation.ids) };
+  });
+}
+
+export function validateItemReorderEffect(
+  state: ItemReorderValidationState,
+  participantId: string,
+  orderedIds: unknown,
+  preconditions: Partial<ItemReorderPreconditions> | undefined,
+): Effect.Effect<{ items: RetroItem[] }, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    if (state.phase !== "organise") {
+      return yield* Effect.fail(new RoomMutationValidationError("Cannot reorder items outside organise phase"));
+    }
+    if (!state.participants.some((participant) => participant.id === participantId)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Participant not found"));
+    }
+    const validatedPreconditions = validateItemReorderPreconditions(preconditions);
+    if (!validatedPreconditions.success) {
+      return yield* Effect.fail(new RoomMutationValidationError(validatedPreconditions.error));
+    }
+    if (validatedPreconditions.preconditions.expectedVersion !== state.version) {
+      return yield* Effect.fail(new RoomMutationValidationError("Stale item reorder rejected: room version changed"));
+    }
+    const validation = validateItemReorderPayload(state.items, orderedIds);
+    if (!validation.valid) {
+      return yield* Effect.fail(new RoomMutationValidationError(validation.error));
+    }
+    const firstItem = state.items.find((item) => item.id === validation.ids[0]);
+    if (
+      !firstItem
+      || firstItem.columnId !== validatedPreconditions.preconditions.sourceColumnId
+      || firstItem.groupId !== validatedPreconditions.preconditions.sourceGroupId
+    ) {
+      return yield* Effect.fail(new RoomMutationValidationError("Stale item reorder rejected: source list changed"));
+    }
+    return { items: applyReorderItems(state.items, validation.ids) };
+  });
+}
+
+export function validateItemMoveEffect(
+  state: ItemMoveValidationState,
+  participantId: string,
+  itemId: string,
+  targetGroupId: string | null,
+  targetIndex: number,
+  preconditions: Partial<MoveItemPreconditions> | undefined,
+): Effect.Effect<{ items: RetroItem[] }, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    if (state.phase !== "organise") {
+      return yield* Effect.fail(new RoomMutationValidationError("Cannot move items outside organise phase"));
+    }
+    if (!state.participants.some((participant) => participant.id === participantId)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Participant not found"));
+    }
+    const validatedPreconditions = validateMoveItemPreconditions(preconditions);
+    if (!validatedPreconditions.success) {
+      return yield* Effect.fail(new RoomMutationValidationError(validatedPreconditions.error));
+    }
+    const item = state.items.find((candidate) => candidate.id === itemId);
+    if (!item) {
+      return yield* Effect.fail(new RoomMutationValidationError("Item not found"));
+    }
+    if (validatedPreconditions.preconditions.expectedVersion !== state.version) {
+      return yield* Effect.fail(new RoomMutationValidationError("Stale item move rejected: room version changed"));
+    }
+    if (validatedPreconditions.preconditions.sourceGroupId !== item.groupId) {
+      return yield* Effect.fail(new RoomMutationValidationError("Stale item move rejected: source column changed"));
+    }
+    if (validatedPreconditions.preconditions.sourceIndex !== item.order) {
+      return yield* Effect.fail(new RoomMutationValidationError("Stale item move rejected: source order changed"));
+    }
+    const targetGroup = targetGroupId === null ? null : state.groups.find((group) => group.id === targetGroupId);
+    if (targetGroupId !== null && !targetGroup) {
+      return yield* Effect.fail(new RoomMutationValidationError("Group not found"));
+    }
+    if (targetGroup && targetGroup.columnId !== item.columnId) {
+      return yield* Effect.fail(new RoomMutationValidationError("Cannot move item to a group in another column"));
+    }
+    if (!Number.isFinite(targetIndex) || !Number.isInteger(targetIndex)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Target index must be a finite integer"));
+    }
+    const targetListLength = state.items.filter(
+      (candidate) => candidate.id !== item.id && candidate.columnId === item.columnId && candidate.groupId === targetGroupId,
+    ).length;
+    if (targetIndex < 0 || targetIndex > targetListLength) {
+      return yield* Effect.fail(new RoomMutationValidationError("Target index out of bounds"));
+    }
+    return { items: applyMoveItemToGroup(state.items, itemId, targetGroupId, targetIndex) };
   });
 }
 
@@ -1966,39 +2056,12 @@ export class RetroRoom extends DurableObject<Env> {
     preconditions?: Partial<ItemReorderPreconditions>,
   ): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
-
-    if (s.phase !== "organise") {
-      return { success: false, error: "Cannot reorder items outside organise phase" };
+    const validation = await Effect.runPromise(Effect.either(validateItemReorderEffect(s, participantId, orderedIds, preconditions)));
+    if (validation._tag === "Left") {
+      return { success: false, error: validation.left.message };
     }
 
-    if (!this.hasParticipant(s, participantId)) {
-      return { success: false, error: "Participant not found" };
-    }
-
-    const validatedPreconditions = validateItemReorderPreconditions(preconditions);
-    if (!validatedPreconditions.success) {
-      return validatedPreconditions;
-    }
-
-    if (validatedPreconditions.preconditions.expectedVersion !== s.version) {
-      return { success: false, error: "Stale item reorder rejected: room version changed" };
-    }
-
-    const validation = validateItemReorderPayload(s.items, orderedIds);
-    if (!validation.valid) {
-      return { success: false, error: validation.error };
-    }
-
-    const firstItem = s.items.find((item) => item.id === validation.ids[0]);
-    if (
-      !firstItem
-      || firstItem.columnId !== validatedPreconditions.preconditions.sourceColumnId
-      || firstItem.groupId !== validatedPreconditions.preconditions.sourceGroupId
-    ) {
-      return { success: false, error: "Stale item reorder rejected: source list changed" };
-    }
-
-    s.items = applyReorderItems(s.items, validation.ids);
+    s.items = validation.right.items;
     await this.saveState();
 
     const broadcast: ServerToClientMessage = { type: "items-reordered", items: s.items };
@@ -2059,59 +2122,19 @@ export class RetroRoom extends DurableObject<Env> {
     preconditions?: Partial<MoveItemPreconditions>,
   ): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
-
-    if (s.phase !== "organise") {
-      return { success: false, error: "Cannot move items outside organise phase" };
+    const validation = await Effect.runPromise(Effect.either(validateItemMoveEffect(
+      s,
+      participantId,
+      itemId,
+      targetGroupId,
+      targetIndex,
+      preconditions,
+    )));
+    if (validation._tag === "Left") {
+      return { success: false, error: validation.left.message };
     }
 
-    const participantExists = s.participants.some((participant) => participant.id === participantId);
-    if (!participantExists) {
-      return { success: false, error: "Participant not found" };
-    }
-
-    const validatedPreconditions = validateMoveItemPreconditions(preconditions);
-    if (!validatedPreconditions.success) {
-      return validatedPreconditions;
-    }
-
-    const item = s.items.find((i) => i.id === itemId);
-    if (!item) {
-      return { success: false, error: "Item not found" };
-    }
-
-    if (validatedPreconditions.preconditions.expectedVersion !== s.version) {
-      return { success: false, error: "Stale item move rejected: room version changed" };
-    }
-
-    const currentSourceGroupId = item.groupId;
-    if (validatedPreconditions.preconditions.sourceGroupId !== currentSourceGroupId) {
-      return { success: false, error: "Stale item move rejected: source column changed" };
-    }
-
-    if (validatedPreconditions.preconditions.sourceIndex !== item.order) {
-      return { success: false, error: "Stale item move rejected: source order changed" };
-    }
-
-    if (targetGroupId !== null && !s.groups.some((g) => g.id === targetGroupId)) {
-      return { success: false, error: "Group not found" };
-    }
-
-    if (targetGroupId !== null && s.groups.find((g) => g.id === targetGroupId)?.columnId !== item.columnId) {
-      return { success: false, error: "Cannot move item to a group in another column" };
-    }
-
-    if (!Number.isFinite(targetIndex) || !Number.isInteger(targetIndex)) {
-      return { success: false, error: "Target index must be a finite integer" };
-    }
-
-    const targetListLength = s.items.filter(
-      (i) => i.id !== item.id && i.columnId === item.columnId && i.groupId === targetGroupId,
-    ).length;
-    if (targetIndex < 0 || targetIndex > targetListLength) {
-      return { success: false, error: "Target index out of bounds" };
-    }
-
-    s.items = applyMoveItemToGroup(s.items, itemId, targetGroupId, targetIndex);
+    s.items = validation.right.items;
     await this.saveState();
 
     this.broadcastState(s);
