@@ -1,97 +1,165 @@
-# THX Retro Board
+<p align="center">
+  <img src="./docs/assets/thx-retro-wordmark.svg" alt="THX Retro Board" width="720">
+</p>
 
-> Run focused team retros, rank the signal, and export clean outcomes.
+<h1 align="center">THX Retro Board</h1>
 
-<p>
+<p align="center">
+  Run focused team retros, rank the signal, and export clean outcomes.
+</p>
+
+<p align="center">
+  <a href="https://retro.thethracian.com"><strong>Open the app</strong></a>
+  ·
+  <a href="#quick-start"><strong>Run locally</strong></a>
+  ·
+  <a href="#how-it-works"><strong>How it works</strong></a>
+  ·
+  <a href="#privacy-and-abuse-controls"><strong>Privacy model</strong></a>
+</p>
+
+<p align="center">
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-6-3178c6?style=flat-square&logo=typescript&logoColor=white">
   <img alt="React" src="https://img.shields.io/badge/React-19-149eca?style=flat-square&logo=react&logoColor=white">
   <img alt="Cloudflare Workers" src="https://img.shields.io/badge/Cloudflare-Workers-f38020?style=flat-square&logo=cloudflare&logoColor=white">
-  <img alt="Vite" src="https://img.shields.io/badge/Vite-8-646cff?style=flat-square&logo=vite&logoColor=white">
+  <img alt="Durable Objects" src="https://img.shields.io/badge/Durable%20Objects-realtime-111827?style=flat-square">
   <img alt="Tests" src="https://img.shields.io/badge/tests-vitest%20%2B%20playwright-2f855a?style=flat-square">
 </p>
 
-THX Retro Board is a real-time retrospective app for small teams that need more than a pile of sticky notes. It gives the facilitator a structured flow, gives participants a fast collaborative board, and turns the final discussion into exports you can analyze later.
+THX Retro Board is a real-time retrospective app for teams that need more than a wall of sticky notes. It gives facilitators a structured flow, gives participants a fast collaborative board, and turns the final discussion into anonymous exports you can analyze later.
 
-It runs as a Cloudflare Worker with Durable Objects, so each room has a server-authoritative state owner, real-time WebSocket sync, and no separate app server to operate.
+It runs on Cloudflare Workers and Durable Objects, so every room has one server-authoritative state owner, live WebSocket sync, and no separate app server to operate.
 
-## Why It Exists
+## Why Teams Use It
 
-Most retro tools stop at collection. Teams still have to fight through duplicates, vague priorities, and action items that disappear after the call.
+- **Board setup before the meeting drifts**: lock columns, voting method, and score budget before writing starts.
+- **Kanban-style writing**: add cards directly inside Mad, Glad, Sad, or whatever columns your retro needs.
+- **Column-aware grouping**: organize duplicates without losing the original context of where the feedback came from.
+- **Two ranking modes**: move fast with score voting, or get a stronger ordering with pairwise comparisons.
+- **Live facilitator review**: one person drives the review slide, and every participant sees the same result in real time.
+- **Collaborative actions**: everyone can add, edit, and remove action items during review.
+- **Clean exports**: save the full retro as anonymous JSON or Markdown, and export actions separately as JSON, Markdown, or CSV.
 
-THX Retro Board keeps the session moving:
+## Quick Start
 
-- **Setup locks the rules before writing starts**: columns, vote budget, and ranking method are decided up front.
-- **Write happens directly in columns**: participants add cards where they belong instead of using a detached backlog.
-- **Organise preserves context**: groups stay inside their original column, so "Mad", "Glad", and "Sad" do not collapse into noise.
-- **Ranking supports small teams**: use classic score voting or pairwise comparisons across groups and ungrouped cards.
-- **Review becomes a presentation flow**: facilitator-controlled results move live for everyone in the room.
-- **Actions are collaborative**: anyone can add, edit, or remove action items during review.
-- **Exports are built in**: save the retro as anonymous JSON or Markdown, and export actions separately as Markdown, JSON, or CSV.
+```bash
+git clone git@github.com:stefan-vatov/thx-retro-board.git
+cd thx-retro-board
+npm install
+npm run dev -- --host 127.0.0.1 --port 8787
+```
 
-## The Flow
+Open [http://127.0.0.1:8787](http://127.0.0.1:8787), create a room, then open the invite link in another browser profile to test collaboration.
+
+## How It Works
 
 ```mermaid
 flowchart LR
   setup["Setup board<br/>columns + ranking"] --> write["Write<br/>cards in columns"]
   write --> organise["Organise<br/>group related cards"]
-  organise --> vote["Vote / rank<br/>score or pairwise"]
-  vote --> review["Review<br/>discuss results + actions"]
-  review --> finalize["Finalize<br/>export the retro"]
+  organise --> vote["Vote<br/>score or pairwise"]
+  vote --> review["Review<br/>results + actions"]
+  review --> finalize["Finalize<br/>export"]
 ```
 
-## Features
+### 1. Setup
 
-### Facilitated Retros
+The facilitator configures the board before participants start writing. Columns, ranking mode, and score budget are locked once the room advances.
 
-- Default board columns: **Mad**, **Glad**, **Sad**.
-- Facilitator can rename, reorder, add, or remove columns during setup.
-- Non-facilitators wait on setup until the board is ready.
-- Phase controls, timer controls, vote budget, and review navigation are facilitator-owned.
-- The elapsed retro clock and phase tracker keep the room oriented.
+Default columns are:
 
-### Collaborative Board
-
-- Multi-user rooms through a shareable invite link.
-- Real-time participant presence and state updates.
-- Cards are created inside columns, kanban-style.
-- Participants can edit or delete their own write-phase cards.
-- Organise mode supports column-scoped groups, reordering, and drag/drop refinement.
-- Discord-style emoji reactions work on cards and groups across write, organise, vote, and review.
-
-### Ranking That Fits Small Teams
-
-Two ranking modes are available during setup:
-
-| Method | Best For | How It Works |
+| Mad | Glad | Sad |
 | --- | --- | --- |
-| Score voting | Fast prioritization | Each participant spends a fixed vote budget across decision targets. |
-| Pairwise ranking | Higher-confidence ordering | Participants choose between every pair of decision targets, then results are ordered by wins. |
+| Risks, blockers, frustrations | Wins, improvements, bright spots | Losses, disappointments, unresolved concerns |
 
-Decision targets are global: every group and every ungrouped card is compared against the rest of the board. A group counts as one target, while still showing the cards inside it.
+### 2. Write
 
-### Review And Export
+Participants add cards directly in the right column. Cards behave like a lightweight kanban board, with ownership rules so people can edit or delete their own write-phase cards without touching someone else's.
 
-- Review is a live, facilitator-driven slideshow.
-- Results include grouped and ungrouped items in their original column context.
-- Reactions remain visible on review cards and groups.
-- Actions are collaboratively editable during review.
-- Finalize exports:
-  - full retro as JSON
-  - full retro as Markdown
-  - actions as JSON
-  - actions as Markdown
-  - actions as CSV for spreadsheets
+### 3. Organise
 
-Exports are anonymous: participant IDs and authors are stripped from saved retro data.
+Teams group related cards inside their original columns. A group becomes one decision target for ranking, while still showing every card inside it during vote and review.
 
-## Quick Start
+### 4. Vote
 
-```sh
-npm install
-npm run dev -- --host 127.0.0.1 --port 8787
+Pick the ranking mode that fits the room.
+
+| Mode | Use When | Result |
+| --- | --- | --- |
+| Score voting | You need a quick prioritization pass | Participants spend a fixed vote budget across targets. |
+| Pairwise ranking | You want a clearer order for small groups | Participants compare every target against every other target. |
+
+Decision targets are global across the board. A group counts as one target, and every ungrouped card also counts as one target.
+
+### 5. Review
+
+The facilitator controls the review slide for everyone. Results show column context, grouped cards, ungrouped cards, scores, pairwise wins, and emoji reactions.
+
+Actions are fully collaborative during review: add, edit, remove, then export.
+
+### 6. Finalize
+
+Export the retro without leaking participant identity.
+
+| Export | Formats | Includes |
+| --- | --- | --- |
+| Full retro | JSON, Markdown | Columns, cards, groups, votes, ranking results, actions, reactions |
+| Actions only | JSON, Markdown, CSV | Action items ready for docs, tickets, or spreadsheets |
+
+## Product Details
+
+### Real-Time Rooms
+
+- Shareable invite links.
+- Participant presence.
+- Live phase, board, vote, review, action, and reaction updates.
+- Reconnect tokens stored only in the browser.
+- WebSocket credentials are not embedded in invite links.
+
+### Reactions
+
+Emoji reactions work on cards and groups across the session. They are visible in writing, organizing, voting, and review so lightweight sentiment does not disappear when the retro moves forward.
+
+### Facilitator Controls
+
+- Advance the room through setup, write, organize, vote, review, and finalize.
+- Configure columns only during setup.
+- Choose score voting or pairwise ranking.
+- Start timers and track elapsed room time.
+- Drive the review slide for everyone.
+- Delete room data immediately when needed.
+
+## Architecture
+
+THX Retro Board is one Cloudflare application:
+
+```mermaid
+flowchart TB
+  browser["React SPA"] <--> worker["Cloudflare Worker"]
+  worker <--> room["Durable Object<br/>one per room"]
+  room <--> storage["SQLite-backed DO storage"]
+  browser <--> ws["WebSocket sync"]
+  ws <--> room
 ```
 
-Open [http://127.0.0.1:8787](http://127.0.0.1:8787), create a room, and invite a second browser profile or window to test collaboration.
+- **React SPA**: room UI, optimistic interaction states, export surfaces.
+- **Cloudflare Worker**: HTTP API routes, asset serving, SPA fallback.
+- **Durable Object per room**: canonical room state, permissions, phase transitions, timers, votes, actions, and reactions.
+- **SQLite-backed Durable Object storage**: persisted room snapshots while the room is active.
+- **WebSockets with hibernation support**: low-overhead real-time sync.
+- **Shared TypeScript domain model**: client, Worker, and tests use the same state contracts.
+
+## Privacy And Abuse Controls
+
+The app is designed for short-lived, low-friction retros rather than account-based record keeping.
+
+- No account system.
+- No participant names in exports.
+- Room data auto-deletes about one hour after the last participant leaves.
+- Facilitators can manually delete room data.
+- Room creation is protected by Cloudflare Turnstile when configured.
+- Room creation is rate-limited in the Worker per client IP.
+- Per-room caps limit participants, cards, groups, actions, reactions, vote budgets, and columns.
 
 ## Scripts
 
@@ -106,87 +174,51 @@ Open [http://127.0.0.1:8787](http://127.0.0.1:8787), create a room, and invite a
 | `npm run preview` | Build and preview production output locally. |
 | `npm run deploy` | Build and deploy with Wrangler. |
 
-## Architecture
+## Deploying
 
-THX Retro Board is built as a single Cloudflare application:
+The project is configured for Cloudflare Workers in [wrangler.jsonc](./wrangler.jsonc).
 
-- **React SPA** for the room UI, routing, and optimistic interaction states.
-- **Cloudflare Worker** for HTTP API routes and static asset serving.
-- **Durable Object per room** as the canonical state machine.
-- **SQLite-backed Durable Object storage** for persisted room snapshots.
-- **WebSockets with hibernation support** for low-overhead real-time sync.
-- **Shared TypeScript domain model** used by client, Worker, and tests.
+Production currently targets:
 
-The Durable Object owns room state, permissions, phase transitions, timers, columns, items, groups, votes, pairwise choices, review position, actions, and reactions. Clients send intent; the server validates and broadcasts authoritative updates.
+- Worker name: `thx-retro-board`
+- Route: `retro.thethracian.com`
+- Durable Object binding: `RETRO_ROOM`
+- Room creation rate-limit binding: `ROOM_CREATE_RATE_LIMITER`
 
-## State Model
+For a fork, change the Worker name, route, and Cloudflare bindings before deploying.
 
-The room state is versioned and server-authoritative:
+## Project Structure
 
-- `setup`: facilitator configures columns and ranking.
-- `write`: participants add cards in columns.
-- `organise`: cards are grouped and reordered within their original column.
-- `vote`: teams rank groups and ungrouped cards.
-- `review`: facilitator presents results while the room captures actions.
-- `finalize`: exports are generated for long-term analysis.
+```text
+src/
+  components/      React UI for home, room, voting, review, finalize, reactions
+  domain/          shared state model, validation, ranking, export formatting
+  hooks/           room WebSocket connection and state reconciliation
+  styles/          app design system and responsive UI
+  api.ts           HTTP API client
+worker/
+  index.ts         Worker router, Turnstile checks, rate limiting, SPA fallback
+  retro-room.ts    Durable Object room state machine
+e2e/
+  retro-flow.spec.ts
+docs/
+  assets/          README and project visuals
+```
 
-Rooms use a schema-versioned state shape, with reconnect tokens stored only in the browser. Invite links do not include participant credentials.
+## Quality Checks
 
-## Testing
-
-```sh
+```bash
 npm run typecheck
 npm run lint
 npm run test
 npm run test:e2e
 ```
 
-Coverage includes room creation, joins, phase permissions, setup locks, column invariants, card ownership, group operations, voting, pairwise ranking, review navigation, anonymous exports, reactions, WebSocket authentication, reconnect behavior, and end-to-end multi-user flow.
+Tests cover room creation, joins, setup locks, column invariants, card ownership, grouping, voting, pairwise ranking, review navigation, anonymous exports, reactions, WebSocket auth, reconnect behavior, and end-to-end collaboration flow.
 
-## Deploying To Cloudflare
+## Contributing
 
-The project is configured for Cloudflare Workers in [wrangler.jsonc](./wrangler.jsonc).
-
-```sh
-npm run deploy
-```
-
-Deployment uses:
-
-- Worker static assets
-- Durable Object binding: `RETRO_ROOM`
-- Durable Object migration for `RetroRoom`
-- Custom route: `retro.thethracian.com`
-
-For a fork or a different Cloudflare account, change the Worker name and route in `wrangler.jsonc` before deploying.
-
-## Project Structure
-
-```text
-src/
-  components/      React UI for home, room, vote, review, finalize, reactions
-  domain/          shared state model, validation, ranking, export formatting
-  hooks/           room WebSocket connection and state reconciliation
-  styles/          app design system and responsive UI
-  api.ts           HTTP API client
-worker/
-  index.ts         Worker router and SPA fallback
-  retro-room.ts    Durable Object room state machine
-e2e/
-  retro-flow.spec.ts
-tests/
-  test environment types/config
-```
-
-## Privacy Notes
-
-- No account system is required.
-- Room invite links are room-only links.
-- Reconnect credentials are stored locally in the participant browser.
-- WebSocket credentials are passed through protocols rather than exposed in invite links.
-- Room data auto-deletes after one hour without active participants, and facilitators can delete a room immediately.
-- Room creation is protected by a Worker rate-limit binding, with optional Cloudflare Turnstile verification when configured.
-- Exported retros are anonymous and omit participant identities.
+Issues and pull requests are welcome. Keep changes focused, add tests for state-machine behavior, and run the quality checks before opening a PR.
 
 ## License
 

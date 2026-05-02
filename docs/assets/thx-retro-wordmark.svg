@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="320" viewBox="0 0 1120 320" role="img" aria-labelledby="title desc">
+  <title id="title">THX Retro wordmark</title>
+  <desc id="desc">A pixel-style vector wordmark spelling RETRO.</desc>
+  <defs>
+    <filter id="glow" x="-10%" y="-20%" width="120%" height="150%">
+      <feGaussianBlur stdDeviation="4" result="blur" />
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 1 0 0 0 0 0.74 0 0 0 0 0.34 0 0 0 0.22 0" result="warmGlow" />
+      <feMerge>
+        <feMergeNode in="warmGlow" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+    <pattern id="grid" width="36" height="36" patternUnits="userSpaceOnUse">
+      <path d="M36 0H0v36" fill="none" stroke="#ffffff" stroke-opacity="0.035" />
+    </pattern>
+    <path id="retroBlocks" d="M84 46h28v28h-28zM118 46h28v28h-28zM152 46h28v28h-28zM186 46h28v28h-28zM84 80h28v28h-28zM220 80h28v28h-28zM84 114h28v28h-28zM220 114h28v28h-28zM84 148h28v28h-28zM118 148h28v28h-28zM152 148h28v28h-28zM186 148h28v28h-28zM84 182h28v28h-28zM152 182h28v28h-28zM84 216h28v28h-28zM186 216h28v28h-28zM84 250h28v28h-28zM220 250h28v28h-28zM272 46h28v28h-28zM306 46h28v28h-28zM340 46h28v28h-28zM374 46h28v28h-28zM408 46h28v28h-28zM272 80h28v28h-28zM272 114h28v28h-28zM272 148h28v28h-28zM306 148h28v28h-28zM340 148h28v28h-28zM374 148h28v28h-28zM272 182h28v28h-28zM272 216h28v28h-28zM272 250h28v28h-28zM306 250h28v28h-28zM340 250h28v28h-28zM374 250h28v28h-28zM408 250h28v28h-28zM460 46h28v28h-28zM494 46h28v28h-28zM528 46h28v28h-28zM562 46h28v28h-28zM596 46h28v28h-28zM528 80h28v28h-28zM528 114h28v28h-28zM528 148h28v28h-28zM528 182h28v28h-28zM528 216h28v28h-28zM528 250h28v28h-28zM648 46h28v28h-28zM682 46h28v28h-28zM716 46h28v28h-28zM750 46h28v28h-28zM648 80h28v28h-28zM784 80h28v28h-28zM648 114h28v28h-28zM784 114h28v28h-28zM648 148h28v28h-28zM682 148h28v28h-28zM716 148h28v28h-28zM750 148h28v28h-28zM648 182h28v28h-28zM716 182h28v28h-28zM648 216h28v28h-28zM750 216h28v28h-28zM648 250h28v28h-28zM784 250h28v28h-28zM870 46h28v28h-28zM904 46h28v28h-28zM938 46h28v28h-28zM836 80h28v28h-28zM972 80h28v28h-28zM836 114h28v28h-28zM972 114h28v28h-28zM836 148h28v28h-28zM972 148h28v28h-28zM836 182h28v28h-28zM972 182h28v28h-28zM836 216h28v28h-28zM972 216h28v28h-28zM870 250h28v28h-28zM904 250h28v28h-28zM938 250h28v28h-28z" />
+  </defs>
+
+  <rect width="1120" height="320" rx="34" fill="#070806" />
+  <rect width="1120" height="320" rx="34" fill="url(#grid)" />
+  <rect x="1" y="1" width="1118" height="318" rx="33" fill="none" stroke="#ffffff" stroke-opacity="0.08" />
+
+  <use href="#retroBlocks" transform="translate(14 14)" fill="#ffffff" opacity="0.18" />
+  <use href="#retroBlocks" transform="translate(7 7)" fill="#f7c467" opacity="0.28" />
+  <use href="#retroBlocks" fill="#f4f1e8" filter="url(#glow)" />
+
+  <g fill="#f2be5c">
+    <rect x="1038" y="72" width="34" height="8" rx="4" />
+    <rect x="1038" y="96" width="52" height="8" rx="4" />
+    <rect x="1038" y="120" width="24" height="8" rx="4" />
+    <rect x="1038" y="192" width="58" height="8" rx="4" />
+    <rect x="1038" y="216" width="38" height="8" rx="4" />
+    <rect x="1038" y="240" width="18" height="8" rx="4" />
+  </g>
+</svg>
