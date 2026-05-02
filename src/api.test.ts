@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Effect, Exit } from "effect";
-import { ApiError, getRoomStateEffect, runApiEffect } from "./api";
+import { ApiError, createRoomEffect, getRoomStateEffect, runApiEffect } from "./api";
 import type { RoomState } from "./domain";
 
 const roomState: RoomState = {
@@ -51,6 +51,21 @@ describe("getRoomState", () => {
     }
   });
 
+  it("rejects malformed room state payloads instead of trusting unknown JSON", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+      success: true,
+      state: {
+        roomId: "ROOM123",
+        phase: "write",
+      },
+    })));
+
+    await expect(runApiEffect(getRoomStateEffect("ROOM123", "p1", "token"))).rejects.toMatchObject({
+      name: "ApiError",
+      message: "Failed to parse room response",
+    } satisfies Partial<ApiError>);
+  });
+
   it("preserves server failure status instead of treating it as not found", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: "Nope" }, { status: 500 })));
 
@@ -71,5 +86,20 @@ describe("getRoomState", () => {
     await expect(runApiEffect(getRoomStateEffect("ROOM123", "p1", "token"))).rejects.toThrow(/networkerror/i);
     await expect(runApiEffect(getRoomStateEffect("ROOM123", "p1", "token"))).resolves.toEqual(roomState);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("createRoomEffect", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("rejects malformed create-room responses instead of navigating to an invalid room", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ facilitatorClaimToken: "claim-only" })));
+
+    await expect(runApiEffect(createRoomEffect("token"))).rejects.toMatchObject({
+      name: "ApiError",
+      message: "Failed to parse room response",
+    } satisfies Partial<ApiError>);
   });
 });
