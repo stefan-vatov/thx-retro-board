@@ -4,7 +4,6 @@ import type { Env } from "./index";
 import type {
   RoomState,
   Phase,
-  Participant,
   RetroItem,
   ActionItem,
   ReactionTarget,
@@ -16,19 +15,14 @@ import type {
   ItemReorderPreconditions,
   MoveItemPreconditions,
   StoredState,
-  WebSocketTicket,
 } from "./room-types";
 import {
   EMPTY_ROOM_PURGE_DELAY_MS,
   MAX_ROOM_LIFETIME_MS,
-  MAX_WEBSOCKET_MESSAGE_BYTES,
-  WEBSOCKET_TICKET_TTL_MS,
 } from "./room-types";
 
 import {
   authorizeParticipantEffect,
-  parseClientWebSocketMessageEffect,
-  validateParticipantJoinEffect,
 } from "./validation";
 import { handleRoomHttpRequest } from "./room-http";
 import {
@@ -52,8 +46,10 @@ import {
   reorderItemsForRoom,
 } from "./room-groups";
 import { addItemForRoom, deleteItemForRoom, editItemForRoom } from "./room-items";
+import { joinRoomParticipant, type RoomParticipantHost } from "./room-participants";
 import { toRoomState } from "./room-presenter";
 import { setPhaseForRoom, setReviewTargetForRoom, setTimerForRoom } from "./room-phase";
+import { purgeRoomByFacilitator } from "./room-purge";
 import {
   castVoteForRoom,
   choosePairwiseForRoom,
@@ -65,7 +61,18 @@ import {
 import { handleRoomRealtimeMessage } from "./room-realtime";
 import { RoomRealtimeLimiter } from "./room-realtime-limits";
 import { createInitialStoredState, hydrateStoredState } from "./room-storage";
-import { generateToken, getWebSocketTicket } from "./room-tickets";
+import {
+  consumeWebSocketTicketForRoom,
+  createWebSocketTicketForRoom,
+  deleteOutstandingWebSocketTicketForRoom,
+} from "./room-websocket-tickets";
+import { handleRoomWebSocketRequest, type RoomWebSocketHost } from "./room-websocket";
+import {
+  handleRoomWebSocketClose,
+  handleRoomWebSocketMessage,
+  type RoomWebSocketEventHost,
+} from "./room-websocket-events";
+import { createStoredStateForTest } from "./room-test-state";
 
 export class RetroRoom extends DurableObject<Env> {
   private state: StoredState | null = null;
@@ -149,6 +156,43 @@ export class RetroRoom extends DurableObject<Env> {
     };
   }
 
+  private participantHost(): RoomParticipantHost {
+    return {
+      ...this.commandHost(),
+      cancelEmptyRoomPurge: () => this.cancelEmptyRoomPurge(),
+      closeParticipantSocket: (participantId, reason) => this.closeParticipantSocket(participantId, reason),
+      deleteOutstandingWebSocketTicket: (participantId) => this.deleteOutstandingWebSocketTicket(participantId),
+      scheduleEmptyRoomPurge: () => this.scheduleEmptyRoomPurge(),
+      getSessionCount: () => this.sessions.size,
+    };
+  }
+
+  private webSocketHost(): RoomWebSocketHost {
+    return {
+      consumeWebSocketTicket: (ticket) => this.consumeWebSocketTicket(ticket),
+      loadState: () => this.loadState(),
+      cancelEmptyRoomPurge: () => this.cancelEmptyRoomPurge(),
+      closeParticipantSocket: (participantId, reason) => this.closeParticipantSocket(participantId, reason),
+      setSession: (participantId, socket) => this.sessions.set(participantId, socket),
+      acceptWebSocket: (socket) => this.ctx.acceptWebSocket(socket),
+      broadcast: (message, excludeId) => this.broadcast(message, excludeId),
+    };
+  }
+
+  private webSocketEventHost(): RoomWebSocketEventHost {
+    return {
+      getSession: (participantId) => this.sessions.get(participantId),
+      removeSession: (participantId) => {
+        this.sessions.delete(participantId);
+      },
+      removeRealtimeParticipant: (participantId) => this.realtimeLimiter.removeParticipant(participantId),
+      allowWebSocketMessage: (participantId) => this.allowWebSocketMessage(participantId),
+      handleRealtimeMessage: (participantId, message) => handleRoomRealtimeMessage(this, participantId, message),
+      broadcast: (message, excludeId) => this.broadcast(message, excludeId),
+      scheduleEmptyRoomPurge: () => this.scheduleEmptyRoomPurge(),
+    };
+  }
+
   private async purgeIfExpired(stored?: StoredState | null): Promise<boolean> {
     const state = stored ?? await this.ctx.storage.get<StoredState>("room");
     if (!state || !this.isPastAbsoluteRoomLifetime(state)) return false;
@@ -212,87 +256,12 @@ export class RetroRoom extends DurableObject<Env> {
   }
 
   async join(participantId: string, displayName: string, connectionToken?: string, facilitatorClaimToken?: unknown): Promise<{ success: boolean; error?: string; state?: RoomState; connectionToken?: string }> {
-    const s = await this.loadState();
-    const validation = await Effect.runPromise(Effect.either(validateParticipantJoinEffect(
-      s,
-      participantId,
-      displayName,
-      connectionToken,
-      facilitatorClaimToken,
-    )));
-    if (validation._tag === "Left") {
-      return { success: false, error: validation.left.message };
-    }
-    const validated = validation.right;
-
-    if (validated.existing) {
-      if (validated.shouldClaimFacilitator) {
-        s.facilitatorId = participantId;
-        s.facilitatorClaimToken = null;
-        s.participants = s.participants.map((participant) =>
-          participant.id === participantId ? { ...participant, isFacilitator: true } : participant,
-        );
-      }
-      await this.cancelEmptyRoomPurge();
-      this.closeParticipantSocket(participantId, "Participant reconnected");
-      await this.deleteOutstandingWebSocketTicket(participantId);
-      const token = generateToken();
-      s.connectionTokens[participantId] = token;
-      await this.saveState();
-
-      // Broadcast participant presence to other clients on reconnect
-      const broadcast: ServerToClientMessage = {
-        type: "participant-joined",
-        participant: validated.existing,
-      };
-      this.broadcast(broadcast, participantId);
-
-      if (this.sessions.size === 0) {
-        await this.scheduleEmptyRoomPurge();
-      }
-
-      return { success: true, state: toRoomState(s, participantId), connectionToken: token };
-    }
-
-    await this.cancelEmptyRoomPurge();
-    const participant: Participant = {
-      id: participantId,
-      displayName: validated.displayName,
-      isFacilitator: validated.isFacilitator,
-    };
-    s.participants.push(participant);
-    if (validated.isFacilitator) {
-      s.facilitatorId = participantId;
-      s.facilitatorClaimToken = null;
-    }
-    const token = generateToken();
-    s.connectionTokens[participantId] = token;
-    await this.saveState();
-
-    const broadcast: ServerToClientMessage = {
-      type: "participant-joined",
-      participant,
-    };
-    this.broadcast(broadcast, participantId);
-
-    this.broadcastState(s, participantId);
-    if (this.sessions.size === 0) {
-      await this.scheduleEmptyRoomPurge();
-    }
-
-    return { success: true, state: toRoomState(s, participantId), connectionToken: token };
+    return joinRoomParticipant(this.participantHost(), participantId, displayName, connectionToken, facilitatorClaimToken);
   }
 
   async purgeByFacilitator(participantId: string): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
-    if (!this.hasParticipant(s, participantId)) {
-      return { success: false, error: "Participant not found" };
-    }
-    if (s.facilitatorId !== participantId) {
-      return { success: false, error: "Only the facilitator can delete room data" };
-    }
-    await this.purgeRoom("The facilitator deleted this room's data.");
-    return { success: true };
+    return purgeRoomByFacilitator(s, participantId, (reason) => this.purgeRoom(reason));
   }
 
   async setVoteBudget(participantId: string, budget: number): Promise<{ success: boolean; error?: string }> {
@@ -356,61 +325,26 @@ export class RetroRoom extends DurableObject<Env> {
   }
 
   private async deleteOutstandingWebSocketTicket(participantId: string): Promise<void> {
-    const existingTicket = await this.ctx.storage.get<string>(`ws-ticket-by-participant:${participantId}`);
-    if (existingTicket) {
-      await this.ctx.storage.delete(`ws-ticket:${existingTicket}`);
-    }
-    await this.ctx.storage.delete(`ws-ticket-by-participant:${participantId}`);
+    await deleteOutstandingWebSocketTicketForRoom(this.ctx.storage, participantId);
   }
 
   async createWebSocketTicket(participantId: string, connectionToken: unknown): Promise<{ success: boolean; error?: string; ticket?: string }> {
-    const s = await this.loadState();
-    const auth = await Effect.runPromise(Effect.either(authorizeParticipantEffect(s, participantId, connectionToken)));
-    if (auth._tag === "Left") return { success: false, error: auth.left.message };
-
-    await this.deleteOutstandingWebSocketTicket(auth.right.participantId);
-
-    const ticket = generateToken();
-    const record: WebSocketTicket = {
-      participantId: auth.right.participantId,
-      expiresAt: Date.now() + WEBSOCKET_TICKET_TTL_MS,
-    };
-    await Promise.all([
-      this.ctx.storage.put(`ws-ticket:${ticket}`, record),
-      this.ctx.storage.put(`ws-ticket-by-participant:${auth.right.participantId}`, ticket),
-    ]);
-    return { success: true, ticket };
+    return createWebSocketTicketForRoom({
+      loadState: () => this.loadState(),
+      get: (key) => this.ctx.storage.get(key),
+      put: (key, value) => this.ctx.storage.put(key, value),
+      delete: (key) => this.ctx.storage.delete(key),
+    }, participantId, connectionToken);
   }
 
   private async consumeWebSocketTicket(ticket: string | null): Promise<{ success: true; participantId: string } | { success: false; error: string }> {
-    if (typeof ticket !== "string" || ticket.length !== 64 || !/^[a-f0-9]+$/.test(ticket)) {
-      return { success: false, error: "Missing or invalid websocket ticket" };
-    }
-
-    const key = `ws-ticket:${ticket}`;
-    const record = await this.ctx.storage.get<WebSocketTicket>(key);
-    await this.ctx.storage.delete(key);
-    if (
-      !record
-      || typeof record.participantId !== "string"
-      || typeof record.expiresAt !== "number"
-    ) {
-      return { success: false, error: "Missing or invalid websocket ticket" };
-    }
-    const participantTicketKey = `ws-ticket-by-participant:${record.participantId}`;
-    const currentParticipantTicket = await this.ctx.storage.get<string>(participantTicketKey);
-    if (currentParticipantTicket === ticket) {
-      await this.ctx.storage.delete(participantTicketKey);
-    }
-    if (record.expiresAt < Date.now()) {
-      return { success: false, error: "Websocket ticket expired" };
-    }
-
-    const s = await this.loadState();
-    if (!this.hasParticipant(s, record.participantId)) {
-      return { success: false, error: "Participant not found" };
-    }
-    return { success: true, participantId: record.participantId };
+    return consumeWebSocketTicketForRoom({
+      loadState: () => this.loadState(),
+      get: (key) => this.ctx.storage.get(key),
+      put: (key, value) => this.ctx.storage.put(key, value),
+      delete: (key) => this.ctx.storage.delete(key),
+      hasParticipant: async (participantId) => this.hasParticipant(await this.loadState(), participantId),
+    }, ticket);
   }
 
   private allowWebSocketMessage(participantId: string, now = Date.now()): { allowed: true } | { allowed: false; reason: string } {
@@ -519,104 +453,31 @@ export class RetroRoom extends DurableObject<Env> {
   }
 
   override async fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url);
     const httpResponse = await handleRoomHttpRequest(this, request);
     if (httpResponse) return httpResponse;
 
-    if (url.pathname === "/ws" && request.headers.get("Upgrade") === "websocket") {
-      const pair = new WebSocketPair();
-      const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
-
-      const ticket = await this.consumeWebSocketTicket(getWebSocketTicket(request));
-      if (!ticket.success) {
-        return new Response(JSON.stringify({ error: ticket.error }), { status: 403 });
-      }
-
-      const participantId = ticket.participantId;
-      const s = await this.loadState();
-      await this.cancelEmptyRoomPurge();
-      this.closeParticipantSocket(participantId, "Participant opened a new connection");
-      this.sessions.set(participantId, server);
-      server.serializeAttachment({ participantId });
-      this.ctx.acceptWebSocket(server);
-
-      // Broadcast reconnecting participant presence to other clients
-      const participant = s.participants.find((p) => p.id === participantId);
-      if (participant) {
-        const presenceMsg: ServerToClientMessage = {
-          type: "participant-joined",
-          participant,
-        };
-        this.broadcast(presenceMsg, participantId);
-      }
-
-      const snapshot = toRoomState(s, participantId);
-      server.send(JSON.stringify({ type: "snapshot", state: snapshot }));
-
-      return new Response(null, {
-        status: 101,
-        webSocket: client,
-        headers: { "Sec-WebSocket-Protocol": "retro-board" },
-      });
-    }
+    const webSocketResponse = await handleRoomWebSocketRequest(this.webSocketHost(), request);
+    if (webSocketResponse) return webSocketResponse;
 
     return new Response("Not found", { status: 404 });
   }
 
   override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    const attachment = ws.deserializeAttachment() as { participantId: string } | null;
-    const participantId = attachment?.participantId;
-    if (!participantId) return;
-    if (this.sessions.get(participantId) !== ws) {
-      try {
-        ws.close(1008, "Obsolete realtime session");
-      } catch {
-        // Ignore already-closing sockets.
-      }
-      return;
-    }
-
-    try {
-      const rateLimit = this.allowWebSocketMessage(participantId);
-      if (!rateLimit.allowed) {
-        ws.send(JSON.stringify({ type: "error", message: rateLimit.reason }));
-        ws.close(1008, "Realtime rate limit exceeded");
-        return;
-      }
-      const messageSize = typeof message === "string" ? message.length : message.byteLength;
-      if (messageSize > MAX_WEBSOCKET_MESSAGE_BYTES) {
-        ws.send(JSON.stringify({ type: "error", message: "Message is too large" }));
-        return;
-      }
-      const msg = await Effect.runPromise(parseClientWebSocketMessageEffect(message));
-      await handleRoomRealtimeMessage(this, participantId, msg);
-    } catch {
-      ws.send(JSON.stringify({ type: "error", message: "Invalid message" }));
-    }
+    await handleRoomWebSocketMessage(this.webSocketEventHost(), ws, message);
   }
 
   override webSocketClose(ws: WebSocket): void {
-    const attachment = ws.deserializeAttachment() as { participantId: string } | null;
-    const participantId = attachment?.participantId;
-    if (!participantId) return;
-
-    if (this.sessions.get(participantId) !== ws) return;
-    this.sessions.delete(participantId);
-    this.realtimeLimiter.removeParticipant(participantId);
-    const leftMsg: ServerToClientMessage = { type: "participant-left", participantId };
-    this.broadcast(leftMsg);
-    this.ctx.waitUntil(this.scheduleEmptyRoomPurge());
+    handleRoomWebSocketClose({
+      ...this.webSocketEventHost(),
+      scheduleEmptyRoomPurge: () => {
+        this.ctx.waitUntil(this.scheduleEmptyRoomPurge());
+        return Promise.resolve();
+      },
+    }, ws);
   }
 
   sendParticipantError(participantId: string, message: string): void {
     this.sessions.get(participantId)?.send(JSON.stringify({ type: "error", message }));
-  }
-
-  async sayHello(): Promise<string> {
-    const result = this.ctx.storage.sql
-      .exec("SELECT 'Hello from RetroRoom!' as greeting")
-      .one();
-    return result.greeting as string;
   }
 
   async setPhaseForTest(phase: RoomState["phase"]): Promise<void> {
@@ -625,38 +486,14 @@ export class RetroRoom extends DurableObject<Env> {
     await this.saveState();
   }
 
-  async runEmptyRoomAlarmForTest(): Promise<void> {
-    await this.alarm();
-  }
+  async runEmptyRoomAlarmForTest(): Promise<void> { await this.alarm(); }
 
   allowWebSocketMessageForTest(participantId: string, now = Date.now()): { allowed: boolean; reason?: string } {
     return this.allowWebSocketMessage(participantId, now);
   }
 
   async seedStoredStateForTest(state: Partial<StoredState> & Pick<StoredState, "roomId">): Promise<void> {
-    const stored: StoredState = {
-      schemaVersion: 2,
-      startedAt: Date.now(),
-      purgeScheduledAt: null,
-      phase: "setup",
-      participants: [],
-      items: [],
-      groups: [],
-      votes: [],
-      rankingMethod: "score",
-      pairwiseChoices: [],
-      reviewTargetKey: null,
-      actions: [],
-      facilitatorId: null,
-      facilitatorClaimToken: null,
-      votingParticipantIds: [],
-      voteBudget: 5,
-      version: 0,
-      connectionTokens: {},
-      timer: { startedAt: null, durationSeconds: null, expired: false },
-      ...state,
-    };
-    await this.ctx.storage.put("room", stored);
+    await this.ctx.storage.put("room", createStoredStateForTest(state));
     this.state = null;
   }
 }
