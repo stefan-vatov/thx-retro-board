@@ -1,6 +1,8 @@
+import { Effect, Exit } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   canAttemptRealtimeReconnect,
+  decodeRealtimeMessageEffect,
   getRealtimeReconnectDelay,
   INITIAL_RECONNECT_DELAY_MS,
   MAX_RECONNECT_ATTEMPTS,
@@ -23,5 +25,34 @@ describe("realtime reconnect backoff", () => {
   it("does not reset the retry budget for short-lived websocket opens", () => {
     expect(shouldResetRealtimeReconnectAttempts(4_999)).toBe(false);
     expect(shouldResetRealtimeReconnectAttempts(5_000)).toBe(true);
+  });
+});
+
+describe("realtime message decoding", () => {
+  it("decodes valid realtime error messages as an Effect", async () => {
+    await expect(Effect.runPromise(decodeRealtimeMessageEffect(JSON.stringify({
+      type: "error",
+      message: "Nope",
+    })))).resolves.toEqual({
+      type: "error",
+      message: "Nope",
+    });
+  });
+
+  it("rejects malformed realtime snapshot payloads instead of trusting unknown JSON", async () => {
+    const exit = await Effect.runPromiseExit(decodeRealtimeMessageEffect(JSON.stringify({
+      type: "snapshot",
+      state: {
+        roomId: "ROOM123",
+      },
+    })));
+
+    expect(Exit.isFailure(exit)).toBe(true);
+  });
+
+  it("rejects non-json websocket payloads as typed failures", async () => {
+    const exit = await Effect.runPromiseExit(decodeRealtimeMessageEffect("{not json"));
+
+    expect(Exit.isFailure(exit)).toBe(true);
   });
 });

@@ -1,5 +1,18 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { createWebSocketTicketEffect, runApiEffect } from "../api";
+import { Effect, Exit, Schema } from "effect";
+import {
+  ActionItemSchema,
+  ColumnSchema,
+  createWebSocketTicketEffect,
+  GroupSchema,
+  PairwiseChoiceSchema,
+  ParticipantSchema,
+  PhaseSchema,
+  RetroItemSchema,
+  RoomStateSchema,
+  runApiEffect,
+  TimerStateSchema,
+} from "../api";
 import { pairwiseComparisonKey } from "../domain";
 import type { RoomState, ServerToClientMessage } from "../domain";
 
@@ -18,6 +31,48 @@ export function canAttemptRealtimeReconnect(reconnectAttempts: number): boolean 
 
 export function shouldResetRealtimeReconnectAttempts(openDurationMs: number): boolean {
   return openDurationMs >= STABLE_CONNECTION_RESET_MS;
+}
+
+export class RealtimeMessageError extends Error {
+  constructor(message = "Invalid realtime message") {
+    super(message);
+    this.name = "RealtimeMessageError";
+  }
+}
+
+const ServerToClientMessageSchema = Schema.Union(
+  Schema.Struct({ type: Schema.Literal("snapshot"), state: RoomStateSchema }),
+  Schema.Struct({ type: Schema.Literal("participant-joined"), participant: ParticipantSchema }),
+  Schema.Struct({ type: Schema.Literal("participant-left"), participantId: Schema.String }),
+  Schema.Struct({ type: Schema.Literal("phase-changed"), phase: PhaseSchema }),
+  Schema.Struct({ type: Schema.Literal("item-added"), item: RetroItemSchema }),
+  Schema.Struct({ type: Schema.Literal("items-reordered"), items: Schema.Array(RetroItemSchema) }),
+  Schema.Struct({ type: Schema.Literal("groups-changed"), groups: Schema.Array(GroupSchema) }),
+  Schema.Struct({ type: Schema.Literal("actions-changed"), actions: Schema.Array(ActionItemSchema) }),
+  Schema.Struct({ type: Schema.Literal("columns-changed"), columns: Schema.Array(ColumnSchema), version: Schema.Number }),
+  Schema.Struct({
+    type: Schema.Literal("pairwise-choice-changed"),
+    choice: PairwiseChoiceSchema,
+  }),
+  Schema.Struct({ type: Schema.Literal("review-target-changed"), reviewTargetKey: Schema.NullOr(Schema.String) }),
+  Schema.Struct({ type: Schema.Literal("timer-updated"), timer: TimerStateSchema }),
+  Schema.Struct({ type: Schema.Literal("room-purged"), reason: Schema.String }),
+  Schema.Struct({ type: Schema.Literal("error"), message: Schema.String }),
+  Schema.Struct({ type: Schema.Literal("vote-changed") }),
+  Schema.Struct({ type: Schema.Literal("ranking-method-changed") }),
+);
+
+export function decodeRealtimeMessageEffect(raw: string): Effect.Effect<ServerToClientMessage, RealtimeMessageError> {
+  return Effect.gen(function* () {
+    const parsed = yield* Effect.try({
+      try: () => JSON.parse(raw) as unknown,
+      catch: () => new RealtimeMessageError(),
+    });
+    const decoded = yield* Schema.decodeUnknown(ServerToClientMessageSchema)(parsed).pipe(
+      Effect.mapError(() => new RealtimeMessageError()),
+    );
+    return decoded as ServerToClientMessage;
+  });
 }
 
 interface UseRoomResult {
@@ -114,10 +169,11 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
 
       ws.addEventListener("message", (event) => {
         if (wsRef.current !== ws || disposed) return;
-        try {
-          const msg = JSON.parse(event.data as string) as ServerToClientMessage;
+        void Effect.runPromiseExit(decodeRealtimeMessageEffect(event.data as string)).then((exit) => {
+          if (Exit.isFailure(exit) || wsRef.current !== ws || disposed) return;
+          const msg = exit.value;
           if (msg.type === "snapshot") {
-            setState(msg.state);
+            setState(msg.state as RoomState);
           } else if (msg.type === "participant-joined") {
             setState((prev) => {
               if (!prev) return prev;
@@ -174,9 +230,7 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
           } else if (msg.type === "error") {
             setLastError(msg.message);
           }
-        } catch {
-          // ignore parse errors
-        }
+        });
       });
 
       ws.addEventListener("close", () => {

@@ -17,29 +17,29 @@ export class ApiError extends Error {
 
 const jsonHeaders = { "Content-Type": "application/json" };
 
-const PhaseSchema = Schema.Literal("setup", "write", "organise", "vote", "review", "finalize");
-const RankingMethodSchema = Schema.Literal("score", "pairwise");
+export const PhaseSchema = Schema.Literal("setup", "write", "organise", "vote", "review", "finalize");
+export const RankingMethodSchema = Schema.Literal("score", "pairwise");
 const VoteTargetSchema = Schema.Union(
   Schema.Struct({ type: Schema.Literal("group"), id: Schema.String }),
   Schema.Struct({ type: Schema.Literal("item"), id: Schema.String }),
 );
-const ParticipantSchema = Schema.Struct({
+export const ParticipantSchema = Schema.Struct({
   id: Schema.String,
   displayName: Schema.String,
   isFacilitator: Schema.Boolean,
 });
-const ColumnSchema = Schema.Struct({
+export const ColumnSchema = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
   order: Schema.Number,
 });
-const GroupSchema = Schema.Struct({
+export const GroupSchema = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
   columnId: Schema.String,
   order: Schema.Number,
 });
-const RetroItemSchema = Schema.Struct({
+export const RetroItemSchema = Schema.Struct({
   id: Schema.String,
   text: Schema.String,
   authorId: Schema.String,
@@ -54,7 +54,7 @@ const VoteAllocationSchema = Schema.Struct({
   itemId: Schema.optional(Schema.String),
   count: Schema.Number,
 });
-const PairwiseChoiceSchema = Schema.Struct({
+export const PairwiseChoiceSchema = Schema.Struct({
   participantId: Schema.String,
   winner: VoteTargetSchema,
   loser: VoteTargetSchema,
@@ -65,7 +65,7 @@ const PairwiseProgressSchema = Schema.Struct({
   answered: Schema.Number,
   total: Schema.Number,
 });
-const ActionItemSchema = Schema.Struct({
+export const ActionItemSchema = Schema.Struct({
   id: Schema.String,
   text: Schema.String,
   authorId: Schema.String,
@@ -76,12 +76,12 @@ const ReactionSchema = Schema.Struct({
   target: VoteTargetSchema,
   emoji: Schema.String,
 });
-const TimerStateSchema = Schema.Struct({
+export const TimerStateSchema = Schema.Struct({
   startedAt: Schema.NullOr(Schema.Number),
   durationSeconds: Schema.NullOr(Schema.Number),
   expired: Schema.Boolean,
 });
-const RoomStateSchema = Schema.Struct({
+export const RoomStateSchema = Schema.Struct({
   schemaVersion: Schema.Literal(2),
   roomId: Schema.String,
   startedAt: Schema.Number,
