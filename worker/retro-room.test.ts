@@ -6,6 +6,7 @@ import { getDefaultColumns, groupVoteTarget, itemVoteTarget } from "../src/domai
 import type { RoomState } from "../src/domain";
 import {
   parseClientWebSocketMessageEffect,
+  authorizeParticipantEffect,
   validatePhaseChangeEffect,
   validateRankingMethodChangeEffect,
   validateColumnCreateEffect,
@@ -30,7 +31,7 @@ import {
   validateReviewActionEffect,
   validateTimerChangeEffect,
   validateVoteBudgetChangeEffect,
-} from "./retro-room";
+} from "./validation";
 
 describe("RetroRoom Durable Object v2 schema", () => {
   it("parses valid websocket client messages through Effect", async () => {
@@ -82,6 +83,26 @@ describe("RetroRoom Durable Object v2 schema", () => {
       success: false,
       error: "Valid JSON body is required",
     });
+  });
+
+  it("authorizes participant credentials through Effect", async () => {
+    const state = {
+      participants: [{ id: "p1", displayName: "Pat", isFacilitator: false }],
+      connectionTokens: { p1: "token" },
+    };
+
+    await expect(Effect.runPromise(authorizeParticipantEffect(state, "p1", "token"))).resolves.toEqual({
+      participantId: "p1",
+    });
+
+    const missingParticipant = await Effect.runPromiseExit(authorizeParticipantEffect(state, "missing", "token"));
+    expect(Exit.isFailure(missingParticipant)).toBe(true);
+
+    const invalidToken = await Effect.runPromiseExit(authorizeParticipantEffect(state, "p1", "wrong"));
+    expect(Exit.isFailure(invalidToken)).toBe(true);
+
+    const missingRoom = await Effect.runPromiseExit(authorizeParticipantEffect(null, "p1", "token"));
+    expect(Exit.isFailure(missingRoom)).toBe(true);
   });
 
   it("validates vote budget mutations through Effect before state changes", async () => {
