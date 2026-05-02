@@ -1,5 +1,4 @@
 import { DurableObject } from "cloudflare:workers";
-import { Effect } from "effect";
 import type { Env } from "./index";
 import type {
   RoomState,
@@ -21,9 +20,7 @@ import {
   MAX_ROOM_LIFETIME_MS,
 } from "./room-types";
 
-import {
-  authorizeParticipantEffect,
-} from "./validation";
+import { authorizeLoadedParticipantResult } from "./room-auth";
 import { handleRoomHttpRequest } from "./room-http";
 import {
   createActionForRoom,
@@ -244,9 +241,10 @@ export class RetroRoom extends DurableObject<Env> {
 
   async getRoomStateForParticipant(participantId: string, connectionToken: unknown): Promise<{ success: boolean; error?: string; state?: RoomState }> {
     const s = await this.loadState();
-    const auth = await Effect.runPromise(Effect.either(authorizeParticipantEffect(s, participantId, connectionToken)));
-    if (auth._tag === "Left") return { success: false, error: auth.left.message };
-    return { success: true, state: toRoomState(s, auth.right.participantId) };
+    const auth = await authorizeLoadedParticipantResult(s, participantId, connectionToken);
+    return auth.success
+      ? { success: true, state: toRoomState(s, auth.participantId) }
+      : auth;
   }
 
   async hasRoom(): Promise<boolean> {
@@ -363,11 +361,7 @@ export class RetroRoom extends DurableObject<Env> {
     participantId: unknown,
     connectionToken: unknown,
   ): Promise<{ success: true; participantId: string; state: StoredState } | { success: false; error: string }> {
-    return Effect.runPromise(Effect.either(authorizeParticipantEffect(s, participantId, connectionToken))).then((auth) =>
-      auth._tag === "Left"
-        ? { success: false, error: auth.left.message }
-        : { success: true, participantId: auth.right.participantId, state: s },
-    );
+    return authorizeLoadedParticipantResult(s, participantId, connectionToken);
   }
 
   async createColumn(participantId: string, rawName: string): ReturnType<typeof createColumnForRoom> {
