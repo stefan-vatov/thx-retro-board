@@ -17,11 +17,20 @@ export async function deleteOutstandingWebSocketTicketForRoom(
   storage: WebSocketTicketStorage,
   participantId: string,
 ): Promise<void> {
-  const existingTicket = await storage.get<string>(`ws-ticket-by-participant:${participantId}`);
-  if (existingTicket) {
-    await storage.delete(`ws-ticket:${existingTicket}`);
-  }
-  await storage.delete(`ws-ticket-by-participant:${participantId}`);
+  await Effect.runPromise(deleteOutstandingWebSocketTicketForRoomEffect(storage, participantId));
+}
+
+export function deleteOutstandingWebSocketTicketForRoomEffect(
+  storage: WebSocketTicketStorage,
+  participantId: string,
+): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    const existingTicket = yield* Effect.promise(() => storage.get<string>(`ws-ticket-by-participant:${participantId}`));
+    if (existingTicket) {
+      yield* Effect.promise(() => storage.delete(`ws-ticket:${existingTicket}`));
+    }
+    yield* Effect.promise(() => storage.delete(`ws-ticket-by-participant:${participantId}`));
+  });
 }
 
 export async function createWebSocketTicketForRoom(
@@ -30,22 +39,33 @@ export async function createWebSocketTicketForRoom(
   connectionToken: unknown,
   now = Date.now(),
 ): Promise<{ success: boolean; error?: string; ticket?: string }> {
-  const s = await host.loadState();
-  const auth = await Effect.runPromise(Effect.either(authorizeParticipantEffect(s, participantId, connectionToken)));
-  if (auth._tag === "Left") return { success: false, error: auth.left.message };
+  return Effect.runPromise(createWebSocketTicketForRoomEffect(host, participantId, connectionToken, now));
+}
 
-  await deleteOutstandingWebSocketTicketForRoom(host, auth.right.participantId);
+export function createWebSocketTicketForRoomEffect(
+  host: WebSocketTicketHost,
+  participantId: string,
+  connectionToken: unknown,
+  now = Date.now(),
+): Effect.Effect<{ success: boolean; error?: string; ticket?: string }> {
+  return Effect.gen(function* () {
+    const s = yield* Effect.promise(() => host.loadState());
+    const auth = yield* Effect.either(authorizeParticipantEffect(s, participantId, connectionToken));
+    if (auth._tag === "Left") return { success: false, error: auth.left.message };
 
-  const ticket = generateToken();
-  const record: WebSocketTicket = {
-    participantId: auth.right.participantId,
-    expiresAt: now + WEBSOCKET_TICKET_TTL_MS,
-  };
-  await Promise.all([
-    host.put(`ws-ticket:${ticket}`, record),
-    host.put(`ws-ticket-by-participant:${auth.right.participantId}`, ticket),
-  ]);
-  return { success: true, ticket };
+    yield* deleteOutstandingWebSocketTicketForRoomEffect(host, auth.right.participantId);
+
+    const ticket = generateToken();
+    const record: WebSocketTicket = {
+      participantId: auth.right.participantId,
+      expiresAt: now + WEBSOCKET_TICKET_TTL_MS,
+    };
+    yield* Effect.all([
+      Effect.promise(() => host.put(`ws-ticket:${ticket}`, record)),
+      Effect.promise(() => host.put(`ws-ticket-by-participant:${auth.right.participantId}`, ticket)),
+    ], { concurrency: "unbounded" });
+    return { success: true, ticket };
+  });
 }
 
 export async function consumeWebSocketTicketForRoom(
@@ -53,31 +73,42 @@ export async function consumeWebSocketTicketForRoom(
   ticket: string | null,
   now = Date.now(),
 ): Promise<{ success: true; participantId: string } | { success: false; error: string }> {
-  if (typeof ticket !== "string" || ticket.length !== 64 || !/^[a-f0-9]+$/.test(ticket)) {
-    return { success: false, error: "Missing or invalid websocket ticket" };
-  }
+  return Effect.runPromise(consumeWebSocketTicketForRoomEffect(host, ticket, now));
+}
 
-  const key = `ws-ticket:${ticket}`;
-  const record = await host.get<WebSocketTicket>(key);
-  await host.delete(key);
-  if (
-    !record
-    || typeof record.participantId !== "string"
-    || typeof record.expiresAt !== "number"
-  ) {
-    return { success: false, error: "Missing or invalid websocket ticket" };
-  }
-  const participantTicketKey = `ws-ticket-by-participant:${record.participantId}`;
-  const currentParticipantTicket = await host.get<string>(participantTicketKey);
-  if (currentParticipantTicket === ticket) {
-    await host.delete(participantTicketKey);
-  }
-  if (record.expiresAt < now) {
-    return { success: false, error: "Websocket ticket expired" };
-  }
+export function consumeWebSocketTicketForRoomEffect(
+  host: WebSocketTicketHost & { hasParticipant(participantId: string): Promise<boolean> },
+  ticket: string | null,
+  now = Date.now(),
+): Effect.Effect<{ success: true; participantId: string } | { success: false; error: string }> {
+  return Effect.gen(function* () {
+    if (typeof ticket !== "string" || ticket.length !== 64 || !/^[a-f0-9]+$/.test(ticket)) {
+      return { success: false, error: "Missing or invalid websocket ticket" };
+    }
 
-  if (!await host.hasParticipant(record.participantId)) {
-    return { success: false, error: "Participant not found" };
-  }
-  return { success: true, participantId: record.participantId };
+    const key = `ws-ticket:${ticket}`;
+    const record = yield* Effect.promise(() => host.get<WebSocketTicket>(key));
+    yield* Effect.promise(() => host.delete(key));
+    if (
+      !record
+      || typeof record.participantId !== "string"
+      || typeof record.expiresAt !== "number"
+    ) {
+      return { success: false, error: "Missing or invalid websocket ticket" };
+    }
+    const participantTicketKey = `ws-ticket-by-participant:${record.participantId}`;
+    const currentParticipantTicket = yield* Effect.promise(() => host.get<string>(participantTicketKey));
+    if (currentParticipantTicket === ticket) {
+      yield* Effect.promise(() => host.delete(participantTicketKey));
+    }
+    if (record.expiresAt < now) {
+      return { success: false, error: "Websocket ticket expired" };
+    }
+
+    const hasParticipant = yield* Effect.promise(() => host.hasParticipant(record.participantId));
+    if (!hasParticipant) {
+      return { success: false, error: "Participant not found" };
+    }
+    return { success: true, participantId: record.participantId };
+  });
 }
