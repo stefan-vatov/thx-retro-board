@@ -129,6 +129,8 @@ type RankingMethodValidationState = Pick<StoredState, "facilitatorId" | "partici
 type PhaseValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase" | "columns" | "rankingMethod">;
 type ReviewActionValidationState = Pick<StoredState, "participants" | "phase">;
 type WriteItemCreateValidationState = Pick<StoredState, "participants" | "phase" | "items" | "columns">;
+type WriteItemEditValidationState = Pick<StoredState, "participants" | "phase" | "items">;
+type WriteItemDeleteValidationState = Pick<StoredState, "participants" | "phase" | "items">;
 
 const OptionalConnectionTokenSchema = Schema.Struct({
   participantId: Schema.String,
@@ -312,6 +314,56 @@ export function validateWriteItemCreateEffect(
       columnId: columnValidation.columnId,
       order: state.items.length,
     };
+  });
+}
+
+export function validateWriteItemEditEffect(
+  state: WriteItemEditValidationState,
+  participantId: string,
+  itemId: string,
+  rawText: string,
+): Effect.Effect<{ item: RetroItem }, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    if (state.phase !== "write") {
+      return yield* Effect.fail(new RoomMutationValidationError("Cannot edit items outside write phase"));
+    }
+    if (!state.participants.some((participant) => participant.id === participantId)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Participant not found"));
+    }
+    if (!isValidItemText(rawText)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Item text cannot be empty"));
+    }
+    const existing = state.items.find((item) => item.id === itemId);
+    if (!existing) {
+      return yield* Effect.fail(new RoomMutationValidationError("Item not found"));
+    }
+    if (existing.authorId !== participantId) {
+      return yield* Effect.fail(new RoomMutationValidationError("Only the author can edit this item"));
+    }
+    return { item: { ...existing, text: sanitizeItemText(rawText) } };
+  });
+}
+
+export function validateWriteItemDeleteEffect(
+  state: WriteItemDeleteValidationState,
+  participantId: string,
+  itemId: string,
+): Effect.Effect<{ target: VoteTarget }, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    if (state.phase !== "write") {
+      return yield* Effect.fail(new RoomMutationValidationError("Cannot delete items outside write phase"));
+    }
+    if (!state.participants.some((participant) => participant.id === participantId)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Participant not found"));
+    }
+    const existing = state.items.find((item) => item.id === itemId);
+    if (!existing) {
+      return yield* Effect.fail(new RoomMutationValidationError("Item not found"));
+    }
+    if (existing.authorId !== participantId) {
+      return yield* Effect.fail(new RoomMutationValidationError("Only the author can delete this item"));
+    }
+    return { target: itemVoteTarget(itemId) };
   });
 }
 
@@ -1169,27 +1221,17 @@ export class RetroRoom extends DurableObject<Env> {
 
   async editItem(participantId: string, itemId: string, rawText: string): Promise<{ success: boolean; error?: string; item?: RetroItem }> {
     const s = await this.loadState();
-
-    if (s.phase !== "write") {
-      return { success: false, error: "Cannot edit items outside write phase" };
-    }
-    if (!this.hasParticipant(s, participantId)) {
-      return { success: false, error: "Participant not found" };
-    }
-    if (!isValidItemText(rawText)) {
-      return { success: false, error: "Item text cannot be empty" };
-    }
-
-    const itemIndex = s.items.findIndex((item) => item.id === itemId);
-    if (itemIndex === -1) {
-      return { success: false, error: "Item not found" };
-    }
-    const existing = s.items[itemIndex];
-    if (!existing || existing.authorId !== participantId) {
-      return { success: false, error: "Only the author can edit this item" };
+    let validated: { item: RetroItem };
+    try {
+      validated = await Effect.runPromise(validateWriteItemEditEffect(s, participantId, itemId, rawText));
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Item validation failed",
+      };
     }
 
-    const item = { ...existing, text: sanitizeItemText(rawText) };
+    const item = validated.item;
     s.items = s.items.map((candidate) => candidate.id === itemId ? item : candidate);
     await this.saveState();
     this.broadcastState(s);
@@ -1198,23 +1240,17 @@ export class RetroRoom extends DurableObject<Env> {
 
   async deleteItem(participantId: string, itemId: string): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
-
-    if (s.phase !== "write") {
-      return { success: false, error: "Cannot delete items outside write phase" };
-    }
-    if (!this.hasParticipant(s, participantId)) {
-      return { success: false, error: "Participant not found" };
-    }
-
-    const existing = s.items.find((item) => item.id === itemId);
-    if (!existing) {
-      return { success: false, error: "Item not found" };
-    }
-    if (existing.authorId !== participantId) {
-      return { success: false, error: "Only the author can delete this item" };
+    let validated: { target: VoteTarget };
+    try {
+      validated = await Effect.runPromise(validateWriteItemDeleteEffect(s, participantId, itemId));
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Item validation failed",
+      };
     }
 
-    const target = itemVoteTarget(itemId);
+    const target = validated.target;
     s.items = s.items
       .filter((item) => item.id !== itemId)
       .sort((a, b) => a.order - b.order)

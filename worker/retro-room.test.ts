@@ -9,6 +9,8 @@ import {
   validatePhaseChangeEffect,
   validateRankingMethodChangeEffect,
   validateWriteItemCreateEffect,
+  validateWriteItemDeleteEffect,
+  validateWriteItemEditEffect,
   validateReviewActionEffect,
   validateVoteBudgetChangeEffect,
 } from "./retro-room";
@@ -157,6 +159,47 @@ describe("RetroRoom Durable Object v2 schema", () => {
 
     const wrongPhase = await Effect.runPromiseExit(validateWriteItemCreateEffect({ ...state, phase: "organise" }, "p1", "New card", "col-1"));
     expect(Exit.isFailure(wrongPhase)).toBe(true);
+  });
+
+  it("validates write item edits through Effect before state changes", async () => {
+    const item = { id: "item-1", text: "Old", authorId: "p1", columnId: "col-1", groupId: null, order: 0 };
+    const state = {
+      phase: "write",
+      participants: [{ id: "p1", displayName: "Pat", isFacilitator: false }],
+      items: [item],
+    };
+
+    await expect(Effect.runPromise(validateWriteItemEditEffect(state, "p1", "item-1", "  Updated  "))).resolves.toEqual({
+      item: { ...item, text: "Updated" },
+    });
+
+    const wrongAuthor = await Effect.runPromiseExit(validateWriteItemEditEffect({
+      ...state,
+      participants: [...state.participants, { id: "p2", displayName: "Other", isFacilitator: false }],
+    }, "p2", "item-1", "Updated"));
+    expect(Exit.isFailure(wrongAuthor)).toBe(true);
+
+    const missingItem = await Effect.runPromiseExit(validateWriteItemEditEffect(state, "p1", "missing", "Updated"));
+    expect(Exit.isFailure(missingItem)).toBe(true);
+  });
+
+  it("validates write item deletes through Effect before state changes", async () => {
+    const item = { id: "item-1", text: "Old", authorId: "p1", columnId: "col-1", groupId: null, order: 0 };
+    const state = {
+      phase: "write",
+      participants: [{ id: "p1", displayName: "Pat", isFacilitator: false }],
+      items: [item],
+    };
+
+    await expect(Effect.runPromise(validateWriteItemDeleteEffect(state, "p1", "item-1"))).resolves.toEqual({
+      target: itemVoteTarget("item-1"),
+    });
+
+    const wrongAuthor = await Effect.runPromiseExit(validateWriteItemDeleteEffect({
+      ...state,
+      participants: [...state.participants, { id: "p2", displayName: "Other", isFacilitator: false }],
+    }, "p2", "item-1"));
+    expect(Exit.isFailure(wrongAuthor)).toBe(true);
   });
 
   async function initRaw(roomId: string) {
