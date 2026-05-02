@@ -2,6 +2,7 @@ import { useEffect, useEffectEvent, useRef, useState, type CSSProperties } from 
 import { createPortal } from "react-dom";
 import type { ReactionTarget, RoomState } from "../domain";
 import { getReactionCount, getReactionsForTarget, hasParticipantReaction, voteTargetKey } from "../domain";
+import { loadEmojiPicker } from "./emoji-picker-effect";
 
 interface ReactionBarProps {
   roomState: Pick<RoomState, "reactions">;
@@ -30,12 +31,19 @@ export function ReactionBar({ roomState, target, participantId, send, label, com
   useEffect(() => {
     if (pickerReady) return;
     let cancelled = false;
-    import("emoji-picker-element").then(() => {
-      if (!cancelled) setPickerReady(true);
-    });
+    void loadPicker();
     return () => {
       cancelled = true;
     };
+
+    async function loadPicker() {
+      try {
+        await loadEmojiPicker();
+        if (!cancelled) setPickerReady(true);
+      } catch {
+        if (!cancelled) setPickerReady(false);
+      }
+    }
   }, [pickerReady]);
 
   function toggleReaction(emoji: string) {
