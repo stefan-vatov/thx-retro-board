@@ -8,6 +8,7 @@ import {
   parseClientWebSocketMessageEffect,
   validatePhaseChangeEffect,
   validateRankingMethodChangeEffect,
+  validateColumnCreateEffect,
   validateWriteItemCreateEffect,
   validateWriteItemDeleteEffect,
   validateWriteItemEditEffect,
@@ -122,6 +123,35 @@ describe("RetroRoom Durable Object v2 schema", () => {
 
     const noColumns = await Effect.runPromiseExit(validatePhaseChangeEffect({ ...state, columns: [] }, "fac1", "write", 0));
     expect(Exit.isFailure(noColumns)).toBe(true);
+  });
+
+  it("validates column creation through Effect before state changes", async () => {
+    const state = {
+      participants: [{ id: "fac1", displayName: "Facilitator", isFacilitator: true }],
+      facilitatorId: "fac1",
+      phase: "setup",
+      columns: [],
+    };
+
+    await expect(Effect.runPromise(validateColumnCreateEffect(state, "fac1", "  New lane  "))).resolves.toEqual({
+      name: "New lane",
+      order: 0,
+    });
+
+    const blankName = await Effect.runPromiseExit(validateColumnCreateEffect(state, "fac1", "   "));
+    expect(Exit.isFailure(blankName)).toBe(true);
+
+    const nonFacilitator = await Effect.runPromiseExit(validateColumnCreateEffect({
+      ...state,
+      participants: [...state.participants, { id: "p2", displayName: "Pat", isFacilitator: false }],
+    }, "p2", "New lane"));
+    expect(Exit.isFailure(nonFacilitator)).toBe(true);
+
+    const wrongPhase = await Effect.runPromiseExit(validateColumnCreateEffect({
+      ...state,
+      phase: "write",
+    }, "fac1", "New lane"));
+    expect(Exit.isFailure(wrongPhase)).toBe(true);
   });
 
   it("validates review action mutations through Effect before state changes", async () => {

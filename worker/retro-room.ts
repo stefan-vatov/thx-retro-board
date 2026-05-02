@@ -127,6 +127,7 @@ class RoomMutationValidationError extends Error {
 type VoteBudgetValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase">;
 type RankingMethodValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase">;
 type PhaseValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase" | "columns" | "rankingMethod">;
+type ColumnCreateValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase" | "columns">;
 type ReviewActionValidationState = Pick<StoredState, "participants" | "phase">;
 type WriteItemCreateValidationState = Pick<StoredState, "participants" | "phase" | "items" | "columns">;
 type WriteItemEditValidationState = Pick<StoredState, "participants" | "phase" | "items">;
@@ -266,6 +267,34 @@ export function validatePhaseChangeEffect(
       return yield* Effect.fail(new RoomMutationValidationError(`Pairwise ranking supports at most ${MAX_PAIRWISE_TARGETS} cards or groups`));
     }
     return { phase };
+  });
+}
+
+export function validateColumnCreateEffect(
+  state: ColumnCreateValidationState,
+  participantId: string,
+  rawName: string,
+): Effect.Effect<{ name: string; order: number }, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    if (!state.participants.some((participant) => participant.id === participantId)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Participant not found"));
+    }
+    if (state.facilitatorId !== participantId) {
+      return yield* Effect.fail(new RoomMutationValidationError("Only the facilitator can configure columns"));
+    }
+    if (state.phase !== "setup") {
+      return yield* Effect.fail(new RoomMutationValidationError("Columns can only be configured during setup"));
+    }
+    if (!isValidColumnName(rawName)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Column name cannot be empty"));
+    }
+    if ((state.columns ?? []).length >= MAX_COLUMNS) {
+      return yield* Effect.fail(new RoomMutationValidationError(`Rooms can have at most ${MAX_COLUMNS} columns`));
+    }
+    return {
+      name: sanitizeColumnName(rawName),
+      order: (state.columns ?? []).length,
+    };
   });
 }
 
@@ -1621,21 +1650,20 @@ export class RetroRoom extends DurableObject<Env> {
 
   async createColumn(participantId: string, rawName: string): Promise<{ success: boolean; error?: string; column?: Column }> {
     const s = await this.loadState();
-    const allowed = this.canMutateColumns(s, participantId);
-    if (!allowed.success) return allowed;
-
-    const sanitized = sanitizeColumnName(rawName);
-    if (!isValidColumnName(rawName)) {
-      return { success: false, error: "Column name cannot be empty" };
-    }
-    if ((s.columns ?? []).length >= MAX_COLUMNS) {
-      return { success: false, error: `Rooms can have at most ${MAX_COLUMNS} columns` };
+    let validated: { name: string; order: number };
+    try {
+      validated = await Effect.runPromise(validateColumnCreateEffect(s, participantId, rawName));
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof RoomMutationValidationError ? error.message : "Column could not be created",
+      };
     }
 
     const column: Column = {
       id: crypto.randomUUID(),
-      name: sanitized,
-      order: (s.columns ?? []).length,
+      name: validated.name,
+      order: validated.order,
     };
     s.columns = [...(s.columns ?? []), column];
     await this.saveState();
