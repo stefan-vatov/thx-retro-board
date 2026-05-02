@@ -20,7 +20,6 @@ import {
   getVoteTarget,
   groupVoteTarget,
   sameVoteTarget,
-  getDefaultColumns,
 } from "../src/domain";
 
 import type {
@@ -70,20 +69,10 @@ import {
   validateWriteItemEditEffect,
 } from "./validation";
 import { handleRoomHttpRequest } from "./room-http";
-import {
-  isV2StoredState,
-  normalizeActions,
-  normalizeColumns,
-  normalizeGroups,
-  normalizeItems,
-  normalizePairwiseChoices,
-  normalizeRankingMethod,
-  normalizeReactions,
-  normalizeReviewTargetKey,
-  normalizeVotes,
-} from "./room-normalize";
+import { normalizePairwiseChoices, normalizeReactions } from "./room-normalize";
 import { getDecisionTargetCount, toRoomState } from "./room-presenter";
 import { handleRoomRealtimeMessage } from "./room-realtime";
+import { createInitialStoredState, hydrateStoredState } from "./room-storage";
 
 function generateToken(): string {
   const bytes = new Uint8Array(32);
@@ -120,53 +109,8 @@ export class RetroRoom extends DurableObject<Env> {
     if (this.state) return this.state;
     const stored = await this.ctx.storage.get<StoredState>("room");
     if (stored) {
-      if (!isV2StoredState(stored)) {
-        this.state = {
-          ...stored,
-          schemaVersion: 2,
-          startedAt: Number.isFinite(stored.startedAt) ? stored.startedAt : Date.now(),
-          purgeScheduledAt: Number.isFinite(stored.purgeScheduledAt) ? stored.purgeScheduledAt : null,
-          phase: "setup",
-          items: [],
-          columns: getDefaultColumns(),
-          groups: [],
-          votes: [],
-          rankingMethod: "score",
-          pairwiseChoices: [],
-          reviewTargetKey: null,
-          actions: [],
-          reactions: [],
-          facilitatorClaimToken: null,
-          votingParticipantIds: [],
-        };
-        await this.ctx.storage.put("room", this.state);
-        return this.state;
-      }
-      const columns = normalizeColumns(stored);
-      const groups = normalizeGroups(stored.groups ?? [], columns);
-      this.state = {
-        ...stored,
-        schemaVersion: 2,
-        startedAt: Number.isFinite(stored.startedAt) ? stored.startedAt : Date.now(),
-        purgeScheduledAt: Number.isFinite(stored.purgeScheduledAt) ? stored.purgeScheduledAt : null,
-        columns,
-        groups,
-        items: normalizeItems(stored.items ?? [], columns, groups),
-        votes: [],
-        rankingMethod: normalizeRankingMethod(stored.rankingMethod),
-        pairwiseChoices: [],
-        reviewTargetKey: null,
-        actions: normalizeActions(stored.actions, stored.participants ?? []),
-        reactions: [],
-        facilitatorClaimToken: typeof stored.facilitatorClaimToken === "string" ? stored.facilitatorClaimToken : null,
-        votingParticipantIds: Array.isArray(stored.votingParticipantIds)
-          ? stored.votingParticipantIds.filter((id) => typeof id === "string" && stored.participants.some((participant) => participant.id === id))
-          : [],
-      };
-      this.state.votes = normalizeVotes(stored.votes ?? [], this.state.participants, groups, this.state.items);
-      this.state.pairwiseChoices = normalizePairwiseChoices(stored.pairwiseChoices, this.state.participants, groups, this.state.items);
-      this.state.reviewTargetKey = normalizeReviewTargetKey(stored.reviewTargetKey, groups, this.state.items);
-      this.state.reactions = normalizeReactions(stored.reactions, this.state.participants, groups, this.state.items);
+      this.state = hydrateStoredState(stored);
+      await this.ctx.storage.put("room", this.state);
       return this.state;
     }
     return this.state!;
@@ -257,30 +201,7 @@ export class RetroRoom extends DurableObject<Env> {
       await this.loadState();
       return;
     }
-    this.state = {
-      schemaVersion: 2,
-      roomId,
-      startedAt: Date.now(),
-      purgeScheduledAt: null,
-      phase: "setup",
-      participants: [],
-      items: [],
-      columns: getDefaultColumns(),
-      groups: [],
-      votes: [],
-      rankingMethod: "score",
-      pairwiseChoices: [],
-      reviewTargetKey: null,
-      actions: [],
-      reactions: [],
-      facilitatorId: null,
-      facilitatorClaimToken,
-      votingParticipantIds: [],
-      voteBudget: 5,
-      version: 0,
-      connectionTokens: {},
-      timer: { startedAt: null, durationSeconds: null, expired: false },
-    };
+    this.state = createInitialStoredState(roomId, facilitatorClaimToken);
     await this.saveState();
     await this.scheduleEmptyRoomPurge();
   }
