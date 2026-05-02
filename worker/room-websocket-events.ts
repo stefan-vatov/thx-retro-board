@@ -18,19 +18,27 @@ export async function handleRoomWebSocketMessage(
   ws: WebSocket,
   message: string | ArrayBuffer,
 ): Promise<void> {
-  const attachment = ws.deserializeAttachment() as { participantId: string } | null;
-  const participantId = attachment?.participantId;
-  if (!participantId) return;
-  if (host.getSession(participantId) !== ws) {
-    try {
-      ws.close(1008, "Obsolete realtime session");
-    } catch {
-      // Ignore already-closing sockets.
-    }
-    return;
-  }
+  return Effect.runPromise(handleRoomWebSocketMessageEffect(host, ws, message));
+}
 
-  try {
+export function handleRoomWebSocketMessageEffect(
+  host: RoomWebSocketEventHost,
+  ws: WebSocket,
+  message: string | ArrayBuffer,
+): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    const attachment = ws.deserializeAttachment() as { participantId: string } | null;
+    const participantId = attachment?.participantId;
+    if (!participantId) return;
+    if (host.getSession(participantId) !== ws) {
+      try {
+        ws.close(1008, "Obsolete realtime session");
+      } catch {
+        // Ignore already-closing sockets.
+      }
+      return;
+    }
+
     const rateLimit = host.allowWebSocketMessage(participantId);
     if (!rateLimit.allowed) {
       ws.send(JSON.stringify({ type: "error", message: rateLimit.reason }));
@@ -42,11 +50,16 @@ export async function handleRoomWebSocketMessage(
       ws.send(JSON.stringify({ type: "error", message: "Message is too large" }));
       return;
     }
-    const msg = await Effect.runPromise(parseClientWebSocketMessageEffect(message));
-    await host.handleRealtimeMessage(participantId, msg);
-  } catch {
-    ws.send(JSON.stringify({ type: "error", message: "Invalid message" }));
-  }
+    const msg = yield* Effect.either(parseClientWebSocketMessageEffect(message));
+    if (msg._tag === "Left") {
+      ws.send(JSON.stringify({ type: "error", message: "Invalid message" }));
+      return;
+    }
+    const handled = yield* Effect.either(Effect.promise(() => host.handleRealtimeMessage(participantId, msg.right)));
+    if (handled._tag === "Left") {
+      ws.send(JSON.stringify({ type: "error", message: "Invalid message" }));
+    }
+  });
 }
 
 export function handleRoomWebSocketClose(host: RoomWebSocketEventHost, ws: WebSocket): void {
