@@ -20,7 +20,7 @@ import {
   MAX_ROOM_LIFETIME_MS,
 } from "./room-types";
 
-import { authorizeLoadedParticipantResult } from "./room-auth";
+import { authorizeLoadedParticipantResult, authorizeParticipantFromState } from "./room-auth";
 import { handleRoomHttpRequest } from "./room-http";
 import {
   createActionForRoom,
@@ -353,15 +353,7 @@ export class RetroRoom extends DurableObject<Env> {
     participantId: unknown,
     connectionToken: unknown,
   ): Promise<{ success: true; participantId: string; state: StoredState } | { success: false; error: string }> {
-    return this.loadState().then((s) => this.authorizeLoadedParticipant(s, participantId, connectionToken));
-  }
-
-  private authorizeLoadedParticipant(
-    s: StoredState,
-    participantId: unknown,
-    connectionToken: unknown,
-  ): Promise<{ success: true; participantId: string; state: StoredState } | { success: false; error: string }> {
-    return authorizeLoadedParticipantResult(s, participantId, connectionToken);
+    return authorizeParticipantFromState(() => this.loadState(), participantId, connectionToken);
   }
 
   async createColumn(participantId: string, rawName: string): ReturnType<typeof createColumnForRoom> {

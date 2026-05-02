@@ -1,7 +1,10 @@
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { authorizeLoadedParticipantResultEffect } from "./room-auth";
+import {
+  authorizeLoadedParticipantResultEffect,
+  authorizeParticipantFromStateEffect,
+} from "./room-auth";
 import { createInitialStoredState } from "./room-storage";
 
 describe("room auth result helpers", () => {
@@ -21,5 +24,17 @@ describe("room auth result helpers", () => {
 
     await expect(Effect.runPromise(authorizeLoadedParticipantResultEffect(state, "p1", "bad")))
       .resolves.toEqual({ success: false, error: "Invalid participant credentials" });
+  });
+
+  it("loads state before authorizing participant credentials", async () => {
+    const state = createInitialStoredState("room-a");
+    state.participants = [{ id: "p1", displayName: "P1", isFacilitator: true }];
+    state.connectionTokens.p1 = "token";
+
+    await expect(Effect.runPromise(authorizeParticipantFromStateEffect(
+      () => Promise.resolve(state),
+      "p1",
+      "token",
+    ))).resolves.toEqual({ success: true, participantId: "p1", state });
   });
 });

@@ -26,3 +26,22 @@ export function authorizeLoadedParticipantResult(
 ): Promise<AuthorizedParticipantResult> {
   return Effect.runPromise(authorizeLoadedParticipantResultEffect(state, participantId, connectionToken));
 }
+
+export function authorizeParticipantFromStateEffect(
+  loadState: () => Promise<StoredState>,
+  participantId: unknown,
+  connectionToken: unknown,
+): Effect.Effect<AuthorizedParticipantResult> {
+  return Effect.gen(function* () {
+    const state = yield* Effect.promise(loadState);
+    return yield* authorizeLoadedParticipantResultEffect(state, participantId, connectionToken);
+  });
+}
+
+export function authorizeParticipantFromState(
+  loadState: () => Promise<StoredState>,
+  participantId: unknown,
+  connectionToken: unknown,
+): Promise<AuthorizedParticipantResult> {
+  return Effect.runPromise(authorizeParticipantFromStateEffect(loadState, participantId, connectionToken));
+}
