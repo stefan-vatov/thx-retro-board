@@ -139,6 +139,7 @@ type ItemReorderValidationState = Pick<StoredState, "participants" | "phase" | "
 type ItemMoveValidationState = Pick<StoredState, "participants" | "phase" | "groups" | "items" | "version">;
 type ScoreVoteValidationState = Pick<StoredState, "participants" | "votingParticipantIds" | "phase" | "rankingMethod" | "voteBudget" | "groups" | "items" | "votes">;
 type ReactionToggleValidationState = Pick<StoredState, "participants" | "groups" | "items" | "reactions">;
+type PairwiseChoiceValidationState = Pick<StoredState, "participants" | "votingParticipantIds" | "phase" | "rankingMethod" | "groups" | "items" | "pairwiseChoices">;
 type ReviewActionValidationState = Pick<StoredState, "participants" | "phase">;
 type WriteItemCreateValidationState = Pick<StoredState, "participants" | "phase" | "items" | "columns">;
 type WriteItemEditValidationState = Pick<StoredState, "participants" | "phase" | "items">;
@@ -743,6 +744,63 @@ export function validateReactionToggleEffect(
       reactions: hasReaction
         ? existing.filter((reaction) => `${reaction.participantId}:${voteTargetKey(reaction.target)}:${reaction.emoji}` !== reactionKey)
         : [...existing, { participantId, target: targetValidation.target, emoji }],
+    };
+  });
+}
+
+export function validatePairwiseChoiceEffect(
+  state: PairwiseChoiceValidationState,
+  participantId: string,
+  winner: VoteTarget,
+  loser: VoteTarget,
+): Effect.Effect<{ pairwiseChoices: PairwiseChoice[] }, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    if (state.phase !== "vote") {
+      return yield* Effect.fail(new RoomMutationValidationError("Cannot rank outside vote phase"));
+    }
+    if ((state.rankingMethod ?? "score") !== "pairwise") {
+      return yield* Effect.fail(new RoomMutationValidationError("This room is using score voting"));
+    }
+    if (!state.participants.some((participant) => participant.id === participantId)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Participant not found"));
+    }
+    if (state.votingParticipantIds?.length && !state.votingParticipantIds.includes(participantId)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Participant joined after voting started"));
+    }
+    const winnerValidation = resolveVoteTargetForState(state, winner);
+    if (!winnerValidation.success) {
+      return yield* Effect.fail(new RoomMutationValidationError(winnerValidation.error));
+    }
+    const loserValidation = resolveVoteTargetForState(state, loser);
+    if (!loserValidation.success) {
+      return yield* Effect.fail(new RoomMutationValidationError(loserValidation.error));
+    }
+    if (sameVoteTarget(winnerValidation.target, loserValidation.target)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Pairwise targets must be different"));
+    }
+    const targetKeys = new Set<string>([
+      ...state.groups.map((group) => voteTargetKey(groupVoteTarget(group.id))),
+      ...state.items.filter((item) => item.groupId === null).map((item) => voteTargetKey(itemVoteTarget(item.id))),
+    ]);
+    if (targetKeys.size > MAX_PAIRWISE_TARGETS) {
+      return yield* Effect.fail(new RoomMutationValidationError(`Pairwise ranking supports at most ${MAX_PAIRWISE_TARGETS} cards or groups`));
+    }
+    const choice: PairwiseChoice = {
+      participantId,
+      winner: winnerValidation.target,
+      loser: loserValidation.target,
+    };
+    const choiceKey = `${participantId}:${pairwiseComparisonKey(choice.winner, choice.loser)}`;
+    const existingChoices = state.pairwiseChoices ?? [];
+    const isReplacingChoice = existingChoices.some((candidate) => `${candidate.participantId}:${pairwiseComparisonKey(candidate.winner, candidate.loser)}` === choiceKey);
+    if (!isReplacingChoice && existingChoices.length >= MAX_PAIRWISE_CHOICES_PER_ROOM) {
+      return yield* Effect.fail(new RoomMutationValidationError(`Rooms can have at most ${MAX_PAIRWISE_CHOICES_PER_ROOM} pairwise choices`));
+    }
+    return {
+      pairwiseChoices: [
+        ...existingChoices.filter((candidate) => `${candidate.participantId}:${pairwiseComparisonKey(candidate.winner, candidate.loser)}` !== choiceKey),
+        choice,
+      ],
     };
   });
 }
@@ -2283,22 +2341,6 @@ export class RetroRoom extends DurableObject<Env> {
     return { success: true };
   }
 
-  private resolveVoteTarget(target: VoteTarget): { success: true; target: VoteTarget } | { success: false; error: string } {
-    if (target.type === "group") {
-      return this.state?.groups.some((group) => group.id === target.id)
-        ? { success: true, target }
-        : { success: false, error: "Group not found" };
-    }
-    const item = this.state?.items.find((candidate) => candidate.id === target.id);
-    if (!item) {
-      return { success: false, error: "Item not found" };
-    }
-    if (item.groupId !== null) {
-      return { success: false, error: "Cannot vote directly on a grouped item" };
-    }
-    return { success: true, target };
-  }
-
   async toggleReaction(participantId: string, target: ReactionTarget, emoji: string): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
     const validation = await Effect.runPromise(Effect.either(validateReactionToggleEffect(s, participantId, target, emoji)));
@@ -2343,51 +2385,12 @@ export class RetroRoom extends DurableObject<Env> {
 
   async choosePairwise(participantId: string, winner: VoteTarget, loser: VoteTarget): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
-
-    if (s.phase !== "vote") {
-      return { success: false, error: "Cannot rank outside vote phase" };
-    }
-    if ((s.rankingMethod ?? "score") !== "pairwise") {
-      return { success: false, error: "This room is using score voting" };
-    }
-    if (!this.hasParticipant(s, participantId)) {
-      return { success: false, error: "Participant not found" };
-    }
-    if (s.votingParticipantIds?.length && !s.votingParticipantIds.includes(participantId)) {
-      return { success: false, error: "Participant joined after voting started" };
+    const validation = await Effect.runPromise(Effect.either(validatePairwiseChoiceEffect(s, participantId, winner, loser)));
+    if (validation._tag === "Left") {
+      return { success: false, error: validation.left.message };
     }
 
-    const winnerValidation = this.resolveVoteTarget(winner);
-    if (!winnerValidation.success) return { success: false, error: winnerValidation.error };
-    const loserValidation = this.resolveVoteTarget(loser);
-    if (!loserValidation.success) return { success: false, error: loserValidation.error };
-    if (sameVoteTarget(winnerValidation.target, loserValidation.target)) {
-      return { success: false, error: "Pairwise targets must be different" };
-    }
-
-    const targetKeys = new Set<string>([
-      ...s.groups.map((group) => voteTargetKey(groupVoteTarget(group.id))),
-      ...s.items.filter((item) => item.groupId === null).map((item) => voteTargetKey(itemVoteTarget(item.id))),
-    ]);
-    if (targetKeys.size > MAX_PAIRWISE_TARGETS) {
-      return { success: false, error: `Pairwise ranking supports at most ${MAX_PAIRWISE_TARGETS} cards or groups` };
-    }
-
-    const choice: PairwiseChoice = {
-      participantId,
-      winner: winnerValidation.target,
-      loser: loserValidation.target,
-    };
-    const choiceKey = `${participantId}:${pairwiseComparisonKey(choice.winner, choice.loser)}`;
-    const existingChoices = s.pairwiseChoices ?? [];
-    const isReplacingChoice = existingChoices.some((candidate) => `${candidate.participantId}:${pairwiseComparisonKey(candidate.winner, candidate.loser)}` === choiceKey);
-    if (!isReplacingChoice && existingChoices.length >= MAX_PAIRWISE_CHOICES_PER_ROOM) {
-      return { success: false, error: `Rooms can have at most ${MAX_PAIRWISE_CHOICES_PER_ROOM} pairwise choices` };
-    }
-    s.pairwiseChoices = [
-      ...existingChoices.filter((candidate) => `${candidate.participantId}:${pairwiseComparisonKey(candidate.winner, candidate.loser)}` !== choiceKey),
-      choice,
-    ];
+    s.pairwiseChoices = validation.right.pairwiseChoices;
     await this.saveState();
 
     this.broadcastState(s);

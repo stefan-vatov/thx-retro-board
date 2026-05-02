@@ -19,6 +19,7 @@ import {
   validateItemMoveEffect,
   validateItemReorderEffect,
   validateReactionToggleEffect,
+  validatePairwiseChoiceEffect,
   validateVoteCastEffect,
   validateVoteRemoveEffect,
   validateWriteItemCreateEffect,
@@ -510,6 +511,49 @@ describe("RetroRoom Durable Object v2 schema", () => {
 
     const missingTarget = await Effect.runPromiseExit(validateReactionToggleEffect(state, "p1", itemVoteTarget("missing"), "🔥"));
     expect(Exit.isFailure(missingTarget)).toBe(true);
+  });
+
+  it("validates pairwise choices through Effect before state changes", async () => {
+    const state = {
+      participants: [{ id: "p1", displayName: "Pat", isFacilitator: false }],
+      votingParticipantIds: ["p1"],
+      phase: "vote",
+      rankingMethod: "pairwise",
+      groups: [{ id: "group-1", columnId: "col-1", name: "Theme", order: 0 }],
+      items: [
+        { id: "item-1", text: "Free", authorId: "p1", columnId: "col-1", groupId: null, order: 0 },
+        { id: "item-2", text: "Grouped", authorId: "p1", columnId: "col-1", groupId: "group-1", order: 0 },
+      ],
+      pairwiseChoices: [],
+    };
+
+    await expect(Effect.runPromise(validatePairwiseChoiceEffect(state, "p1", groupVoteTarget("group-1"), itemVoteTarget("item-1")))).resolves.toEqual({
+      pairwiseChoices: [{
+        participantId: "p1",
+        winner: groupVoteTarget("group-1"),
+        loser: itemVoteTarget("item-1"),
+      }],
+    });
+
+    const sameTarget = await Effect.runPromiseExit(validatePairwiseChoiceEffect(state, "p1", itemVoteTarget("item-1"), itemVoteTarget("item-1")));
+    expect(Exit.isFailure(sameTarget)).toBe(true);
+
+    const groupedItem = await Effect.runPromiseExit(validatePairwiseChoiceEffect(state, "p1", itemVoteTarget("item-2"), itemVoteTarget("item-1")));
+    expect(Exit.isFailure(groupedItem)).toBe(true);
+
+    const capped = await Effect.runPromiseExit(validatePairwiseChoiceEffect({
+      ...state,
+      groups: [],
+      items: Array.from({ length: 51 }, (_, index) => ({
+        id: `item-${index}`,
+        text: `Item ${index}`,
+        authorId: "p1",
+        columnId: "col-1",
+        groupId: null,
+        order: index,
+      })),
+    }, "p1", itemVoteTarget("item-0"), itemVoteTarget("item-1")));
+    expect(Exit.isFailure(capped)).toBe(true);
   });
 
   it("validates review action mutations through Effect before state changes", async () => {
