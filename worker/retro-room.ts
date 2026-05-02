@@ -117,6 +117,15 @@ class ClientWebSocketMessageError extends Error {
   }
 }
 
+class RoomMutationValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RoomMutationValidationError";
+  }
+}
+
+type VoteBudgetValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase">;
+
 const OptionalConnectionTokenSchema = Schema.Struct({
   participantId: Schema.String,
   connectionToken: Schema.optional(Schema.String),
@@ -176,6 +185,28 @@ export function parseClientWebSocketMessageEffect(
     return yield* Schema.decodeUnknown(ClientToServerMessageSchema)(parsed).pipe(
       Effect.mapError(() => new ClientWebSocketMessageError()),
     );
+  });
+}
+
+export function validateVoteBudgetChangeEffect(
+  state: VoteBudgetValidationState,
+  participantId: string,
+  budget: number,
+): Effect.Effect<{ budget: number }, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    if (!state.participants.some((participant) => participant.id === participantId)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Participant not found"));
+    }
+    if (state.facilitatorId !== participantId) {
+      return yield* Effect.fail(new RoomMutationValidationError("Only the facilitator can set vote budget"));
+    }
+    if (state.phase !== "setup") {
+      return yield* Effect.fail(new RoomMutationValidationError("Vote budget can only be changed during setup"));
+    }
+    if (typeof budget !== "number" || budget < 1 || budget > 100 || !Number.isInteger(budget)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Vote budget must be an integer between 1 and 100"));
+    }
+    return { budget };
   });
 }
 
@@ -965,19 +996,16 @@ export class RetroRoom extends DurableObject<Env> {
 
   async setVoteBudget(participantId: string, budget: number): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
-    if (!this.hasParticipant(s, participantId)) {
-      return { success: false, error: "Participant not found" };
+    let validated: { budget: number };
+    try {
+      validated = await Effect.runPromise(validateVoteBudgetChangeEffect(s, participantId, budget));
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Vote budget validation failed",
+      };
     }
-    if (s.facilitatorId !== participantId) {
-      return { success: false, error: "Only the facilitator can set vote budget" };
-    }
-    if (s.phase !== "setup") {
-      return { success: false, error: "Vote budget can only be changed during setup" };
-    }
-    if (typeof budget !== "number" || budget < 1 || budget > 100 || !Number.isInteger(budget)) {
-      return { success: false, error: "Vote budget must be an integer between 1 and 100" };
-    }
-    s.voteBudget = budget;
+    s.voteBudget = validated.budget;
     await this.saveState();
     this.broadcastState(s);
     return { success: true };

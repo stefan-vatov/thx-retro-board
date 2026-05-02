@@ -4,7 +4,7 @@ import { Effect, Exit } from "effect";
 import { describe, it, expect } from "vitest";
 import { getDefaultColumns, groupVoteTarget, itemVoteTarget } from "../src/domain";
 import type { RoomState } from "../src/domain";
-import { parseClientWebSocketMessageEffect } from "./retro-room";
+import { parseClientWebSocketMessageEffect, validateVoteBudgetChangeEffect } from "./retro-room";
 
 describe("RetroRoom Durable Object v2 schema", () => {
   it("parses valid websocket client messages through Effect", async () => {
@@ -56,6 +56,25 @@ describe("RetroRoom Durable Object v2 schema", () => {
       success: false,
       error: "Valid JSON body is required",
     });
+  });
+
+  it("validates vote budget mutations through Effect before state changes", async () => {
+    const state = {
+      participants: [{ id: "fac1", displayName: "Facilitator", isFacilitator: true }],
+      facilitatorId: "fac1",
+      phase: "setup",
+    };
+
+    await expect(Effect.runPromise(validateVoteBudgetChangeEffect(state, "fac1", 12))).resolves.toEqual({ budget: 12 });
+
+    const invalidBudget = await Effect.runPromiseExit(validateVoteBudgetChangeEffect(state, "fac1", 0));
+    expect(Exit.isFailure(invalidBudget)).toBe(true);
+
+    const nonFacilitator = await Effect.runPromiseExit(validateVoteBudgetChangeEffect({
+      ...state,
+      participants: [...state.participants, { id: "p2", displayName: "Pat", isFacilitator: false }],
+    }, "p2", 12));
+    expect(Exit.isFailure(nonFacilitator)).toBe(true);
   });
 
   async function initRaw(roomId: string) {
