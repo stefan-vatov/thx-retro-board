@@ -80,9 +80,9 @@ test.describe("Retro Board current flow", () => {
   test("setup cannot advance with zero columns", async ({ page }) => {
     await createJoinedRoom(page, "Setup QA");
 
-    for (const column of ["Mad", "Glad", "Sad"]) {
+    for (const [index, column] of ["Mad", "Glad", "Sad"].entries()) {
       await page.getByRole("button", { name: new RegExp(`delete ${column} column`, "i") }).click();
-      await expect(page.locator(".column-config__count")).toContainText(/\d\/8/);
+      await expect(page.locator(".column-config__count")).toContainText(`${2 - index}/8`);
     }
 
     await expect(page.locator(".column-config__count")).toContainText("0/8");

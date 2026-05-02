@@ -57,6 +57,8 @@ export interface PairwiseChoice {
   participantId: string;
   winner: VoteTarget;
   loser: VoteTarget;
+  /** Aggregate count for anonymous projected/exported pairwise choices. Individual ballots omit this. */
+  count?: number;
 }
 
 export interface PairwiseProgress {

@@ -255,8 +255,9 @@ export function getReviewTargets(state: Pick<RoomState, "columns" | "groups" | "
     const loserKey = voteTargetKey(choice.loser);
     const winner = pairwiseTotals.get(winnerKey) ?? { wins: 0, losses: 0 };
     const loser = pairwiseTotals.get(loserKey) ?? { wins: 0, losses: 0 };
-    pairwiseTotals.set(winnerKey, { ...winner, wins: winner.wins + 1 });
-    pairwiseTotals.set(loserKey, { ...loser, losses: loser.losses + 1 });
+    const count = Number.isInteger(choice.count) && choice.count !== undefined && choice.count > 0 ? choice.count : 1;
+    pairwiseTotals.set(winnerKey, { ...winner, wins: winner.wins + count });
+    pairwiseTotals.set(loserKey, { ...loser, losses: loser.losses + count });
   }
 
   return getDecisionTargets(state).map((decisionTarget) => {

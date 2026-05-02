@@ -294,6 +294,54 @@ describe("RetroRoom Durable Object v2 schema", () => {
     await expect(stub.hasRoom()).resolves.toBe(true);
   });
 
+  it("purges rooms past the absolute lifetime even when a websocket session is active", async () => {
+    const roomId = "test-v2-absolute-room-lifetime-purge";
+    const id = env.RETRO_ROOM.idFromName(roomId);
+    const stub = env.RETRO_ROOM.get(id);
+    await stub.seedStoredStateForTest({
+      roomId,
+      startedAt: Date.now() - 13 * 60 * 60 * 1000,
+      purgeScheduledAt: Date.now() + 60_000,
+      participants: [{ id: "fac1", displayName: "Facilitator", isFacilitator: true }],
+      facilitatorId: "fac1",
+      connectionTokens: { fac1: "token" },
+    });
+
+    const ticket = await stub.createWebSocketTicket("fac1", "token");
+    expect(ticket).toMatchObject({ success: true });
+    const response = await stub.fetch(new Request("http://do/ws", {
+      headers: {
+        Upgrade: "websocket",
+        "Sec-WebSocket-Protocol": `ticket-${ticket.ticket}`,
+      },
+    }));
+    expect(response.status).toBe(101);
+
+    await stub.runEmptyRoomAlarmForTest();
+
+    await expect(stub.hasRoom()).resolves.toBe(false);
+  });
+
+  it("purges rooms past the absolute lifetime on access even if the alarm was missed", async () => {
+    const roomId = "test-v2-absolute-room-lifetime-access-purge";
+    const id = env.RETRO_ROOM.idFromName(roomId);
+    const stub = env.RETRO_ROOM.get(id);
+    await stub.seedStoredStateForTest({
+      roomId,
+      startedAt: Date.now() - 13 * 60 * 60 * 1000,
+      purgeScheduledAt: null,
+      participants: [{ id: "fac1", displayName: "Facilitator", isFacilitator: true }],
+      facilitatorId: "fac1",
+      connectionTokens: { fac1: "token" },
+    });
+
+    await expect(stub.hasRoom()).resolves.toBe(false);
+    await expect(stub.getRoomStateForParticipant("fac1", "token")).resolves.toMatchObject({
+      success: false,
+      error: "Room not found",
+    });
+  });
+
   it("lets only the facilitator manually purge room data", async () => {
     const stub = await initRaw("test-v2-manual-purge");
     await stub.join("fac1", "Facilitator");
@@ -386,6 +434,28 @@ describe("RetroRoom Durable Object v2 schema", () => {
       },
     }));
     expect(staleResponse.status).toBe(403);
+  });
+
+  it("caps realtime messages per participant and per room window", async () => {
+    const stub = await initRaw("test-v2-ws-room-rate-limit");
+    const now = Date.now();
+
+    for (let index = 0; index < 20; index += 1) {
+      await expect(stub.allowWebSocketMessageForTest("fac1", now)).resolves.toEqual({ allowed: true });
+    }
+    await expect(stub.allowWebSocketMessageForTest("fac1", now)).resolves.toMatchObject({
+      allowed: false,
+      reason: "Too many realtime updates. Reconnect and slow down.",
+    });
+    await expect(stub.allowWebSocketMessageForTest("fac1", now + 10_000)).resolves.toEqual({ allowed: true });
+
+    for (let index = 0; index < 60; index += 1) {
+      await expect(stub.allowWebSocketMessageForTest(`p-${index}`, now + 20_000)).resolves.toEqual({ allowed: true });
+    }
+    await expect(stub.allowWebSocketMessageForTest("p-over-room-limit", now + 20_000)).resolves.toMatchObject({
+      allowed: false,
+      reason: "This room is receiving too many realtime updates. Please slow down.",
+    });
   });
 
   it("caps pairwise target counts before storing large comparison sets", async () => {
@@ -678,6 +748,78 @@ describe("RetroRoom Durable Object v2 schema", () => {
     const state = await stub.getRoomState();
     expect(state.pairwiseChoices).toEqual([
       { participantId: "p2", winner: groupVoteTarget(group.group!.id), loser: itemVoteTarget(ungroupedItem.item!.id) },
+    ]);
+  });
+
+  it("does not expose other participants' pairwise ballots in participant state", async () => {
+    const stub = await initRaw("test-v2-pairwise-privacy-projection");
+    const fac = await stub.join("fac1", "Facilitator");
+    const p2 = await stub.join("p2", "Participant");
+    await expect(stub.setRankingMethod("fac1", "pairwise")).resolves.toMatchObject({ success: true });
+
+    const setupState = await stub.getRoomState();
+    const column = setupState.columns[0]!;
+    await stub.setPhase("fac1", "write");
+    const first = await stub.addItem("fac1", "First topic", column.id);
+    const second = await stub.addItem("fac1", "Second topic", column.id);
+    await stub.setPhase("fac1", "organise");
+    await stub.setPhase("fac1", "vote");
+
+    const firstTarget = itemVoteTarget(first.item!.id);
+    const secondTarget = itemVoteTarget(second.item!.id);
+    await expect(stub.choosePairwise("fac1", firstTarget, secondTarget)).resolves.toMatchObject({ success: true });
+    await expect(stub.choosePairwise("p2", secondTarget, firstTarget)).resolves.toMatchObject({ success: true });
+
+    const voteState = await stub.getRoomStateForParticipant("fac1", fac.connectionToken);
+    expect(voteState.success).toBe(true);
+    expect(voteState.state?.pairwiseChoices).toEqual([
+      { participantId: "fac1", winner: firstTarget, loser: secondTarget },
+    ]);
+
+    await stub.setPhase("fac1", "review");
+    const reviewState = await stub.getRoomStateForParticipant("fac1", fac.connectionToken);
+    expect(reviewState.success).toBe(true);
+    expect(reviewState.state?.pairwiseChoices).toHaveLength(2);
+    expect(reviewState.state?.pairwiseChoices.some((choice) => choice.participantId === "fac1" || choice.participantId === "p2")).toBe(false);
+    expect(reviewState.state?.pairwiseChoices).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ winner: firstTarget, loser: secondTarget }),
+        expect.objectContaining({ winner: secondTarget, loser: firstTarget }),
+      ]),
+    );
+
+    const p2ReviewState = await stub.getRoomStateForParticipant("p2", p2.connectionToken);
+    expect(p2ReviewState.success).toBe(true);
+    expect(p2ReviewState.state?.pairwiseChoices.some((choice) => choice.participantId === "fac1" || choice.participantId === "p2")).toBe(false);
+  });
+
+  it("compacts pairwise review projections to aggregate counts instead of expanded ballots", async () => {
+    const stub = await initRaw("test-v2-pairwise-compact-review-projection");
+    const fac = await stub.join("fac1", "Facilitator");
+    await stub.join("p2", "Participant 2");
+    await stub.join("p3", "Participant 3");
+    await expect(stub.setRankingMethod("fac1", "pairwise")).resolves.toMatchObject({ success: true });
+
+    const setupState = await stub.getRoomState();
+    const column = setupState.columns[0]!;
+    await stub.setPhase("fac1", "write");
+    const first = await stub.addItem("fac1", "First topic", column.id);
+    const second = await stub.addItem("fac1", "Second topic", column.id);
+    await stub.setPhase("fac1", "organise");
+    await stub.setPhase("fac1", "vote");
+
+    const firstTarget = itemVoteTarget(first.item!.id);
+    const secondTarget = itemVoteTarget(second.item!.id);
+    await expect(stub.choosePairwise("fac1", firstTarget, secondTarget)).resolves.toMatchObject({ success: true });
+    await expect(stub.choosePairwise("p2", firstTarget, secondTarget)).resolves.toMatchObject({ success: true });
+    await expect(stub.choosePairwise("p3", firstTarget, secondTarget)).resolves.toMatchObject({ success: true });
+
+    await stub.setPhase("fac1", "review");
+    const reviewState = await stub.getRoomStateForParticipant("fac1", fac.connectionToken);
+
+    expect(reviewState.success).toBe(true);
+    expect(reviewState.state?.pairwiseChoices).toEqual([
+      { participantId: "__anonymous__-0", winner: firstTarget, loser: secondTarget, count: 3 },
     ]);
   });
 

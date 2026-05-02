@@ -90,6 +90,7 @@ interface WebSocketTicket {
 }
 
 const EMPTY_ROOM_PURGE_DELAY_MS = 60 * 60 * 1000;
+const MAX_ROOM_LIFETIME_MS = 12 * 60 * 60 * 1000;
 const MAX_PARTICIPANTS_PER_ROOM = 100;
 const MAX_ITEMS_PER_ROOM = 400;
 const MAX_GROUPS_PER_ROOM = 120;
@@ -99,7 +100,8 @@ const MAX_REACTIONS_PER_TARGET = 300;
 const MAX_PAIRWISE_CHOICES_PER_ROOM = 6000;
 const MAX_PAIRWISE_TARGETS = 50;
 const MAX_WEBSOCKET_MESSAGE_BYTES = 16 * 1024;
-const MAX_WEBSOCKET_MESSAGES_PER_WINDOW = 120;
+const MAX_WEBSOCKET_MESSAGES_PER_WINDOW = 20;
+const MAX_ROOM_WEBSOCKET_MESSAGES_PER_WINDOW = 60;
 const WEBSOCKET_RATE_WINDOW_MS = 10 * 1000;
 const WEBSOCKET_TICKET_TTL_MS = 30 * 1000;
 const ANONYMOUS_VOTE_PARTICIPANT_ID = "__anonymous__";
@@ -477,6 +479,7 @@ export class RetroRoom extends DurableObject<Env> {
   private state: StoredState | null = null;
   private sessions = new Map<string, WebSocket>();
   private messageWindows = new Map<string, { startedAt: number; count: number }>();
+  private roomMessageWindow: { startedAt: number; count: number } | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -551,15 +554,25 @@ export class RetroRoom extends DurableObject<Env> {
       this.state.purgeScheduledAt = null;
       await this.saveState();
     }
+    if (this.state) {
+      await this.ctx.storage.setAlarm(this.getAbsoluteRoomExpiresAt(this.state));
+    }
   }
 
   private async scheduleEmptyRoomPurge(): Promise<void> {
-    if (this.sessions.size > 0) return;
     const s = await this.loadState();
+    if (this.sessions.size > 0) {
+      await this.ctx.storage.setAlarm(this.getAbsoluteRoomExpiresAt(s));
+      return;
+    }
     const purgeScheduledAt = Date.now() + EMPTY_ROOM_PURGE_DELAY_MS;
     s.purgeScheduledAt = purgeScheduledAt;
-    await this.ctx.storage.setAlarm(purgeScheduledAt);
+    await this.ctx.storage.setAlarm(Math.min(purgeScheduledAt, this.getAbsoluteRoomExpiresAt(s)));
     await this.saveState();
+  }
+
+  private getAbsoluteRoomExpiresAt(s: Pick<StoredState, "startedAt">): number {
+    return (s.startedAt ?? Date.now()) + MAX_ROOM_LIFETIME_MS;
   }
 
   private async purgeRoom(reason: string): Promise<void> {
@@ -577,9 +590,21 @@ export class RetroRoom extends DurableObject<Env> {
     await this.ctx.storage.deleteAll();
   }
 
+  private isPastAbsoluteRoomLifetime(s: Pick<StoredState, "startedAt">): boolean {
+    return Date.now() >= this.getAbsoluteRoomExpiresAt(s);
+  }
+
+  private async purgeIfExpired(stored?: StoredState | null): Promise<boolean> {
+    const state = stored ?? await this.ctx.storage.get<StoredState>("room");
+    if (!state || !this.isPastAbsoluteRoomLifetime(state)) return false;
+    await this.purgeRoom("Room data was deleted after reaching the maximum room lifetime.");
+    return true;
+  }
+
   override async alarm(): Promise<void> {
     const stored = await this.ctx.storage.get<StoredState>("room");
     if (!stored) return;
+    if (await this.purgeIfExpired(stored)) return;
     const purgeScheduledAt = typeof stored.purgeScheduledAt === "number" && Number.isFinite(stored.purgeScheduledAt)
       ? stored.purgeScheduledAt
       : null;
@@ -670,13 +695,29 @@ export class RetroRoom extends DurableObject<Env> {
 
   private getProjectedPairwiseChoices(s: StoredState, participantId?: string): PairwiseChoice[] {
     if (!participantId) return s.pairwiseChoices ?? [];
-    const projected = (s.pairwiseChoices ?? []).filter((choice) => choice.participantId === participantId);
-    let anonymousIndex = 0;
+    if (s.phase !== "review" && s.phase !== "finalize") {
+      return (s.pairwiseChoices ?? []).filter((choice) => choice.participantId === participantId);
+    }
+
+    const aggregateCounts = new Map<string, { winner: VoteTarget; loser: VoteTarget; count: number }>();
     for (const choice of s.pairwiseChoices ?? []) {
-      if (choice.participantId === participantId) continue;
+      const key = `${pairwiseComparisonKey(choice.winner, choice.loser)}:${voteTargetKey(choice.winner)}`;
+      const existing = aggregateCounts.get(key);
+      aggregateCounts.set(key, {
+        winner: choice.winner,
+        loser: choice.loser,
+        count: (existing?.count ?? 0) + 1,
+      });
+    }
+
+    const projected: PairwiseChoice[] = [];
+    let anonymousIndex = 0;
+    for (const aggregate of aggregateCounts.values()) {
       projected.push({
-        ...choice,
         participantId: `${ANONYMOUS_VOTE_PARTICIPANT_ID}-${anonymousIndex}`,
+        winner: aggregate.winner,
+        loser: aggregate.loser,
+        count: aggregate.count,
       });
       anonymousIndex += 1;
     }
@@ -732,6 +773,7 @@ export class RetroRoom extends DurableObject<Env> {
 
   async hasRoom(): Promise<boolean> {
     const stored = await this.ctx.storage.get<StoredState>("room");
+    if (stored && await this.purgeIfExpired(stored)) return false;
     return stored !== undefined;
   }
 
@@ -1278,17 +1320,26 @@ export class RetroRoom extends DurableObject<Env> {
     return { success: true, participantId: record.participantId };
   }
 
-  private allowWebSocketMessage(participantId: string, now = Date.now()): boolean {
+  private allowWebSocketMessage(participantId: string, now = Date.now()): { allowed: true } | { allowed: false; reason: string } {
     const existing = this.messageWindows.get(participantId);
     if (!existing || now - existing.startedAt >= WEBSOCKET_RATE_WINDOW_MS) {
       this.messageWindows.set(participantId, { startedAt: now, count: 1 });
-      return true;
+    } else {
+      if (existing.count >= MAX_WEBSOCKET_MESSAGES_PER_WINDOW) {
+        return { allowed: false, reason: "Too many realtime updates. Reconnect and slow down." };
+      }
+      existing.count += 1;
     }
-    if (existing.count >= MAX_WEBSOCKET_MESSAGES_PER_WINDOW) {
-      return false;
+
+    if (!this.roomMessageWindow || now - this.roomMessageWindow.startedAt >= WEBSOCKET_RATE_WINDOW_MS) {
+      this.roomMessageWindow = { startedAt: now, count: 1 };
+      return { allowed: true };
     }
-    existing.count += 1;
-    return true;
+    if (this.roomMessageWindow.count >= MAX_ROOM_WEBSOCKET_MESSAGES_PER_WINDOW) {
+      return { allowed: false, reason: "This room is receiving too many realtime updates. Please slow down." };
+    }
+    this.roomMessageWindow.count += 1;
+    return { allowed: true };
   }
 
   private authorizeHttpMutation(
@@ -1988,8 +2039,9 @@ export class RetroRoom extends DurableObject<Env> {
     }
 
     try {
-      if (!this.allowWebSocketMessage(participantId)) {
-        ws.send(JSON.stringify({ type: "error", message: "Too many realtime updates. Reconnect and slow down." }));
+      const rateLimit = this.allowWebSocketMessage(participantId);
+      if (!rateLimit.allowed) {
+        ws.send(JSON.stringify({ type: "error", message: rateLimit.reason }));
         ws.close(1008, "Realtime rate limit exceeded");
         return;
       }
@@ -2258,6 +2310,10 @@ export class RetroRoom extends DurableObject<Env> {
 
   async runEmptyRoomAlarmForTest(): Promise<void> {
     await this.alarm();
+  }
+
+  allowWebSocketMessageForTest(participantId: string, now = Date.now()): { allowed: boolean; reason?: string } {
+    return this.allowWebSocketMessage(participantId, now);
   }
 
   async seedStoredStateForTest(state: Partial<StoredState> & Pick<StoredState, "roomId">): Promise<void> {

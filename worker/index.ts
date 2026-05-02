@@ -37,6 +37,12 @@ function forwardToDO(stub: DurableObjectStub<RetroRoom>, pathname: string, reque
   }));
 }
 
+function roomNotFoundResponse(suffix: string): Response {
+  return suffix === ""
+    ? Response.json({ error: "Room not found" }, { status: 404 })
+    : Response.json({ success: false, error: "Room not found" }, { status: 404 });
+}
+
 function getClientIp(request: Request): string | null {
   return request.headers.get("CF-Connecting-IP");
 }
@@ -206,30 +212,22 @@ export default {
       const lookupLimit = await rateLimitRoomAccess(env, request, url);
       if (lookupLimit) return lookupLimit;
       const stub = getRoomStub(env, roomId);
+      const hasRoom = await stub.hasRoom();
+      if (!hasRoom) {
+        return roomNotFoundResponse(suffix);
+      }
 
       if (suffix === "join" && method === "POST") {
-        const hasRoom = await stub.hasRoom();
-        if (!hasRoom) {
-          return Response.json({ success: false, error: "Room not found" }, { status: 404 });
-        }
         const body = await readRequiredJsonBody<{ participantId: string; displayName: string; connectionToken?: string }>(request);
         if (body instanceof Response) return body;
         return forwardToDO(stub, "/join", request, body);
       }
 
       if (suffix === "" && method === "GET") {
-        const hasRoom = await stub.hasRoom();
-        if (!hasRoom) {
-          return Response.json({ error: "Room not found" }, { status: 404 });
-        }
         return Response.json({ roomId });
       }
 
       if (suffix === "state" && method === "POST") {
-        const hasRoom = await stub.hasRoom();
-        if (!hasRoom) {
-          return Response.json({ success: false, error: "Room not found" }, { status: 404 });
-        }
         const body = await readRequiredJsonBody<{ participantId: string; connectionToken?: string }>(request);
         if (body instanceof Response) return body;
         return forwardToDO(stub, "/state", request, body);
@@ -285,30 +283,18 @@ export default {
       }
 
       if (suffix === "purge" && method === "POST") {
-        const hasRoom = await stub.hasRoom();
-        if (!hasRoom) {
-          return Response.json({ success: false, error: "Room not found" }, { status: 404 });
-        }
         const body = await readRequiredJsonBody<{ participantId: string; connectionToken?: string }>(request);
         if (body instanceof Response) return body;
         return forwardToDO(stub, "/purge", request, body);
       }
 
       if (suffix === "ws-ticket" && method === "POST") {
-        const hasRoom = await stub.hasRoom();
-        if (!hasRoom) {
-          return Response.json({ success: false, error: "Room not found" }, { status: 404 });
-        }
         const body = await readRequiredJsonBody<{ participantId: string; connectionToken?: string }>(request);
         if (body instanceof Response) return body;
         return forwardToDO(stub, "/ws-ticket", request, body);
       }
 
       if (suffix === "ws" && request.headers.get("Upgrade") === "websocket") {
-        const hasRoom = await stub.hasRoom();
-        if (!hasRoom) {
-          return new Response(JSON.stringify({ error: "Room not found" }), { status: 404 });
-        }
         const newUrl = new URL(request.url);
         newUrl.pathname = "/ws";
         return stub.fetch(new Request(newUrl, request));

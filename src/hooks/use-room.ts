@@ -3,6 +3,23 @@ import { createWebSocketTicket } from "../api";
 import { pairwiseComparisonKey } from "../domain";
 import type { RoomState, ServerToClientMessage } from "../domain";
 
+export const INITIAL_RECONNECT_DELAY_MS = 750;
+export const MAX_RECONNECT_DELAY_MS = 30_000;
+export const MAX_RECONNECT_ATTEMPTS = 8;
+export const STABLE_CONNECTION_RESET_MS = 5_000;
+
+export function getRealtimeReconnectDelay(reconnectAttempts: number): number {
+  return Math.min(MAX_RECONNECT_DELAY_MS, INITIAL_RECONNECT_DELAY_MS * 2 ** reconnectAttempts);
+}
+
+export function canAttemptRealtimeReconnect(reconnectAttempts: number): boolean {
+  return reconnectAttempts < MAX_RECONNECT_ATTEMPTS;
+}
+
+export function shouldResetRealtimeReconnectAttempts(openDurationMs: number): boolean {
+  return openDurationMs >= STABLE_CONNECTION_RESET_MS;
+}
+
 interface UseRoomResult {
   state: RoomState | null;
   connected: boolean;
@@ -34,6 +51,7 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
     if (!connectionToken) return;
     let disposed = false;
     let roomPurged = false;
+    let reconnectAttempts = 0;
 
     function clearReconnectTimer() {
       if (reconnectTimerRef.current !== null) {
@@ -42,17 +60,29 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
       }
     }
 
-    function scheduleReconnect(delay = 750) {
+    function getReconnectDelay() {
+      return getRealtimeReconnectDelay(reconnectAttempts);
+    }
+
+    function scheduleReconnect(delay?: number, consumeAttempt = true) {
       if (disposed || reconnectTimerRef.current !== null) return;
+      if (consumeAttempt) {
+        if (!canAttemptRealtimeReconnect(reconnectAttempts)) {
+          setConnected(false);
+          setLastError("Realtime reconnect paused after repeated failures. Refresh the room to try again.");
+          return;
+        }
+        reconnectAttempts += 1;
+      }
       reconnectTimerRef.current = window.setTimeout(() => {
         reconnectTimerRef.current = null;
         if (disposed) return;
         if (navigator.onLine) {
           void connect();
         } else {
-          scheduleReconnect();
+          scheduleReconnect(1_000, false);
         }
-      }, delay);
+      }, delay ?? getReconnectDelay());
     }
 
     async function connect() {
@@ -73,9 +103,11 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
         `ticket-${ticket.ticket}`,
       ]);
       wsRef.current = ws;
+      let openedAt: number | null = null;
 
       ws.addEventListener("open", () => {
         if (wsRef.current !== ws || disposed) return;
+        openedAt = Date.now();
         setConnected(true);
         setLastError(null);
       });
@@ -150,6 +182,9 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
       ws.addEventListener("close", () => {
         if (wsRef.current !== ws || disposed) return;
         setConnected(false);
+        if (openedAt !== null && shouldResetRealtimeReconnectAttempts(Date.now() - openedAt)) {
+          reconnectAttempts = 0;
+        }
         if (roomPurged) return;
         scheduleReconnect();
       });

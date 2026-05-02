@@ -91,6 +91,22 @@ describe("Worker fetch", () => {
     await expect(response.json()).resolves.toEqual({ error: "Room not found" });
   });
 
+  it("returns controlled 404s for valid-looking room ids that have no stored room", async () => {
+    const roomId = "ABCDEFGHIJKLMNOPQRSTU";
+
+    const getResponse = await exports.default.fetch(`http://localhost/api/rooms/${roomId}`);
+    expect(getResponse.status).toBe(404);
+    await expect(getResponse.json()).resolves.toEqual({ error: "Room not found" });
+
+    const mutationResponse = await exports.default.fetch(`http://localhost/api/rooms/${roomId}/vote-budget`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ participantId: "fac", connectionToken: "wrong", budget: 10 }),
+    });
+    expect(mutationResponse.status).toBe(404);
+    await expect(mutationResponse.json()).resolves.toEqual({ success: false, error: "Room not found" });
+  });
+
   it("returns 404 for unsupported methods on valid paths", async () => {
     const response = await exports.default.fetch("http://localhost/api/rooms", {
       method: "DELETE",

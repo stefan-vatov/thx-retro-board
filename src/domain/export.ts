@@ -136,7 +136,7 @@ function aggregateAnonymousPairwiseChoices(state: RoomState): AnonymousRetroExpo
     totals.set(key, {
       winner: choice.winner,
       loser: choice.loser,
-      count: (existing?.count ?? 0) + 1,
+      count: (existing?.count ?? 0) + (Number.isInteger(choice.count) && choice.count !== undefined && choice.count > 0 ? choice.count : 1),
     });
   }
   return [...totals.values()].sort((a, b) => {
