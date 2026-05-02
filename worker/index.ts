@@ -6,6 +6,10 @@ import {
   RankingMethodSchema,
   ROOM_ID_LENGTH,
 } from "../src/domain";
+import {
+  readJsonBody,
+  readValidatedJsonBody,
+} from "./http-effect";
 
 export interface Env {
   ASSETS?: Fetcher;
@@ -150,55 +154,6 @@ function withSecurityHeaders(response: Response): Response {
   return secured;
 }
 
-function readJsonBodyEffect<T>(request: Request): Effect.Effect<T | null> {
-  return Effect.promise(async () => {
-    const contentType = request.headers.get("Content-Type") ?? "";
-    if (!contentType.includes("application/json")) return null;
-    const contentLength = request.headers.get("Content-Length");
-    if (contentLength !== null && (!Number.isFinite(Number(contentLength)) || Number(contentLength) > MAX_JSON_BODY_BYTES)) return null;
-
-    const reader = request.body?.getReader();
-    const decoder = new TextDecoder();
-    let bytes = 0;
-    let body = "";
-    if (reader) {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        bytes += value.byteLength;
-        if (bytes > MAX_JSON_BODY_BYTES) {
-          await reader.cancel();
-          return null;
-        }
-        body += decoder.decode(value, { stream: true });
-      }
-      body += decoder.decode();
-    } else {
-      body = await request.text();
-      if (new TextEncoder().encode(body).byteLength > MAX_JSON_BODY_BYTES) return null;
-    }
-
-    try {
-      return JSON.parse(body) as T;
-    } catch {
-      return null;
-    }
-  });
-}
-
-function readJsonBody<T>(request: Request): Promise<T | null> {
-  return Effect.runPromise(readJsonBodyEffect<T>(request));
-}
-
-async function readValidatedJsonBody<T>(request: Request, schema: Schema.Schema<T>): Promise<T | Response> {
-  const body = await readJsonBody<unknown>(request);
-  if (body === null) return Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
-  const decoded = await Effect.runPromiseExit(Schema.decodeUnknown(schema)(body));
-  return decoded._tag === "Success"
-    ? decoded.value
-    : Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
-}
-
 function verifyTurnstileTokenEffect(
   env: Env,
   token: unknown,
@@ -262,7 +217,7 @@ export default {
           }
         }
 
-        const rawBody = await readJsonBody<unknown>(request);
+        const rawBody = await readJsonBody<unknown>(request, { maxBytes: MAX_JSON_BODY_BYTES });
         const body = rawBody === null
           ? {}
           : await Effect.runPromiseExit(Schema.decodeUnknown(CreateRoomRequestSchema)(rawBody)).then((decoded) =>
@@ -302,7 +257,7 @@ export default {
       }
 
       if (suffix === "join" && method === "POST") {
-        const body = await readValidatedJsonBody(request, JoinRoomRequestSchema);
+        const body = await readValidatedJsonBody(request, JoinRoomRequestSchema, { maxBytes: MAX_JSON_BODY_BYTES });
         if (body instanceof Response) return body;
         return forwardToDO(stub, "/join", request, body);
       }
@@ -312,68 +267,68 @@ export default {
       }
 
       if (suffix === "state" && method === "POST") {
-        const body = await readValidatedJsonBody(request, OptionalConnectionTokenSchema);
+        const body = await readValidatedJsonBody(request, OptionalConnectionTokenSchema, { maxBytes: MAX_JSON_BODY_BYTES });
         if (body instanceof Response) return body;
         return forwardToDO(stub, "/state", request, body);
       }
 
       if (suffix === "vote-budget" && method === "POST") {
-        const body = await readValidatedJsonBody(request, VoteBudgetRequestSchema);
+        const body = await readValidatedJsonBody(request, VoteBudgetRequestSchema, { maxBytes: MAX_JSON_BODY_BYTES });
         if (body instanceof Response) return body;
         return forwardToDO(stub, "/vote-budget", request, body);
       }
 
       if (suffix === "ranking-method" && method === "POST") {
-        const body = await readValidatedJsonBody(request, RankingMethodRequestSchema);
+        const body = await readValidatedJsonBody(request, RankingMethodRequestSchema, { maxBytes: MAX_JSON_BODY_BYTES });
         if (body instanceof Response) return body;
         return forwardToDO(stub, "/ranking-method", request, body);
       }
 
       if (suffix === "phase" && method === "POST") {
-        const body = await readValidatedJsonBody(request, PhaseRequestSchema);
+        const body = await readValidatedJsonBody(request, PhaseRequestSchema, { maxBytes: MAX_JSON_BODY_BYTES });
         if (body instanceof Response) return body;
         return forwardToDO(stub, "/phase", request, body);
       }
 
       if (suffix === "items" && method === "POST") {
-        const body = await readValidatedJsonBody(request, AddItemRequestSchema);
+        const body = await readValidatedJsonBody(request, AddItemRequestSchema, { maxBytes: MAX_JSON_BODY_BYTES });
         if (body instanceof Response) return body;
         return forwardToDO(stub, "/items", request, body);
       }
 
       const itemMatch = suffix.match(/^items\/([^/]+)$/);
       if (itemMatch && method === "PATCH") {
-        const body = await readValidatedJsonBody(request, EditItemRequestSchema);
+        const body = await readValidatedJsonBody(request, EditItemRequestSchema, { maxBytes: MAX_JSON_BODY_BYTES });
         if (body instanceof Response) return body;
         return forwardToDO(stub, `/items/${itemMatch[1]}`, request, body);
       }
 
       if (itemMatch && method === "DELETE") {
-        const body = await readValidatedJsonBody(request, OptionalConnectionTokenSchema);
+        const body = await readValidatedJsonBody(request, OptionalConnectionTokenSchema, { maxBytes: MAX_JSON_BODY_BYTES });
         if (body instanceof Response) return body;
         return forwardToDO(stub, `/items/${itemMatch[1]}`, request, body);
       }
 
       if (suffix === "timer" && method === "POST") {
-        const body = await readValidatedJsonBody(request, TimerRequestSchema);
+        const body = await readValidatedJsonBody(request, TimerRequestSchema, { maxBytes: MAX_JSON_BODY_BYTES });
         if (body instanceof Response) return body;
         return forwardToDO(stub, "/timer", request, body);
       }
 
       if (suffix === "review-target" && method === "POST") {
-        const body = await readValidatedJsonBody(request, ReviewTargetRequestSchema);
+        const body = await readValidatedJsonBody(request, ReviewTargetRequestSchema, { maxBytes: MAX_JSON_BODY_BYTES });
         if (body instanceof Response) return body;
         return forwardToDO(stub, "/review-target", request, body);
       }
 
       if (suffix === "purge" && method === "POST") {
-        const body = await readValidatedJsonBody(request, OptionalConnectionTokenSchema);
+        const body = await readValidatedJsonBody(request, OptionalConnectionTokenSchema, { maxBytes: MAX_JSON_BODY_BYTES });
         if (body instanceof Response) return body;
         return forwardToDO(stub, "/purge", request, body);
       }
 
       if (suffix === "ws-ticket" && method === "POST") {
-        const body = await readValidatedJsonBody(request, OptionalConnectionTokenSchema);
+        const body = await readValidatedJsonBody(request, OptionalConnectionTokenSchema, { maxBytes: MAX_JSON_BODY_BYTES });
         if (body instanceof Response) return body;
         return forwardToDO(stub, "/ws-ticket", request, body);
       }
