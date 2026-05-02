@@ -125,6 +125,7 @@ class RoomMutationValidationError extends Error {
 }
 
 type VoteBudgetValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase">;
+type RankingMethodValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase">;
 
 const OptionalConnectionTokenSchema = Schema.Struct({
   participantId: Schema.String,
@@ -207,6 +208,28 @@ export function validateVoteBudgetChangeEffect(
       return yield* Effect.fail(new RoomMutationValidationError("Vote budget must be an integer between 1 and 100"));
     }
     return { budget };
+  });
+}
+
+export function validateRankingMethodChangeEffect(
+  state: RankingMethodValidationState,
+  participantId: string,
+  rankingMethod: RankingMethod,
+): Effect.Effect<{ rankingMethod: RankingMethod }, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    if (!state.participants.some((participant) => participant.id === participantId)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Participant not found"));
+    }
+    if (state.facilitatorId !== participantId) {
+      return yield* Effect.fail(new RoomMutationValidationError("Only the facilitator can set ranking method"));
+    }
+    if (state.phase !== "setup") {
+      return yield* Effect.fail(new RoomMutationValidationError("Ranking method can only be changed during setup"));
+    }
+    if (rankingMethod !== "score" && rankingMethod !== "pairwise") {
+      return yield* Effect.fail(new RoomMutationValidationError("Invalid ranking method"));
+    }
+    return { rankingMethod };
   });
 }
 
@@ -1013,24 +1036,21 @@ export class RetroRoom extends DurableObject<Env> {
 
   async setRankingMethod(participantId: string, rankingMethod: RankingMethod): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
-    if (!this.hasParticipant(s, participantId)) {
-      return { success: false, error: "Participant not found" };
-    }
-    if (s.facilitatorId !== participantId) {
-      return { success: false, error: "Only the facilitator can set ranking method" };
-    }
-    if (s.phase !== "setup") {
-      return { success: false, error: "Ranking method can only be changed during setup" };
-    }
-    if (rankingMethod !== "score" && rankingMethod !== "pairwise") {
-      return { success: false, error: "Invalid ranking method" };
+    let validated: { rankingMethod: RankingMethod };
+    try {
+      validated = await Effect.runPromise(validateRankingMethodChangeEffect(s, participantId, rankingMethod));
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Ranking method validation failed",
+      };
     }
 
-    s.rankingMethod = rankingMethod;
+    s.rankingMethod = validated.rankingMethod;
     s.votes = [];
     s.pairwiseChoices = [];
     await this.saveState();
-    this.broadcast({ type: "ranking-method-changed", rankingMethod });
+    this.broadcast({ type: "ranking-method-changed", rankingMethod: validated.rankingMethod });
     this.broadcastState(s);
     return { success: true };
   }
