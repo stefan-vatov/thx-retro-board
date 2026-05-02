@@ -5,6 +5,7 @@ import { createRoomEffect, getPublicConfigEffect, runApiEffect } from "../api";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
 import { TurnstileWidget } from "./TurnstileWidget";
+import { loadHomePublicConfigEffect } from "./home-page-effect";
 
 export function HomePage() {
   const navigate = useNavigate();
@@ -17,13 +18,20 @@ export function HomePage() {
 
   useEffect(() => {
     let disposed = false;
-    void runApiEffect(getPublicConfigEffect()).then((config) => {
-      if (!disposed) setTurnstileSiteKey(config.turnstileSiteKey);
-    });
+    void loadConfig();
     return () => {
       disposed = true;
     };
+
+    async function loadConfig() {
+      const config = await loadPublicConfig();
+      if (!disposed) setTurnstileSiteKey(config.turnstileSiteKey);
+    }
   }, []);
+
+  function loadPublicConfig() {
+    return runApiEffect(loadHomePublicConfigEffect(getPublicConfigEffect()));
+  }
 
   const handleTurnstileTokenChange = useCallback((token: string | null) => {
     setTurnstileToken(token);
