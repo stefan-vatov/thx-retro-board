@@ -16,7 +16,6 @@ import type {
   ServerToClientMessage,
 } from "../src/domain";
 import {
-  getVoteTarget,
   groupVoteTarget,
   sameVoteTarget,
 } from "../src/domain";
@@ -50,27 +49,23 @@ import {
   validateItemReorderEffect,
   validatePairwiseChoiceEffect,
   validateParticipantJoinEffect,
-  validatePhaseChangeEffect,
   validateRankingMethodChangeEffect,
   validateReactionToggleEffect,
-  validateReviewTargetChangeEffect,
-  validateTimerChangeEffect,
   validateVoteBudgetChangeEffect,
   validateVoteCastEffect,
   validateVoteRemoveEffect,
-  validateWriteItemCreateEffect,
-  validateWriteItemDeleteEffect,
-  validateWriteItemEditEffect,
 } from "./validation";
 import { handleRoomHttpRequest } from "./room-http";
 import {
   createActionForRoom,
   deleteActionForRoom,
   editActionForRoom,
-  type RoomCommandHost,
 } from "./room-actions";
+import type { RoomCommandHost } from "./room-command-host";
+import { addItemForRoom, deleteItemForRoom, editItemForRoom } from "./room-items";
 import { normalizePairwiseChoices, normalizeReactions } from "./room-normalize";
-import { getDecisionTargetCount, toRoomState } from "./room-presenter";
+import { toRoomState } from "./room-presenter";
+import { setPhaseForRoom, setReviewTargetForRoom, setTimerForRoom } from "./room-phase";
 import { handleRoomRealtimeMessage } from "./room-realtime";
 import { RoomRealtimeLimiter } from "./room-realtime-limits";
 import { createInitialStoredState, hydrateStoredState } from "./room-storage";
@@ -343,89 +338,15 @@ export class RetroRoom extends DurableObject<Env> {
   }
 
   async addItem(participantId: string, rawText: string, columnId?: unknown): Promise<{ success: boolean; error?: string; item?: RetroItem }> {
-    const s = await this.loadState();
-    let validated: { text: string; columnId: string; order: number };
-    try {
-      validated = await Effect.runPromise(validateWriteItemCreateEffect(s, participantId, rawText, columnId));
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : "Item validation failed",
-      };
-    }
-
-    const item: RetroItem = {
-      id: crypto.randomUUID(),
-      text: validated.text,
-      authorId: participantId,
-      columnId: validated.columnId,
-      groupId: null,
-      order: validated.order,
-    };
-    s.items.push(item);
-    await this.saveState();
-
-    const broadcast: ServerToClientMessage = { type: "item-added", item };
-    this.broadcast(broadcast);
-    this.broadcastState(s);
-
-    return { success: true, item };
+    return addItemForRoom(this.commandHost(), participantId, rawText, columnId);
   }
 
   async editItem(participantId: string, itemId: string, rawText: string): Promise<{ success: boolean; error?: string; item?: RetroItem }> {
-    const s = await this.loadState();
-    let validated: { item: RetroItem };
-    try {
-      validated = await Effect.runPromise(validateWriteItemEditEffect(s, participantId, itemId, rawText));
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : "Item validation failed",
-      };
-    }
-
-    const item = validated.item;
-    s.items = s.items.map((candidate) => candidate.id === itemId ? item : candidate);
-    await this.saveState();
-    this.broadcastState(s);
-    return { success: true, item };
+    return editItemForRoom(this.commandHost(), participantId, itemId, rawText);
   }
 
   async deleteItem(participantId: string, itemId: string): Promise<{ success: boolean; error?: string }> {
-    const s = await this.loadState();
-    let validated: { target: VoteTarget };
-    try {
-      validated = await Effect.runPromise(validateWriteItemDeleteEffect(s, participantId, itemId));
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : "Item validation failed",
-      };
-    }
-
-    const target = validated.target;
-    s.items = s.items
-      .filter((item) => item.id !== itemId)
-      .sort((a, b) => a.order - b.order)
-      .map((item, _index, allItems) => ({
-        ...item,
-        order: allItems.filter((candidate) => candidate.columnId === item.columnId && candidate.groupId === item.groupId && candidate.order < item.order).length,
-      }));
-    s.votes = s.votes.filter((vote) => {
-      const voteTarget = getVoteTarget(vote);
-      return voteTarget === null || !sameVoteTarget(voteTarget, target);
-    });
-    s.pairwiseChoices = normalizePairwiseChoices(
-      (s.pairwiseChoices ?? []).filter((choice) => !sameVoteTarget(choice.winner, target) && !sameVoteTarget(choice.loser, target)),
-      s.participants,
-      s.groups,
-      s.items,
-    );
-    s.reactions = (s.reactions ?? []).filter((reaction) => !sameVoteTarget(reaction.target, target));
-
-    await this.saveState();
-    this.broadcastState(s);
-    return { success: true };
+    return deleteItemForRoom(this.commandHost(), participantId, itemId);
   }
 
   async createAction(participantId: string, rawText: string): Promise<{ success: boolean; error?: string; action?: ActionItem }> {
@@ -441,80 +362,15 @@ export class RetroRoom extends DurableObject<Env> {
   }
 
   async setPhase(participantId: string, phase: Phase): Promise<{ success: boolean; error?: string }> {
-    const s = await this.loadState();
-    let validated: { phase: Phase };
-    try {
-      validated = await Effect.runPromise(validatePhaseChangeEffect(s, participantId, phase, getDecisionTargetCount(s)));
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : "Phase validation failed",
-      };
-    }
-
-    s.phase = validated.phase;
-    if (validated.phase === "vote") {
-      s.votingParticipantIds = s.participants.map((participant) => participant.id);
-    }
-    // Reset timer on phase change
-    s.timer = { startedAt: null, durationSeconds: null, expired: false };
-    await this.saveState();
-
-    // Broadcast phase change to all connected clients
-    const broadcast: ServerToClientMessage = { type: "phase-changed", phase: validated.phase };
-    this.broadcast(broadcast);
-
-    this.broadcastState(s);
-
-    return { success: true };
+    return setPhaseForRoom(this.commandHost(), participantId, phase);
   }
 
   async setTimer(participantId: string, durationSeconds: number): Promise<{ success: boolean; error?: string }> {
-    const s = await this.loadState();
-    let validated: { durationSeconds: number };
-    try {
-      validated = await Effect.runPromise(validateTimerChangeEffect(s, participantId, durationSeconds));
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : "Timer validation failed",
-      };
-    }
-
-    s.timer = {
-      startedAt: Date.now(),
-      durationSeconds: validated.durationSeconds,
-      expired: false,
-    };
-    await this.saveState();
-
-    const timerBroadcast: ServerToClientMessage = {
-      type: "timer-updated",
-      timer: s.timer,
-    };
-    this.broadcast(timerBroadcast);
-    this.broadcastState(s);
-
-    return { success: true };
+    return setTimerForRoom(this.commandHost(), participantId, durationSeconds);
   }
 
   async setReviewTarget(participantId: string, reviewTargetKey: string | null): Promise<{ success: boolean; error?: string }> {
-    const s = await this.loadState();
-    let validated: { reviewTargetKey: string | null };
-    try {
-      validated = await Effect.runPromise(validateReviewTargetChangeEffect(s, participantId, reviewTargetKey));
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : "Review target validation failed",
-      };
-    }
-
-    s.reviewTargetKey = validated.reviewTargetKey;
-    await this.saveState();
-    this.broadcast({ type: "review-target-changed", reviewTargetKey: validated.reviewTargetKey });
-    this.broadcastState(s);
-    return { success: true };
+    return setReviewTargetForRoom(this.commandHost(), participantId, reviewTargetKey);
   }
 
   private hasParticipant(s: StoredState, participantId: string): boolean {

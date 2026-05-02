@@ -1,15 +1,9 @@
 import { Effect } from "effect";
-import type { ActionItem, ServerToClientMessage } from "../src/domain";
+import type { ActionItem } from "../src/domain";
 import { createActionItem } from "../src/domain";
-import { MAX_ACTIONS_PER_ROOM, type StoredState } from "./room-types";
+import { MAX_ACTIONS_PER_ROOM } from "./room-types";
+import type { RoomCommandHost } from "./room-command-host";
 import { validateReviewActionEffect } from "./validation";
-
-export interface RoomCommandHost {
-  loadState(): Promise<StoredState>;
-  saveState(): Promise<void>;
-  broadcast(message: ServerToClientMessage, excludeId?: string): void;
-  broadcastState(state: StoredState, excludeId?: string): void;
-}
 
 export async function createActionForRoom(
   host: RoomCommandHost,
