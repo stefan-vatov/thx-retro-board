@@ -26,6 +26,38 @@ describe("RetroRoom Durable Object v2 schema", () => {
     expect(Exit.isFailure(exit)).toBe(true);
   });
 
+  it("rejects malformed Durable Object join request bodies through Effect", async () => {
+    const stub = await initRaw("test-do-invalid-join-body");
+
+    const response = await stub.fetch(new Request("http://do/join", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ participantId: "p1" }),
+    }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      success: false,
+      error: "Valid JSON body is required",
+    });
+  });
+
+  it("rejects malformed Durable Object mutation bodies through Effect before authorization", async () => {
+    const stub = await initRaw("test-do-invalid-phase-body");
+
+    const response = await stub.fetch(new Request("http://do/phase", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ participantId: "fac1", connectionToken: "wrong", phase: "done" }),
+    }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      success: false,
+      error: "Valid JSON body is required",
+    });
+  });
+
   async function initRaw(roomId: string) {
     const id = env.RETRO_ROOM.idFromName(roomId);
     const stub = env.RETRO_ROOM.get(id);

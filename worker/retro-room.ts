@@ -53,6 +53,8 @@ import {
   getDefaultColumns,
   isAllowedReactionEmoji,
   ClientToServerMessageSchema,
+  PhaseSchema,
+  RankingMethodSchema,
 } from "../src/domain";
 
 interface StoredTimer {
@@ -114,6 +116,53 @@ class ClientWebSocketMessageError extends Error {
     this.name = "ClientWebSocketMessageError";
   }
 }
+
+const OptionalConnectionTokenSchema = Schema.Struct({
+  participantId: Schema.String,
+  connectionToken: Schema.optional(Schema.String),
+});
+const JoinRequestSchema = Schema.Struct({
+  participantId: Schema.String,
+  displayName: Schema.String,
+  connectionToken: Schema.optional(Schema.String),
+  facilitatorClaimToken: Schema.optional(Schema.String),
+});
+const VoteBudgetRequestSchema = Schema.Struct({
+  participantId: Schema.String,
+  connectionToken: Schema.optional(Schema.String),
+  budget: Schema.Number,
+});
+const RankingMethodRequestSchema = Schema.Struct({
+  participantId: Schema.String,
+  connectionToken: Schema.optional(Schema.String),
+  rankingMethod: RankingMethodSchema,
+});
+const PhaseRequestSchema = Schema.Struct({
+  participantId: Schema.String,
+  connectionToken: Schema.optional(Schema.String),
+  phase: PhaseSchema,
+});
+const AddItemRequestSchema = Schema.Struct({
+  participantId: Schema.String,
+  connectionToken: Schema.optional(Schema.String),
+  text: Schema.String,
+  columnId: Schema.optional(Schema.String),
+});
+const EditItemRequestSchema = Schema.Struct({
+  participantId: Schema.String,
+  connectionToken: Schema.optional(Schema.String),
+  text: Schema.String,
+});
+const TimerRequestSchema = Schema.Struct({
+  participantId: Schema.String,
+  connectionToken: Schema.optional(Schema.String),
+  durationSeconds: Schema.Number,
+});
+const ReviewTargetRequestSchema = Schema.Struct({
+  participantId: Schema.String,
+  connectionToken: Schema.optional(Schema.String),
+  reviewTargetKey: Schema.NullOr(Schema.String),
+});
 
 export function parseClientWebSocketMessageEffect(
   message: string | ArrayBuffer,
@@ -497,6 +546,15 @@ async function readJsonBody<T>(request: Request): Promise<T | null> {
   } catch {
     return null;
   }
+}
+
+async function readValidatedJsonBody<T>(request: Request, schema: Schema.Schema<T>): Promise<T | Response> {
+  const body = await readJsonBody<unknown>(request);
+  if (body === null) return Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
+  const decoded = await Effect.runPromiseExit(Schema.decodeUnknown(schema)(body));
+  return decoded._tag === "Success"
+    ? decoded.value
+    : Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
 }
 
 export class RetroRoom extends DurableObject<Env> {
@@ -1907,22 +1965,22 @@ export class RetroRoom extends DurableObject<Env> {
     const url = new URL(request.url);
 
     if (url.pathname === "/join" && request.method === "POST") {
-      const body = await readJsonBody<{ participantId: string; displayName: string; connectionToken?: string; facilitatorClaimToken?: string }>(request);
-      if (!body) return Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
+      const body = await readValidatedJsonBody(request, JoinRequestSchema);
+      if (body instanceof Response) return body;
       const result = await this.join(body.participantId, body.displayName, body.connectionToken, body.facilitatorClaimToken);
       return Response.json(result);
     }
 
     if (url.pathname === "/state" && request.method === "POST") {
-      const body = await readJsonBody<{ participantId: string; connectionToken?: string }>(request);
-      if (!body) return Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
+      const body = await readValidatedJsonBody(request, OptionalConnectionTokenSchema);
+      if (body instanceof Response) return body;
       const result = await this.getRoomStateForParticipant(body.participantId, body.connectionToken);
       return Response.json(result, { status: result.success ? 200 : 403 });
     }
 
     if (url.pathname === "/vote-budget" && request.method === "POST") {
-      const body = await readJsonBody<{ participantId: string; connectionToken?: string; budget: number }>(request);
-      if (!body) return Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
+      const body = await readValidatedJsonBody(request, VoteBudgetRequestSchema);
+      if (body instanceof Response) return body;
       const auth = this.authorizeHttpMutation(await this.loadState(), body.participantId, body.connectionToken);
       if (!auth.success) return Response.json(auth, { status: 403 });
       const result = await this.setVoteBudget(auth.participantId, body.budget);
@@ -1930,8 +1988,8 @@ export class RetroRoom extends DurableObject<Env> {
     }
 
     if (url.pathname === "/ranking-method" && request.method === "POST") {
-      const body = await readJsonBody<{ participantId: string; connectionToken?: string; rankingMethod: RankingMethod }>(request);
-      if (!body) return Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
+      const body = await readValidatedJsonBody(request, RankingMethodRequestSchema);
+      if (body instanceof Response) return body;
       const auth = this.authorizeHttpMutation(await this.loadState(), body.participantId, body.connectionToken);
       if (!auth.success) return Response.json(auth, { status: 403 });
       const result = await this.setRankingMethod(auth.participantId, body.rankingMethod);
@@ -1939,17 +1997,17 @@ export class RetroRoom extends DurableObject<Env> {
     }
 
     if (url.pathname === "/phase" && request.method === "POST") {
-      const body = await readJsonBody<{ participantId: string; connectionToken?: string; phase: string }>(request);
-      if (!body) return Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
+      const body = await readValidatedJsonBody(request, PhaseRequestSchema);
+      if (body instanceof Response) return body;
       const auth = this.authorizeHttpMutation(await this.loadState(), body.participantId, body.connectionToken);
       if (!auth.success) return Response.json(auth, { status: 403 });
-      const result = await this.setPhase(auth.participantId, body.phase as Phase);
+      const result = await this.setPhase(auth.participantId, body.phase);
       return Response.json(result);
     }
 
     if (url.pathname === "/items" && request.method === "POST") {
-      const body = await readJsonBody<{ participantId: string; connectionToken?: string; text: string; columnId?: string }>(request);
-      if (!body) return Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
+      const body = await readValidatedJsonBody(request, AddItemRequestSchema);
+      if (body instanceof Response) return body;
       const auth = this.authorizeHttpMutation(await this.loadState(), body.participantId, body.connectionToken);
       if (!auth.success) return Response.json(auth, { status: 403 });
       const result = await this.addItem(auth.participantId, body.text, body.columnId);
@@ -1958,8 +2016,8 @@ export class RetroRoom extends DurableObject<Env> {
 
     const itemMatch = url.pathname.match(/^\/items\/([^/]+)$/);
     if (itemMatch && request.method === "PATCH") {
-      const body = await readJsonBody<{ participantId: string; connectionToken?: string; text: string }>(request);
-      if (!body) return Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
+      const body = await readValidatedJsonBody(request, EditItemRequestSchema);
+      if (body instanceof Response) return body;
       const auth = this.authorizeHttpMutation(await this.loadState(), body.participantId, body.connectionToken);
       if (!auth.success) return Response.json(auth, { status: 403 });
       const result = await this.editItem(auth.participantId, decodeURIComponent(itemMatch[1]!), body.text);
@@ -1967,8 +2025,8 @@ export class RetroRoom extends DurableObject<Env> {
     }
 
     if (itemMatch && request.method === "DELETE") {
-      const body = await readJsonBody<{ participantId: string; connectionToken?: string }>(request);
-      if (!body) return Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
+      const body = await readValidatedJsonBody(request, OptionalConnectionTokenSchema);
+      if (body instanceof Response) return body;
       const auth = this.authorizeHttpMutation(await this.loadState(), body.participantId, body.connectionToken);
       if (!auth.success) return Response.json(auth, { status: 403 });
       const result = await this.deleteItem(auth.participantId, decodeURIComponent(itemMatch[1]!));
@@ -1976,8 +2034,8 @@ export class RetroRoom extends DurableObject<Env> {
     }
 
     if (url.pathname === "/timer" && request.method === "POST") {
-      const body = await readJsonBody<{ participantId: string; connectionToken?: string; durationSeconds: number }>(request);
-      if (!body) return Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
+      const body = await readValidatedJsonBody(request, TimerRequestSchema);
+      if (body instanceof Response) return body;
       const auth = this.authorizeHttpMutation(await this.loadState(), body.participantId, body.connectionToken);
       if (!auth.success) return Response.json(auth, { status: 403 });
       const result = await this.setTimer(auth.participantId, body.durationSeconds);
@@ -1985,8 +2043,8 @@ export class RetroRoom extends DurableObject<Env> {
     }
 
     if (url.pathname === "/review-target" && request.method === "POST") {
-      const body = await readJsonBody<{ participantId: string; connectionToken?: string; reviewTargetKey: string | null }>(request);
-      if (!body) return Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
+      const body = await readValidatedJsonBody(request, ReviewTargetRequestSchema);
+      if (body instanceof Response) return body;
       const auth = this.authorizeHttpMutation(await this.loadState(), body.participantId, body.connectionToken);
       if (!auth.success) return Response.json(auth, { status: 403 });
       const result = await this.setReviewTarget(auth.participantId, body.reviewTargetKey);
@@ -1994,8 +2052,8 @@ export class RetroRoom extends DurableObject<Env> {
     }
 
     if (url.pathname === "/purge" && request.method === "POST") {
-      const body = await readJsonBody<{ participantId: string; connectionToken?: string }>(request);
-      if (!body) return Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
+      const body = await readValidatedJsonBody(request, OptionalConnectionTokenSchema);
+      if (body instanceof Response) return body;
       const auth = this.authorizeHttpMutation(await this.loadState(), body.participantId, body.connectionToken);
       if (!auth.success) return Response.json(auth, { status: 403 });
       const result = await this.purgeByFacilitator(auth.participantId);
@@ -2003,8 +2061,8 @@ export class RetroRoom extends DurableObject<Env> {
     }
 
     if (url.pathname === "/ws-ticket" && request.method === "POST") {
-      const body = await readJsonBody<{ participantId: string; connectionToken?: string }>(request);
-      if (!body) return Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
+      const body = await readValidatedJsonBody(request, OptionalConnectionTokenSchema);
+      if (body instanceof Response) return body;
       const result = await this.createWebSocketTicket(body.participantId, body.connectionToken);
       return Response.json(result, { status: result.success ? 200 : 403 });
     }
