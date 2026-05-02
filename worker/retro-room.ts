@@ -128,6 +128,7 @@ type VoteBudgetValidationState = Pick<StoredState, "facilitatorId" | "participan
 type RankingMethodValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase">;
 type PhaseValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase" | "columns" | "rankingMethod">;
 type ReviewActionValidationState = Pick<StoredState, "participants" | "phase">;
+type WriteItemCreateValidationState = Pick<StoredState, "participants" | "phase" | "items" | "columns">;
 
 const OptionalConnectionTokenSchema = Schema.Struct({
   participantId: Schema.String,
@@ -280,6 +281,37 @@ export function validateReviewActionEffect(
       return yield* Effect.fail(new RoomMutationValidationError("Action text cannot be empty"));
     }
     return { text: sanitizeActionText(rawText) };
+  });
+}
+
+export function validateWriteItemCreateEffect(
+  state: WriteItemCreateValidationState,
+  participantId: string,
+  rawText: string,
+  columnId: unknown,
+): Effect.Effect<{ text: string; columnId: string; order: number }, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    if (state.phase !== "write") {
+      return yield* Effect.fail(new RoomMutationValidationError("Cannot add items outside write phase"));
+    }
+    if (!isValidItemText(rawText)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Item text cannot be empty"));
+    }
+    if (!state.participants.some((participant) => participant.id === participantId)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Participant not found"));
+    }
+    if (state.items.length >= MAX_ITEMS_PER_ROOM) {
+      return yield* Effect.fail(new RoomMutationValidationError(`Rooms can have at most ${MAX_ITEMS_PER_ROOM} cards`));
+    }
+    const columnValidation = validateExistingColumnId(state.columns ?? [], columnId);
+    if (!columnValidation.valid) {
+      return yield* Effect.fail(new RoomMutationValidationError(columnValidation.error));
+    }
+    return {
+      text: sanitizeItemText(rawText),
+      columnId: columnValidation.columnId,
+      order: state.items.length,
+    };
   });
 }
 
@@ -1107,33 +1139,23 @@ export class RetroRoom extends DurableObject<Env> {
 
   async addItem(participantId: string, rawText: string, columnId?: unknown): Promise<{ success: boolean; error?: string; item?: RetroItem }> {
     const s = await this.loadState();
-
-    if (s.phase !== "write") {
-      return { success: false, error: "Cannot add items outside write phase" };
-    }
-
-    const sanitized = sanitizeItemText(rawText);
-    if (!isValidItemText(rawText)) {
-      return { success: false, error: "Item text cannot be empty" };
-    }
-    if (!s.participants.some((participant) => participant.id === participantId)) {
-      return { success: false, error: "Participant not found" };
-    }
-    if (s.items.length >= MAX_ITEMS_PER_ROOM) {
-      return { success: false, error: `Rooms can have at most ${MAX_ITEMS_PER_ROOM} cards` };
-    }
-    const columnValidation = validateExistingColumnId(s.columns ?? [], columnId);
-    if (!columnValidation.valid) {
-      return { success: false, error: columnValidation.error };
+    let validated: { text: string; columnId: string; order: number };
+    try {
+      validated = await Effect.runPromise(validateWriteItemCreateEffect(s, participantId, rawText, columnId));
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Item validation failed",
+      };
     }
 
     const item: RetroItem = {
       id: crypto.randomUUID(),
-      text: sanitized,
+      text: validated.text,
       authorId: participantId,
-      columnId: columnValidation.columnId,
+      columnId: validated.columnId,
       groupId: null,
-      order: s.items.length,
+      order: validated.order,
     };
     s.items.push(item);
     await this.saveState();

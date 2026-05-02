@@ -8,6 +8,7 @@ import {
   parseClientWebSocketMessageEffect,
   validatePhaseChangeEffect,
   validateRankingMethodChangeEffect,
+  validateWriteItemCreateEffect,
   validateReviewActionEffect,
   validateVoteBudgetChangeEffect,
 } from "./retro-room";
@@ -134,6 +135,27 @@ describe("RetroRoom Durable Object v2 schema", () => {
     expect(Exit.isFailure(blankText)).toBe(true);
 
     const wrongPhase = await Effect.runPromiseExit(validateReviewActionEffect({ ...state, phase: "finalize" }, "p1", "Follow up"));
+    expect(Exit.isFailure(wrongPhase)).toBe(true);
+  });
+
+  it("validates write item creation through Effect before state changes", async () => {
+    const state = {
+      phase: "write",
+      participants: [{ id: "p1", displayName: "Pat", isFacilitator: false }],
+      items: [],
+      columns: [{ id: "col-1", name: "Mad", order: 0 }],
+    };
+
+    await expect(Effect.runPromise(validateWriteItemCreateEffect(state, "p1", "  New card  ", "col-1"))).resolves.toEqual({
+      text: "New card",
+      columnId: "col-1",
+      order: 0,
+    });
+
+    const blankText = await Effect.runPromiseExit(validateWriteItemCreateEffect(state, "p1", "   ", "col-1"));
+    expect(Exit.isFailure(blankText)).toBe(true);
+
+    const wrongPhase = await Effect.runPromiseExit(validateWriteItemCreateEffect({ ...state, phase: "organise" }, "p1", "New card", "col-1"));
     expect(Exit.isFailure(wrongPhase)).toBe(true);
   });
 
