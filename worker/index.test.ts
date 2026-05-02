@@ -29,6 +29,12 @@ describe("Worker fetch", () => {
         RETRO_ROOM: undefined as unknown as Env["RETRO_ROOM"],
         TURNSTILE_SITE_KEY: "site-key",
         TURNSTILE_SECRET_KEY: "secret-key",
+        ROOM_CREATE_RATE_LIMITER: {
+          limit: async () => ({ success: true }),
+        },
+        ROOM_ACCESS_RATE_LIMITER: {
+          limit: async () => ({ success: true }),
+        },
       },
       {} as ExecutionContext,
     );
@@ -116,6 +122,56 @@ describe("POST /api/rooms", () => {
     });
   });
 
+  it("rate limits all production room-scoped routes before touching Durable Objects", async () => {
+    const roomId = "ABCDEFGHIJKLMNOPQRSTU";
+    const response = await worker.fetch(
+      new Request(`https://retro.thethracian.com/api/rooms/${roomId}/vote-budget`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "CF-Connecting-IP": "198.51.100.11" },
+        body: JSON.stringify({ participantId: "fac", connectionToken: "wrong", budget: 10 }),
+      }),
+      {
+        ASSETS: undefined,
+        RETRO_ROOM: {
+          idFromName: () => {
+            throw new Error("RETRO_ROOM should not be touched after access rate limit rejects");
+          },
+        } as unknown as Env["RETRO_ROOM"],
+        ROOM_ACCESS_RATE_LIMITER: {
+          limit: async () => ({ success: false }),
+        },
+      },
+      {} as ExecutionContext,
+    );
+
+    expect(response.status).toBe(429);
+    await expect(response.json()).resolves.toEqual({
+      error: "Too many room attempts from this network. Please wait a minute and try again.",
+    });
+  });
+
+  it("rejects oversized JSON bodies before forwarding room mutations", async () => {
+    const createRes = await exports.default.fetch(createRoomRequest());
+    const { roomId } = await createRes.json() as { roomId: string };
+
+    const response = await exports.default.fetch(`http://localhost/api/rooms/${roomId}/vote-budget`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        participantId: "fac",
+        connectionToken: "wrong",
+        budget: 10,
+        padding: "x".repeat(40 * 1024),
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      success: false,
+      error: "Valid JSON body is required",
+    });
+  });
+
   it("requires Turnstile when the secret is configured", async () => {
     const response = await worker.fetch(
       new Request("http://localhost/api/rooms", {
@@ -148,6 +204,10 @@ describe("POST /api/rooms", () => {
         ASSETS: undefined,
         RETRO_ROOM: undefined as unknown as Env["RETRO_ROOM"],
         TURNSTILE_SITE_KEY: "site-key",
+        TURNSTILE_SECRET_KEY: "secret-key",
+        ROOM_CREATE_RATE_LIMITER: {
+          limit: async () => ({ success: true }),
+        },
       },
       {} as ExecutionContext,
     );

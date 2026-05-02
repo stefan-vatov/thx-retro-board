@@ -86,18 +86,19 @@ interface StoredState {
 
 interface WebSocketTicket {
   participantId: string;
+  connectionToken: string;
   expiresAt: number;
 }
 
 const EMPTY_ROOM_PURGE_DELAY_MS = 60 * 60 * 1000;
 const MAX_PARTICIPANTS_PER_ROOM = 100;
-const MAX_ITEMS_PER_ROOM = 1000;
-const MAX_GROUPS_PER_ROOM = 300;
-const MAX_ACTIONS_PER_ROOM = 500;
-const MAX_REACTIONS_PER_ROOM = 10000;
-const MAX_REACTIONS_PER_TARGET = 1000;
-const MAX_PAIRWISE_CHOICES_PER_ROOM = 20000;
-const MAX_PAIRWISE_TARGETS = 80;
+const MAX_ITEMS_PER_ROOM = 400;
+const MAX_GROUPS_PER_ROOM = 120;
+const MAX_ACTIONS_PER_ROOM = 150;
+const MAX_REACTIONS_PER_ROOM = 3000;
+const MAX_REACTIONS_PER_TARGET = 300;
+const MAX_PAIRWISE_CHOICES_PER_ROOM = 6000;
+const MAX_PAIRWISE_TARGETS = 50;
 const MAX_WEBSOCKET_MESSAGE_BYTES = 16 * 1024;
 const MAX_WEBSOCKET_MESSAGES_PER_WINDOW = 120;
 const WEBSOCKET_RATE_WINDOW_MS = 10 * 1000;
@@ -441,8 +442,14 @@ function getWebSocketTicket(request: Request): string | null {
 async function readJsonBody<T>(request: Request): Promise<T | null> {
   const contentType = request.headers.get("Content-Type") ?? "";
   if (!contentType.includes("application/json")) return null;
+  const contentLength = request.headers.get("Content-Length");
+  if (contentLength !== null && Number(contentLength) > MAX_WEBSOCKET_MESSAGE_BYTES) return null;
+
+  const body = await request.text();
+  if (body.length > MAX_WEBSOCKET_MESSAGE_BYTES) return null;
+
   try {
-    return await request.json() as T;
+    return JSON.parse(body) as T;
   } catch {
     return null;
   }
@@ -1099,12 +1106,21 @@ export class RetroRoom extends DurableObject<Env> {
     const auth = this.authorizeHttpMutation(s, participantId, connectionToken);
     if (!auth.success) return auth;
 
+    const existingTicket = await this.ctx.storage.get<string>(`ws-ticket-by-participant:${auth.participantId}`);
+    if (existingTicket) {
+      await this.ctx.storage.delete(`ws-ticket:${existingTicket}`);
+    }
+
     const ticket = generateToken();
     const record: WebSocketTicket = {
       participantId: auth.participantId,
+      connectionToken: connectionToken as string,
       expiresAt: Date.now() + WEBSOCKET_TICKET_TTL_MS,
     };
-    await this.ctx.storage.put(`ws-ticket:${ticket}`, record);
+    await Promise.all([
+      this.ctx.storage.put(`ws-ticket:${ticket}`, record),
+      this.ctx.storage.put(`ws-ticket-by-participant:${auth.participantId}`, ticket),
+    ]);
     return { success: true, ticket };
   }
 
@@ -1116,8 +1132,18 @@ export class RetroRoom extends DurableObject<Env> {
     const key = `ws-ticket:${ticket}`;
     const record = await this.ctx.storage.get<WebSocketTicket>(key);
     await this.ctx.storage.delete(key);
-    if (!record || typeof record.participantId !== "string" || typeof record.expiresAt !== "number") {
+    if (
+      !record
+      || typeof record.participantId !== "string"
+      || typeof record.connectionToken !== "string"
+      || typeof record.expiresAt !== "number"
+    ) {
       return { success: false, error: "Missing or invalid websocket ticket" };
+    }
+    const participantTicketKey = `ws-ticket-by-participant:${record.participantId}`;
+    const currentParticipantTicket = await this.ctx.storage.get<string>(participantTicketKey);
+    if (currentParticipantTicket === ticket) {
+      await this.ctx.storage.delete(participantTicketKey);
     }
     if (record.expiresAt < Date.now()) {
       return { success: false, error: "Websocket ticket expired" };
@@ -1126,6 +1152,9 @@ export class RetroRoom extends DurableObject<Env> {
     const s = await this.loadState();
     if (!this.hasParticipant(s, record.participantId)) {
       return { success: false, error: "Participant not found" };
+    }
+    if (!this.hasValidConnectionToken(s, record.participantId, record.connectionToken)) {
+      return { success: false, error: "Websocket ticket expired" };
     }
     return { success: true, participantId: record.participantId };
   }

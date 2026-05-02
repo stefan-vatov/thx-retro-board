@@ -18,6 +18,14 @@
         "limit": 10,
         "period": 60
       }
+    },
+    {
+      "name": "ROOM_ACCESS_RATE_LIMITER",
+      "namespace_id": "10002",
+      "simple": {
+        "limit": 240,
+        "period": 60
+      }
     }
   ],
   "routes": [

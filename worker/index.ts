@@ -5,11 +5,14 @@ export interface Env {
   ASSETS?: Fetcher;
   RETRO_ROOM: DurableObjectNamespace<RetroRoom>;
   ROOM_CREATE_RATE_LIMITER?: RateLimit;
+  ROOM_ACCESS_RATE_LIMITER?: RateLimit;
   TURNSTILE_SITE_KEY?: string;
   TURNSTILE_SECRET_KEY?: string;
 }
 
 export { RetroRoom } from "./retro-room";
+
+const MAX_JSON_BODY_BYTES = 32 * 1024;
 
 function getRoomStub(env: Env, roomId: string) {
   const id = env.RETRO_ROOM.idFromName(roomId);
@@ -52,18 +55,17 @@ function isLocalRequest(url: URL): boolean {
 }
 
 function hasProductionAntiAbuseConfig(env: Env): boolean {
-  return Boolean(env.TURNSTILE_SITE_KEY && env.TURNSTILE_SECRET_KEY && env.ROOM_CREATE_RATE_LIMITER);
+  return Boolean(env.TURNSTILE_SITE_KEY && env.TURNSTILE_SECRET_KEY && env.ROOM_CREATE_RATE_LIMITER && env.ROOM_ACCESS_RATE_LIMITER);
 }
 
-async function rateLimitRoomLookup(env: Env, request: Request, suffix: string): Promise<Response | null> {
-  if (!["", "join", "ws", "ws-ticket"].includes(suffix)) return null;
+async function rateLimitRoomAccess(env: Env, request: Request): Promise<Response | null> {
   const clientIp = getClientIp(request);
-  if (!env.ROOM_CREATE_RATE_LIMITER || !shouldRateLimitClientIp(clientIp)) return null;
+  if (!env.ROOM_ACCESS_RATE_LIMITER || !shouldRateLimitClientIp(clientIp)) return null;
 
-  const { success } = await env.ROOM_CREATE_RATE_LIMITER.limit({ key: `room-lookup:${clientIp}` });
+  const { success } = await env.ROOM_ACCESS_RATE_LIMITER.limit({ key: `room-access:${clientIp}` });
   return success
     ? null
-    : Response.json({ error: "Too many room lookup attempts from this network. Please wait a minute and try again." }, { status: 429 });
+    : Response.json({ error: "Too many room attempts from this network. Please wait a minute and try again." }, { status: 429 });
 }
 
 function withSecurityHeaders(response: Response): Response {
@@ -92,8 +94,15 @@ function withSecurityHeaders(response: Response): Response {
 async function readJsonBody<T>(request: Request): Promise<T | null> {
   const contentType = request.headers.get("Content-Type") ?? "";
   if (!contentType.includes("application/json")) return null;
+  const contentLength = request.headers.get("Content-Length");
+  if (contentLength !== null && Number(contentLength) > MAX_JSON_BODY_BYTES) return null;
+
+  const clone = request.clone();
+  const body = await clone.text();
+  if (body.length > MAX_JSON_BODY_BYTES) return null;
+
   try {
-    return await request.json() as T;
+    return JSON.parse(body) as T;
   } catch {
     return null;
   }
@@ -134,7 +143,7 @@ export default {
     const { pathname, method } = { pathname: url.pathname, method: request.method };
 
     if (pathname === "/api/config" && method === "GET") {
-      const turnstileSiteKey = env.TURNSTILE_SITE_KEY && env.TURNSTILE_SECRET_KEY
+      const turnstileSiteKey = hasProductionAntiAbuseConfig(env)
         ? env.TURNSTILE_SITE_KEY
         : null;
       return Response.json({ turnstileSiteKey });
@@ -175,10 +184,10 @@ export default {
       if (!isValidRoomId(roomId)) {
         return Response.json({ error: "Room not found" }, { status: 404 });
       }
-      if (!isLocalRequest(url) && !env.ROOM_CREATE_RATE_LIMITER) {
+      if (!isLocalRequest(url) && !env.ROOM_ACCESS_RATE_LIMITER) {
         return Response.json({ error: "Room access is temporarily unavailable." }, { status: 503 });
       }
-      const lookupLimit = await rateLimitRoomLookup(env, request, suffix);
+      const lookupLimit = await rateLimitRoomAccess(env, request);
       if (lookupLimit) return lookupLimit;
       const stub = getRoomStub(env, roomId);
 

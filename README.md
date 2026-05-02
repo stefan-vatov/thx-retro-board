@@ -157,9 +157,10 @@ The app is designed for short-lived, low-friction retros rather than account-bas
 - No participant names in exports.
 - Room data auto-deletes about one hour after the last participant leaves.
 - Facilitators can manually delete room data.
-- Production room creation fails closed unless Cloudflare Turnstile and the room-creation rate limiter are configured.
+- Production room creation fails closed unless Cloudflare Turnstile and both rate limiters are configured.
 - Room creation is rate-limited in the Worker per client IP.
-- Room lookup is rate-limited and malformed room IDs are rejected before a Durable Object is touched.
+- Room access is rate-limited and malformed room IDs are rejected before a Durable Object is touched.
+- JSON API bodies and WebSocket messages are size-limited before mutation handling.
 - Per-room caps limit participants, cards, groups, actions, reactions, pairwise comparisons, vote budgets, and columns.
 
 ## Scripts
@@ -185,6 +186,7 @@ Production currently targets:
 - Route: `retro.thethracian.com`
 - Durable Object binding: `RETRO_ROOM`
 - Room creation rate-limit binding: `ROOM_CREATE_RATE_LIMITER`
+- Room access rate-limit binding: `ROOM_ACCESS_RATE_LIMITER`
 - Public Turnstile site key: configured in `wrangler.jsonc`
 - Required secret: `TURNSTILE_SECRET_KEY`
 

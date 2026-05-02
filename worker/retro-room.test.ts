@@ -320,7 +320,7 @@ describe("RetroRoom Durable Object v2 schema", () => {
       phase: "write",
       columns,
       groups: [],
-      items: Array.from({ length: 1000 }, (_, index) => ({
+      items: Array.from({ length: 400 }, (_, index) => ({
         id: `item-${index}`,
         text: `Item ${index}`,
         authorId: "fac1",
@@ -334,8 +334,38 @@ describe("RetroRoom Durable Object v2 schema", () => {
     });
     await expect(stub.addItem("fac1", "One too many", firstColumnId)).resolves.toMatchObject({
       success: false,
-      error: "Rooms can have at most 1000 cards",
+      error: "Rooms can have at most 400 cards",
     });
+  });
+
+  it("allows only one outstanding websocket ticket per participant and invalidates tickets on token rotation", async () => {
+    const stub = await initRaw("test-v2-ws-ticket-rotation");
+    const joined = await stub.join("fac1", "Facilitator");
+    expect(joined.success).toBe(true);
+
+    const firstTicket = await stub.createWebSocketTicket("fac1", joined.connectionToken);
+    expect(firstTicket).toMatchObject({ success: true });
+    const secondTicket = await stub.createWebSocketTicket("fac1", joined.connectionToken);
+    expect(secondTicket).toMatchObject({ success: true });
+    expect(secondTicket.ticket).not.toBe(firstTicket.ticket);
+
+    const firstResponse = await stub.fetch(new Request("http://do/ws", {
+      headers: {
+        Upgrade: "websocket",
+        "Sec-WebSocket-Protocol": `ticket-${firstTicket.ticket}`,
+      },
+    }));
+    expect(firstResponse.status).toBe(403);
+
+    const rejoined = await stub.join("fac1", "Facilitator", joined.connectionToken);
+    expect(rejoined.success).toBe(true);
+    const staleResponse = await stub.fetch(new Request("http://do/ws", {
+      headers: {
+        Upgrade: "websocket",
+        "Sec-WebSocket-Protocol": `ticket-${secondTicket.ticket}`,
+      },
+    }));
+    expect(staleResponse.status).toBe(403);
   });
 
   it("caps pairwise target counts before storing large comparison sets", async () => {
@@ -354,7 +384,7 @@ describe("RetroRoom Durable Object v2 schema", () => {
       votes: [],
       participants: [{ id: "fac1", displayName: "Facilitator", isFacilitator: true }],
       facilitatorId: "fac1",
-      items: Array.from({ length: 81 }, (_, index) => ({
+      items: Array.from({ length: 51 }, (_, index) => ({
         id: `item-${index}`,
         text: `Item ${index}`,
         authorId: "fac1",
@@ -366,7 +396,7 @@ describe("RetroRoom Durable Object v2 schema", () => {
 
     await expect(stub.choosePairwise("fac1", itemVoteTarget("item-0"), itemVoteTarget("item-1"))).resolves.toMatchObject({
       success: false,
-      error: "Pairwise ranking supports at most 80 cards or groups",
+      error: "Pairwise ranking supports at most 50 cards or groups",
     });
   });
 
