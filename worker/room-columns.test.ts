@@ -1,7 +1,15 @@
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { createInitialStoredState } from "./room-storage";
-import { createColumnForRoom, deleteColumnForRoom } from "./room-columns";
+import {
+  createColumnForRoom,
+  createColumnForRoomEffect,
+  deleteColumnForRoom,
+  deleteColumnForRoomEffect,
+  editColumnForRoomEffect,
+  reorderColumnsForRoomEffect,
+} from "./room-columns";
 
 describe("room column commands", () => {
   it("creates setup columns for facilitators", async () => {
@@ -43,5 +51,74 @@ describe("room column commands", () => {
     expect(state.columns.some((column) => column.id === "mad")).toBe(false);
     expect(state.items).toEqual([]);
     expect(state.votes).toEqual([]);
+  });
+
+  it("creates columns through the Effect API", async () => {
+    const state = createInitialStoredState("room-a");
+    state.participants = [{ id: "fac", displayName: "Fac", isFacilitator: true }];
+    state.facilitatorId = "fac";
+
+    const result = await Effect.runPromise(createColumnForRoomEffect({
+      loadState: async () => state,
+      saveState: async () => {},
+      broadcast: () => {},
+      broadcastState: () => {},
+    }, "fac", "  Start  "));
+
+    expect(result).toMatchObject({ success: true });
+    expect(result.column?.name).toBe("Start");
+    expect(state.columns.at(-1)).toEqual(result.column);
+  });
+
+  it("edits columns through the Effect API", async () => {
+    const state = createInitialStoredState("room-a");
+    state.participants = [{ id: "fac", displayName: "Fac", isFacilitator: true }];
+    state.facilitatorId = "fac";
+
+    const result = await Effect.runPromise(editColumnForRoomEffect({
+      loadState: async () => state,
+      saveState: async () => {},
+      broadcast: () => {},
+      broadcastState: () => {},
+    }, "fac", "mad", "Signals"));
+
+    expect(result).toMatchObject({ success: true, column: { id: "mad", name: "Signals" } });
+    expect(state.columns.find((column) => column.id === "mad")?.name).toBe("Signals");
+  });
+
+  it("reorders columns through the Effect API", async () => {
+    const state = createInitialStoredState("room-a");
+    state.participants = [{ id: "fac", displayName: "Fac", isFacilitator: true }];
+    state.facilitatorId = "fac";
+
+    const result = await Effect.runPromise(reorderColumnsForRoomEffect({
+      loadState: async () => state,
+      saveState: async () => {},
+      broadcast: () => {},
+      broadcastState: () => {},
+    }, "fac", ["sad", "glad", "mad"]));
+
+    expect(result).toEqual({ success: true });
+    expect(state.columns.map((column) => [column.id, column.order])).toEqual([
+      ["sad", 0],
+      ["glad", 1],
+      ["mad", 2],
+    ]);
+  });
+
+  it("deletes columns through the Effect API", async () => {
+    const state = createInitialStoredState("room-a");
+    state.participants = [{ id: "fac", displayName: "Fac", isFacilitator: true }];
+    state.facilitatorId = "fac";
+
+    const result = await Effect.runPromise(deleteColumnForRoomEffect({
+      loadState: async () => state,
+      saveState: async () => {},
+      broadcast: () => {},
+      broadcastState: () => {},
+    }, "fac", "sad"));
+
+    expect(result).toEqual({ success: true });
+    expect(state.columns.map((column) => column.id)).toEqual(["mad", "glad"]);
   });
 });

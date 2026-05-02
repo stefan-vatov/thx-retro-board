@@ -19,24 +19,34 @@ export async function createGroupForRoom(
   rawName: string,
   columnId?: string,
 ): Promise<{ success: boolean; error?: string; group?: Group }> {
-  const s = await host.loadState();
-  const validation = await Effect.runPromise(Effect.either(validateGroupCreateEffect(s, participantId, rawName, columnId)));
-  if (validation._tag === "Left") {
-    return { success: false, error: validation.left.message };
-  }
-  const validated = validation.right;
+  return Effect.runPromise(createGroupForRoomEffect(host, participantId, rawName, columnId));
+}
 
-  const group: Group = {
-    id: crypto.randomUUID(),
-    name: validated.name,
-    columnId: validated.columnId,
-    order: validated.order,
-  };
-  s.groups.push(group);
-  await host.saveState();
-  host.broadcastState(s);
+export function createGroupForRoomEffect(
+  host: RoomCommandHost,
+  participantId: string,
+  rawName: string,
+  columnId?: string,
+): Effect.Effect<{ success: boolean; error?: string; group?: Group }> {
+  return Effect.gen(function* () {
+    const s = yield* Effect.promise(() => host.loadState());
+    const validation = yield* Effect.either(validateGroupCreateEffect(s, participantId, rawName, columnId));
+    if (validation._tag === "Left") {
+      return { success: false, error: validation.left.message };
+    }
 
-  return { success: true, group };
+    const group: Group = {
+      id: crypto.randomUUID(),
+      name: validation.right.name,
+      columnId: validation.right.columnId,
+      order: validation.right.order,
+    };
+    s.groups.push(group);
+    yield* Effect.promise(() => host.saveState());
+    host.broadcastState(s);
+
+    return { success: true, group };
+  });
 }
 
 export async function editGroupForRoom(
@@ -45,16 +55,27 @@ export async function editGroupForRoom(
   groupId: string,
   rawName: string,
 ): Promise<{ success: boolean; error?: string; group?: Group }> {
-  const s = await host.loadState();
-  const validation = await Effect.runPromise(Effect.either(validateGroupEditEffect(s, participantId, groupId, rawName)));
-  if (validation._tag === "Left") {
-    return { success: false, error: validation.left.message };
-  }
-  const validated = validation.right;
-  s.groups = validated.groups;
-  await host.saveState();
-  host.broadcastState(s);
-  return { success: true, group: validated.group };
+  return Effect.runPromise(editGroupForRoomEffect(host, participantId, groupId, rawName));
+}
+
+export function editGroupForRoomEffect(
+  host: RoomCommandHost,
+  participantId: string,
+  groupId: string,
+  rawName: string,
+): Effect.Effect<{ success: boolean; error?: string; group?: Group }> {
+  return Effect.gen(function* () {
+    const s = yield* Effect.promise(() => host.loadState());
+    const validation = yield* Effect.either(validateGroupEditEffect(s, participantId, groupId, rawName));
+    if (validation._tag === "Left") {
+      return { success: false, error: validation.left.message };
+    }
+
+    s.groups = validation.right.groups;
+    yield* Effect.promise(() => host.saveState());
+    host.broadcastState(s);
+    return { success: true, group: validation.right.group };
+  });
 }
 
 export async function deleteGroupForRoom(
@@ -62,20 +83,30 @@ export async function deleteGroupForRoom(
   participantId: string,
   groupId: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const s = await host.loadState();
-  const validation = await Effect.runPromise(Effect.either(validateGroupDeleteEffect(s, participantId, groupId)));
-  if (validation._tag === "Left") {
-    return { success: false, error: validation.left.message };
-  }
-  const validated = validation.right;
-  s.groups = validated.groups;
-  s.items = validated.items;
-  s.votes = validated.votes;
-  s.pairwiseChoices = normalizePairwiseChoices(s.pairwiseChoices, s.participants, s.groups, s.items);
-  s.reactions = (s.reactions ?? []).filter((reaction) => !sameVoteTarget(reaction.target, groupVoteTarget(groupId)));
-  await host.saveState();
-  host.broadcastState(s);
-  return { success: true };
+  return Effect.runPromise(deleteGroupForRoomEffect(host, participantId, groupId));
+}
+
+export function deleteGroupForRoomEffect(
+  host: RoomCommandHost,
+  participantId: string,
+  groupId: string,
+): Effect.Effect<{ success: boolean; error?: string }> {
+  return Effect.gen(function* () {
+    const s = yield* Effect.promise(() => host.loadState());
+    const validation = yield* Effect.either(validateGroupDeleteEffect(s, participantId, groupId));
+    if (validation._tag === "Left") {
+      return { success: false, error: validation.left.message };
+    }
+
+    s.groups = validation.right.groups;
+    s.items = validation.right.items;
+    s.votes = validation.right.votes;
+    s.pairwiseChoices = normalizePairwiseChoices(s.pairwiseChoices, s.participants, s.groups, s.items);
+    s.reactions = (s.reactions ?? []).filter((reaction) => !sameVoteTarget(reaction.target, groupVoteTarget(groupId)));
+    yield* Effect.promise(() => host.saveState());
+    host.broadcastState(s);
+    return { success: true };
+  });
 }
 
 export async function reorderGroupsForRoom(
@@ -84,16 +115,27 @@ export async function reorderGroupsForRoom(
   orderedIds: unknown,
   expectedVersion?: unknown,
 ): Promise<{ success: boolean; error?: string }> {
-  const s = await host.loadState();
-  const validation = await Effect.runPromise(Effect.either(validateGroupReorderEffect(s, participantId, orderedIds, expectedVersion)));
-  if (validation._tag === "Left") {
-    return { success: false, error: validation.left.message };
-  }
+  return Effect.runPromise(reorderGroupsForRoomEffect(host, participantId, orderedIds, expectedVersion));
+}
 
-  s.groups = validation.right.groups;
-  await host.saveState();
-  host.broadcastState(s);
-  return { success: true };
+export function reorderGroupsForRoomEffect(
+  host: RoomCommandHost,
+  participantId: string,
+  orderedIds: unknown,
+  expectedVersion?: unknown,
+): Effect.Effect<{ success: boolean; error?: string }> {
+  return Effect.gen(function* () {
+    const s = yield* Effect.promise(() => host.loadState());
+    const validation = yield* Effect.either(validateGroupReorderEffect(s, participantId, orderedIds, expectedVersion));
+    if (validation._tag === "Left") {
+      return { success: false, error: validation.left.message };
+    }
+
+    s.groups = validation.right.groups;
+    yield* Effect.promise(() => host.saveState());
+    host.broadcastState(s);
+    return { success: true };
+  });
 }
 
 export async function reorderItemsForRoom(
@@ -102,19 +144,30 @@ export async function reorderItemsForRoom(
   orderedIds: unknown,
   preconditions?: Partial<ItemReorderPreconditions>,
 ): Promise<{ success: boolean; error?: string }> {
-  const s = await host.loadState();
-  const validation = await Effect.runPromise(Effect.either(validateItemReorderEffect(s, participantId, orderedIds, preconditions)));
-  if (validation._tag === "Left") {
-    return { success: false, error: validation.left.message };
-  }
+  return Effect.runPromise(reorderItemsForRoomEffect(host, participantId, orderedIds, preconditions));
+}
 
-  s.items = validation.right.items;
-  await host.saveState();
+export function reorderItemsForRoomEffect(
+  host: RoomCommandHost,
+  participantId: string,
+  orderedIds: unknown,
+  preconditions?: Partial<ItemReorderPreconditions>,
+): Effect.Effect<{ success: boolean; error?: string }> {
+  return Effect.gen(function* () {
+    const s = yield* Effect.promise(() => host.loadState());
+    const validation = yield* Effect.either(validateItemReorderEffect(s, participantId, orderedIds, preconditions));
+    if (validation._tag === "Left") {
+      return { success: false, error: validation.left.message };
+    }
 
-  host.broadcast({ type: "items-reordered", items: s.items });
-  host.broadcastState(s);
+    s.items = validation.right.items;
+    yield* Effect.promise(() => host.saveState());
 
-  return { success: true };
+    host.broadcast({ type: "items-reordered", items: s.items });
+    host.broadcastState(s);
+
+    return { success: true };
+  });
 }
 
 export async function moveItemToGroupForRoom(
@@ -125,22 +178,42 @@ export async function moveItemToGroupForRoom(
   targetIndex: number,
   preconditions?: Partial<MoveItemPreconditions>,
 ): Promise<{ success: boolean; error?: string }> {
-  const s = await host.loadState();
-  const validation = await Effect.runPromise(Effect.either(validateItemMoveEffect(
-    s,
+  return Effect.runPromise(moveItemToGroupForRoomEffect(
+    host,
     participantId,
     itemId,
     targetGroupId,
     targetIndex,
     preconditions,
-  )));
-  if (validation._tag === "Left") {
-    return { success: false, error: validation.left.message };
-  }
+  ));
+}
 
-  s.items = validation.right.items;
-  await host.saveState();
-  host.broadcastState(s);
+export function moveItemToGroupForRoomEffect(
+  host: RoomCommandHost,
+  participantId: string,
+  itemId: string,
+  targetGroupId: string | null,
+  targetIndex: number,
+  preconditions?: Partial<MoveItemPreconditions>,
+): Effect.Effect<{ success: boolean; error?: string }> {
+  return Effect.gen(function* () {
+    const s = yield* Effect.promise(() => host.loadState());
+    const validation = yield* Effect.either(validateItemMoveEffect(
+      s,
+      participantId,
+      itemId,
+      targetGroupId,
+      targetIndex,
+      preconditions,
+    ));
+    if (validation._tag === "Left") {
+      return { success: false, error: validation.left.message };
+    }
 
-  return { success: true };
+    s.items = validation.right.items;
+    yield* Effect.promise(() => host.saveState());
+    host.broadcastState(s);
+
+    return { success: true };
+  });
 }
