@@ -132,6 +132,9 @@ type ColumnEditValidationState = Pick<StoredState, "facilitatorId" | "participan
 type ColumnReorderValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase" | "columns">;
 type ColumnDeleteValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase" | "columns" | "groups" | "items" | "votes">;
 type GroupCreateValidationState = Pick<StoredState, "participants" | "phase" | "columns" | "groups">;
+type GroupEditValidationState = Pick<StoredState, "participants" | "phase" | "groups">;
+type GroupDeleteValidationState = Pick<StoredState, "participants" | "phase" | "groups" | "items" | "votes">;
+type GroupReorderValidationState = Pick<StoredState, "participants" | "phase" | "groups" | "version">;
 type ReviewActionValidationState = Pick<StoredState, "participants" | "phase">;
 type WriteItemCreateValidationState = Pick<StoredState, "participants" | "phase" | "items" | "columns">;
 type WriteItemEditValidationState = Pick<StoredState, "participants" | "phase" | "items">;
@@ -423,6 +426,93 @@ export function validateGroupCreateEffect(
       columnId,
       order: state.groups.filter((candidate) => candidate.columnId === columnId).length,
     };
+  });
+}
+
+export function validateGroupEditEffect(
+  state: GroupEditValidationState,
+  participantId: string,
+  groupId: string,
+  rawName: string,
+): Effect.Effect<{ groups: Group[]; group: Group }, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    if (state.phase !== "organise") {
+      return yield* Effect.fail(new RoomMutationValidationError("Cannot mutate groups outside organise phase"));
+    }
+    if (!state.participants.some((participant) => participant.id === participantId)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Participant not found"));
+    }
+    if (typeof groupId !== "string" || groupId.trim().length === 0) {
+      return yield* Effect.fail(new RoomMutationValidationError("Group not found"));
+    }
+    const result = applyEditGroup(state.groups, groupId, rawName);
+    if (result.error) {
+      return yield* Effect.fail(new RoomMutationValidationError(result.error));
+    }
+    const group = result.groups.find((candidate) => candidate.id === groupId);
+    if (!group) {
+      return yield* Effect.fail(new RoomMutationValidationError("Group not found"));
+    }
+    return { groups: result.groups, group };
+  });
+}
+
+export function validateGroupDeleteEffect(
+  state: GroupDeleteValidationState,
+  participantId: string,
+  groupId: string,
+): Effect.Effect<{
+  groups: Group[];
+  items: RetroItem[];
+  votes: VoteAllocation[];
+}, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    if (state.phase !== "organise") {
+      return yield* Effect.fail(new RoomMutationValidationError("Cannot mutate groups outside organise phase"));
+    }
+    if (!state.participants.some((participant) => participant.id === participantId)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Participant not found"));
+    }
+    if (typeof groupId !== "string" || groupId.trim().length === 0) {
+      return yield* Effect.fail(new RoomMutationValidationError("Group not found"));
+    }
+    const result = applyDeleteGroup(state.groups, state.items, state.votes, groupId);
+    if (result.error) {
+      return yield* Effect.fail(new RoomMutationValidationError(result.error));
+    }
+    return {
+      groups: result.groups,
+      items: result.items,
+      votes: result.votes,
+    };
+  });
+}
+
+export function validateGroupReorderEffect(
+  state: GroupReorderValidationState,
+  participantId: string,
+  orderedIds: unknown,
+  expectedVersion: unknown,
+): Effect.Effect<{ groups: Group[] }, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    if (state.phase !== "organise") {
+      return yield* Effect.fail(new RoomMutationValidationError("Cannot mutate groups outside organise phase"));
+    }
+    if (!state.participants.some((participant) => participant.id === participantId)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Participant not found"));
+    }
+    const validatedVersion = validateExpectedVersion(expectedVersion);
+    if (!validatedVersion.success) {
+      return yield* Effect.fail(new RoomMutationValidationError(validatedVersion.error));
+    }
+    if (validatedVersion.expectedVersion !== state.version) {
+      return yield* Effect.fail(new RoomMutationValidationError("Stale group reorder rejected: room version changed"));
+    }
+    const validation = validateGroupReorderPayload(state.groups, orderedIds);
+    if (!validation.valid) {
+      return yield* Effect.fail(new RoomMutationValidationError(validation.error));
+    }
+    return { groups: applyReorderColumnGroups(state.groups, validation.ids) };
   });
 }
 
@@ -1918,49 +2008,29 @@ export class RetroRoom extends DurableObject<Env> {
     return { success: true };
   }
 
-  private canMutateGroups(s: StoredState, participantId: string): { success: true } | { success: false; error: string } {
-    if (s.phase !== "organise") {
-      return { success: false, error: "Cannot mutate groups outside organise phase" };
-    }
-    if (!this.hasParticipant(s, participantId)) {
-      return { success: false, error: "Participant not found" };
-    }
-    return { success: true };
-  }
-
   async editGroup(participantId: string, groupId: string, rawName: string): Promise<{ success: boolean; error?: string; group?: Group }> {
     const s = await this.loadState();
-    const allowed = this.canMutateGroups(s, participantId);
-    if (!allowed.success) return allowed;
-    if (typeof groupId !== "string" || groupId.trim().length === 0) {
-      return { success: false, error: "Group not found" };
+    const validation = await Effect.runPromise(Effect.either(validateGroupEditEffect(s, participantId, groupId, rawName)));
+    if (validation._tag === "Left") {
+      return { success: false, error: validation.left.message };
     }
-
-    const result = applyEditGroup(s.groups, groupId, rawName);
-    if (result.error) {
-      return { success: false, error: result.error };
-    }
-    s.groups = result.groups;
+    const validated = validation.right;
+    s.groups = validated.groups;
     await this.saveState();
     this.broadcastState(s);
-    return { success: true, group: s.groups.find((group) => group.id === groupId) };
+    return { success: true, group: validated.group };
   }
 
   async deleteGroup(participantId: string, groupId: string): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
-    const allowed = this.canMutateGroups(s, participantId);
-    if (!allowed.success) return allowed;
-    if (typeof groupId !== "string" || groupId.trim().length === 0) {
-      return { success: false, error: "Group not found" };
+    const validation = await Effect.runPromise(Effect.either(validateGroupDeleteEffect(s, participantId, groupId)));
+    if (validation._tag === "Left") {
+      return { success: false, error: validation.left.message };
     }
-
-    const result = applyDeleteGroup(s.groups, s.items, s.votes, groupId);
-    if (result.error) {
-      return { success: false, error: result.error };
-    }
-    s.groups = result.groups;
-    s.items = result.items;
-    s.votes = result.votes;
+    const validated = validation.right;
+    s.groups = validated.groups;
+    s.items = validated.items;
+    s.votes = validated.votes;
     s.pairwiseChoices = normalizePairwiseChoices(s.pairwiseChoices, s.participants, s.groups, s.items);
     s.reactions = (s.reactions ?? []).filter((reaction) => !sameVoteTarget(reaction.target, groupVoteTarget(groupId)));
     await this.saveState();
@@ -1970,23 +2040,12 @@ export class RetroRoom extends DurableObject<Env> {
 
   async reorderGroups(participantId: string, orderedIds: unknown, expectedVersion?: unknown): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
-    const allowed = this.canMutateGroups(s, participantId);
-    if (!allowed.success) return allowed;
-
-    const validatedVersion = validateExpectedVersion(expectedVersion);
-    if (!validatedVersion.success) {
-      return validatedVersion;
-    }
-    if (validatedVersion.expectedVersion !== s.version) {
-      return { success: false, error: "Stale group reorder rejected: room version changed" };
+    const validation = await Effect.runPromise(Effect.either(validateGroupReorderEffect(s, participantId, orderedIds, expectedVersion)));
+    if (validation._tag === "Left") {
+      return { success: false, error: validation.left.message };
     }
 
-    const validation = validateGroupReorderPayload(s.groups, orderedIds);
-    if (!validation.valid) {
-      return { success: false, error: validation.error };
-    }
-
-    s.groups = applyReorderColumnGroups(s.groups, validation.ids);
+    s.groups = validation.right.groups;
     await this.saveState();
     this.broadcastState(s);
     return { success: true };

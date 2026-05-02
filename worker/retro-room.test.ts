@@ -13,6 +13,9 @@ import {
   validateColumnEditEffect,
   validateColumnReorderEffect,
   validateGroupCreateEffect,
+  validateGroupDeleteEffect,
+  validateGroupEditEffect,
+  validateGroupReorderEffect,
   validateWriteItemCreateEffect,
   validateWriteItemDeleteEffect,
   validateWriteItemEditEffect,
@@ -265,6 +268,90 @@ describe("RetroRoom Durable Object v2 schema", () => {
 
     const missingColumn = await Effect.runPromiseExit(validateGroupCreateEffect(state, "p1", "New theme", "missing"));
     expect(Exit.isFailure(missingColumn)).toBe(true);
+  });
+
+  it("validates group edits through Effect before state changes", async () => {
+    const state = {
+      participants: [{ id: "p1", displayName: "Pat", isFacilitator: false }],
+      phase: "organise",
+      groups: [
+        { id: "group-1", columnId: "col-1", name: "Existing", order: 0 },
+        { id: "group-2", columnId: "col-1", name: "Other", order: 1 },
+      ],
+    };
+
+    await expect(Effect.runPromise(validateGroupEditEffect(state, "p1", "group-1", "  Renamed  "))).resolves.toEqual({
+      groups: [
+        { id: "group-1", columnId: "col-1", name: "Renamed", order: 0 },
+        { id: "group-2", columnId: "col-1", name: "Other", order: 1 },
+      ],
+      group: { id: "group-1", columnId: "col-1", name: "Renamed", order: 0 },
+    });
+
+    const duplicateName = await Effect.runPromiseExit(validateGroupEditEffect(state, "p1", "group-1", "Other"));
+    expect(Exit.isFailure(duplicateName)).toBe(true);
+
+    const missingGroup = await Effect.runPromiseExit(validateGroupEditEffect(state, "p1", "missing", "Renamed"));
+    expect(Exit.isFailure(missingGroup)).toBe(true);
+  });
+
+  it("validates group deletes through Effect before state changes", async () => {
+    const state = {
+      participants: [{ id: "p1", displayName: "Pat", isFacilitator: false }],
+      phase: "organise",
+      groups: [
+        { id: "group-1", columnId: "col-1", name: "Existing", order: 0 },
+        { id: "group-2", columnId: "col-1", name: "Other", order: 1 },
+      ],
+      items: [
+        { id: "item-1", text: "Grouped", authorId: "p1", columnId: "col-1", groupId: "group-1", order: 0 },
+        { id: "item-2", text: "Free", authorId: "p1", columnId: "col-1", groupId: null, order: 0 },
+      ],
+      votes: [
+        { participantId: "p1", target: groupVoteTarget("group-1"), weight: 1 },
+        { participantId: "p1", target: itemVoteTarget("item-2"), weight: 1 },
+      ],
+    };
+
+    await expect(Effect.runPromise(validateGroupDeleteEffect(state, "p1", "group-1"))).resolves.toEqual({
+      groups: [{ id: "group-2", columnId: "col-1", name: "Other", order: 0 }],
+      items: [
+        { id: "item-1", text: "Grouped", authorId: "p1", columnId: "col-1", groupId: null, order: 1 },
+        { id: "item-2", text: "Free", authorId: "p1", columnId: "col-1", groupId: null, order: 0 },
+      ],
+      votes: [{ participantId: "p1", target: itemVoteTarget("item-2"), weight: 1 }],
+    });
+
+    const missingGroup = await Effect.runPromiseExit(validateGroupDeleteEffect(state, "p1", "missing"));
+    expect(Exit.isFailure(missingGroup)).toBe(true);
+
+    const wrongPhase = await Effect.runPromiseExit(validateGroupDeleteEffect({ ...state, phase: "write" }, "p1", "group-1"));
+    expect(Exit.isFailure(wrongPhase)).toBe(true);
+  });
+
+  it("validates group reorders through Effect before state changes", async () => {
+    const state = {
+      participants: [{ id: "p1", displayName: "Pat", isFacilitator: false }],
+      phase: "organise",
+      version: 7,
+      groups: [
+        { id: "group-1", columnId: "col-1", name: "First", order: 0 },
+        { id: "group-2", columnId: "col-1", name: "Second", order: 1 },
+      ],
+    };
+
+    await expect(Effect.runPromise(validateGroupReorderEffect(state, "p1", ["group-2", "group-1"], 7))).resolves.toEqual({
+      groups: [
+        { id: "group-1", columnId: "col-1", name: "First", order: 1 },
+        { id: "group-2", columnId: "col-1", name: "Second", order: 0 },
+      ],
+    });
+
+    const staleVersion = await Effect.runPromiseExit(validateGroupReorderEffect(state, "p1", ["group-2", "group-1"], 6));
+    expect(Exit.isFailure(staleVersion)).toBe(true);
+
+    const missingGroup = await Effect.runPromiseExit(validateGroupReorderEffect(state, "p1", ["group-2"], 7));
+    expect(Exit.isFailure(missingGroup)).toBe(true);
   });
 
   it("validates review action mutations through Effect before state changes", async () => {
