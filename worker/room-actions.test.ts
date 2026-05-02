@@ -2,8 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import type { ServerToClientMessage } from "../src/domain";
 import { createInitialStoredState } from "./room-storage";
-import { createActionForRoom } from "./room-actions";
+import {
+  createActionForRoom,
+  createActionForRoomEffect,
+  deleteActionForRoomEffect,
+  editActionForRoomEffect,
+} from "./room-actions";
 import type { StoredState } from "./room-types";
+import { Effect } from "effect";
 
 describe("room action commands", () => {
   it("creates review actions through the room command host", async () => {
@@ -47,5 +53,51 @@ describe("room action commands", () => {
 
     expect(result).toEqual({ success: false, error: "Cannot add actions outside review phase" });
     expect(state.actions).toEqual([]);
+  });
+
+  it("exposes an Effect-native action creation command", async () => {
+    const state = createInitialStoredState("room-effect");
+    state.phase = "review";
+    state.participants = [{ id: "participant-a", displayName: "A", isFacilitator: false }];
+    let saved = false;
+
+    const result = await Effect.runPromise(createActionForRoomEffect({
+      loadState: async () => state,
+      saveState: async () => {
+        saved = true;
+      },
+      broadcast: () => {},
+      broadcastState: () => {},
+    }, "participant-a", "  Effect action  "));
+
+    expect(result).toMatchObject({ success: true });
+    expect(saved).toBe(true);
+    expect(result.action?.text).toBe("Effect action");
+  });
+
+  it("exposes Effect-native action edit and delete commands", async () => {
+    const state = createInitialStoredState("room-effect-edit-delete");
+    state.phase = "review";
+    state.participants = [{ id: "participant-a", displayName: "A", isFacilitator: false }];
+    state.actions = [
+      { id: "action-a", text: "Old action", authorId: "participant-a", order: 0 },
+      { id: "action-b", text: "Second action", authorId: "participant-a", order: 1 },
+    ];
+    let saveCount = 0;
+    const host = {
+      loadState: async () => state,
+      saveState: async () => {
+        saveCount += 1;
+      },
+      broadcast: () => {},
+      broadcastState: () => {},
+    };
+
+    const editResult = await Effect.runPromise(editActionForRoomEffect(host, "participant-a", "action-a", "  New action  "));
+    expect(editResult).toMatchObject({ success: true, action: { id: "action-a", text: "New action" } });
+    const deleteResult = await Effect.runPromise(deleteActionForRoomEffect(host, "participant-a", "action-a"));
+    expect(deleteResult).toEqual({ success: true });
+    expect(state.actions).toEqual([{ id: "action-b", text: "Second action", authorId: "participant-a", order: 0 }]);
+    expect(saveCount).toBe(2);
   });
 });
