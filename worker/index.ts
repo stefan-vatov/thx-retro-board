@@ -7,6 +7,12 @@ import {
   ROOM_ID_LENGTH,
 } from "../src/domain";
 import {
+  getRateLimitKey,
+  hasProductionAntiAbuseConfig,
+  isLocalRequest,
+  rateLimitRoomAccess,
+} from "./anti-abuse";
+import {
   readJsonBody,
   readValidatedJsonBody,
 } from "./http-effect";
@@ -103,34 +109,6 @@ function roomNotFoundResponse(suffix: string): Response {
     : Response.json({ success: false, error: "Room not found" }, { status: 404 });
 }
 
-function getClientIp(request: Request): string | null {
-  return request.headers.get("CF-Connecting-IP");
-}
-
-function isLocalRequest(url: URL): boolean {
-  return url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1";
-}
-
-function hasProductionAntiAbuseConfig(env: Env): boolean {
-  return Boolean(env.TURNSTILE_SITE_KEY && env.TURNSTILE_SECRET_KEY && env.ROOM_CREATE_RATE_LIMITER && env.ROOM_ACCESS_RATE_LIMITER);
-}
-
-function getRateLimitKey(request: Request, url: URL, prefix: string): string | null {
-  if (isLocalRequest(url)) return null;
-  const clientIp = getClientIp(request);
-  return `${prefix}:${clientIp && clientIp.trim().length > 0 ? clientIp : "unknown"}`;
-}
-
-async function rateLimitRoomAccess(env: Env, request: Request, url: URL): Promise<Response | null> {
-  const key = getRateLimitKey(request, url, "room-access");
-  if (!env.ROOM_ACCESS_RATE_LIMITER || !key) return null;
-
-  const { success } = await env.ROOM_ACCESS_RATE_LIMITER.limit({ key });
-  return success
-    ? null
-    : Response.json({ error: "Too many room attempts from this network. Please wait a minute and try again." }, { status: 429 });
-}
-
 function withSecurityHeaders(response: Response): Response {
   const secured = new Response(response.body, response);
   secured.headers.set("Content-Security-Policy", [
@@ -184,7 +162,7 @@ export default {
           ? {}
           : await Effect.runPromiseExit(Schema.decodeUnknown(CreateRoomRequestSchema)(rawBody)).then((decoded) =>
               decoded._tag === "Success" ? decoded.value : {});
-        const clientIp = getClientIp(request);
+        const clientIp = request.headers.get("CF-Connecting-IP");
         const turnstile = await verifyTurnstileToken({ secret: env.TURNSTILE_SECRET_KEY }, body?.turnstileToken, clientIp ?? "unknown");
         if (!turnstile.success) {
           return Response.json({ error: turnstile.error }, { status: 403 });
@@ -210,7 +188,7 @@ export default {
       if (!isLocalRequest(url) && !env.ROOM_ACCESS_RATE_LIMITER) {
         return Response.json({ error: "Room access is temporarily unavailable." }, { status: 503 });
       }
-      const lookupLimit = await rateLimitRoomAccess(env, request, url);
+      const lookupLimit = await rateLimitRoomAccess(env, request);
       if (lookupLimit) return lookupLimit;
       const stub = getRoomStub(env, roomId);
       const hasRoom = await stub.hasRoom();
