@@ -222,4 +222,4 @@ Issues and pull requests are welcome. Keep changes focused, add tests for state-
 
 ## License
 
-No open-source license has been selected yet. Until a license is added, the code is source-visible but not automatically licensed for reuse.
+MIT License. See [LICENSE](./LICENSE) for the full text.
