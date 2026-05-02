@@ -2,8 +2,6 @@ import { Effect, Schema } from "effect";
 import type { RetroRoom } from "./retro-room";
 import {
   generateRoomId,
-  PhaseSchema,
-  RankingMethodSchema,
   ROOM_ID_LENGTH,
 } from "../src/domain";
 import {
@@ -16,6 +14,18 @@ import {
   readJsonBody,
   readValidatedJsonBody,
 } from "./http-effect";
+import {
+  AddItemRequestSchema,
+  CreateRoomRequestSchema,
+  EditItemRequestSchema,
+  JoinRoomRequestSchema,
+  OptionalConnectionTokenSchema,
+  PhaseRequestSchema,
+  RankingMethodRequestSchema,
+  ReviewTargetRequestSchema,
+  TimerRequestSchema,
+  VoteBudgetRequestSchema,
+} from "./room-request-schemas";
 import { verifyTurnstileToken } from "./turnstile";
 
 export interface Env {
@@ -30,56 +40,6 @@ export interface Env {
 export { RetroRoom } from "./retro-room";
 
 const MAX_JSON_BODY_BYTES = 32 * 1024;
-const OptionalConnectionTokenSchema = Schema.Struct({
-  participantId: Schema.String,
-  connectionToken: Schema.optional(Schema.String),
-});
-const CreateRoomRequestSchema = Schema.Struct({
-  turnstileToken: Schema.optional(Schema.String),
-});
-const JoinRoomRequestSchema = Schema.Struct({
-  participantId: Schema.String,
-  displayName: Schema.String,
-  connectionToken: Schema.optional(Schema.String),
-  facilitatorClaimToken: Schema.optional(Schema.String),
-});
-const VoteBudgetRequestSchema = Schema.Struct({
-  participantId: Schema.String,
-  connectionToken: Schema.optional(Schema.String),
-  budget: Schema.Number,
-});
-const RankingMethodRequestSchema = Schema.Struct({
-  participantId: Schema.String,
-  connectionToken: Schema.optional(Schema.String),
-  rankingMethod: RankingMethodSchema,
-});
-const PhaseRequestSchema = Schema.Struct({
-  participantId: Schema.String,
-  connectionToken: Schema.optional(Schema.String),
-  phase: PhaseSchema,
-});
-const AddItemRequestSchema = Schema.Struct({
-  participantId: Schema.String,
-  connectionToken: Schema.optional(Schema.String),
-  text: Schema.String,
-  columnId: Schema.optional(Schema.String),
-});
-const EditItemRequestSchema = Schema.Struct({
-  participantId: Schema.String,
-  connectionToken: Schema.optional(Schema.String),
-  text: Schema.String,
-});
-const TimerRequestSchema = Schema.Struct({
-  participantId: Schema.String,
-  connectionToken: Schema.optional(Schema.String),
-  durationSeconds: Schema.Number,
-});
-const ReviewTargetRequestSchema = Schema.Struct({
-  participantId: Schema.String,
-  connectionToken: Schema.optional(Schema.String),
-  reviewTargetKey: Schema.NullOr(Schema.String),
-});
-
 function getRoomStub(env: Env, roomId: string) {
   const id = env.RETRO_ROOM.idFromName(roomId);
   return env.RETRO_ROOM.get(id);

@@ -1,64 +1,18 @@
-import { Schema } from "effect";
 import type { Phase, RankingMethod, RoomState } from "../src/domain";
-import { PhaseSchema, RankingMethodSchema } from "../src/domain";
 import { readValidatedJsonBody } from "./http-effect";
+import {
+  AddItemRequestSchema,
+  EditItemRequestSchema,
+  JoinRoomRequestSchema,
+  OptionalConnectionTokenSchema,
+  PhaseRequestSchema,
+  RankingMethodRequestSchema,
+  ReviewTargetRequestSchema,
+  TimerRequestSchema,
+  VoteBudgetRequestSchema,
+} from "./room-request-schemas";
 import type { StoredState } from "./room-types";
 import { MAX_WEBSOCKET_MESSAGE_BYTES } from "./room-types";
-
-const OptionalConnectionTokenSchema = Schema.Struct({
-  participantId: Schema.String,
-  connectionToken: Schema.optional(Schema.String),
-});
-
-const JoinRequestSchema = Schema.Struct({
-  participantId: Schema.String,
-  displayName: Schema.String,
-  connectionToken: Schema.optional(Schema.String),
-  facilitatorClaimToken: Schema.optional(Schema.String),
-});
-
-const VoteBudgetRequestSchema = Schema.Struct({
-  participantId: Schema.String,
-  connectionToken: Schema.optional(Schema.String),
-  budget: Schema.Number,
-});
-
-const RankingMethodRequestSchema = Schema.Struct({
-  participantId: Schema.String,
-  connectionToken: Schema.optional(Schema.String),
-  rankingMethod: RankingMethodSchema,
-});
-
-const PhaseRequestSchema = Schema.Struct({
-  participantId: Schema.String,
-  connectionToken: Schema.optional(Schema.String),
-  phase: PhaseSchema,
-});
-
-const AddItemRequestSchema = Schema.Struct({
-  participantId: Schema.String,
-  connectionToken: Schema.optional(Schema.String),
-  text: Schema.String,
-  columnId: Schema.optional(Schema.String),
-});
-
-const EditItemRequestSchema = Schema.Struct({
-  participantId: Schema.String,
-  connectionToken: Schema.optional(Schema.String),
-  text: Schema.String,
-});
-
-const TimerRequestSchema = Schema.Struct({
-  participantId: Schema.String,
-  connectionToken: Schema.optional(Schema.String),
-  durationSeconds: Schema.Number,
-});
-
-const ReviewTargetRequestSchema = Schema.Struct({
-  participantId: Schema.String,
-  connectionToken: Schema.optional(Schema.String),
-  reviewTargetKey: Schema.NullOr(Schema.String),
-});
 
 type RoomResult<T extends object = object> = Promise<{ success: boolean; error?: string } & T>;
 
@@ -102,7 +56,7 @@ export async function handleRoomHttpRequest(room: RoomHttpController, request: R
   const url = new URL(request.url);
 
   if (url.pathname === "/join" && request.method === "POST") {
-    const body = await readValidatedJsonBody(request, JoinRequestSchema, { maxBytes: MAX_WEBSOCKET_MESSAGE_BYTES });
+    const body = await readValidatedJsonBody(request, JoinRoomRequestSchema, { maxBytes: MAX_WEBSOCKET_MESSAGE_BYTES });
     if (body instanceof Response) return body;
     return Response.json(await room.join(body.participantId, body.displayName, body.connectionToken, body.facilitatorClaimToken));
   }

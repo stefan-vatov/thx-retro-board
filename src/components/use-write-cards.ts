@@ -35,6 +35,13 @@ export function useWriteCards({
   const [editingItemText, setEditingItemText] = useState("");
   const sortedRoomColumns = roomState ? getSortedColumns(roomState) : [];
 
+  function restoreColumnInputFocus(columnId: string) {
+    const focusInput = () => columnInputRefs.current[columnId]?.focus();
+    window.requestAnimationFrame(focusInput);
+    window.setTimeout(focusInput, 50);
+    window.setTimeout(focusInput, 150);
+  }
+
   function handleColumnInputChange(columnId: string, value: string) {
     setColumnInputs((current) => ({ ...current, [columnId]: value }));
     setColumnErrors((current) => ({ ...current, [columnId]: undefined }));
@@ -82,9 +89,7 @@ export function useWriteCards({
     const columnId = restoreColumnFocusRef.current;
     if (!columnId || pendingColumnId !== null) return;
     restoreColumnFocusRef.current = null;
-    window.requestAnimationFrame(() => {
-      columnInputRefs.current[columnId]?.focus();
-    });
+    restoreColumnInputFocus(columnId);
   }, [pendingColumnId, roomState?.version]);
 
   function handleStartEditItem(item: RetroItem) {
