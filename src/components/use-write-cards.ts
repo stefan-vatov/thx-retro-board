@@ -36,7 +36,14 @@ export function useWriteCards({
   const sortedRoomColumns = roomState ? getSortedColumns(roomState) : [];
 
   function restoreColumnInputFocus(columnId: string) {
-    const focusInput = () => columnInputRefs.current[columnId]?.focus();
+    const focusInput = () => {
+      const target = columnInputRefs.current[columnId];
+      const active = document.activeElement;
+      const activeTag = active?.tagName.toLowerCase();
+      const activeIsEditable = activeTag === "input" || activeTag === "textarea" || activeTag === "select" || active?.getAttribute("contenteditable") === "true";
+      if (!target || (activeIsEditable && active !== target)) return;
+      target.focus();
+    };
     window.requestAnimationFrame(focusInput);
     window.setTimeout(focusInput, 50);
     window.setTimeout(focusInput, 150);

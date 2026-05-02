@@ -13,28 +13,33 @@ export async function setPhaseForRoom(
   participantId: string,
   phase: Phase,
 ): Promise<{ success: boolean; error?: string }> {
-  const s = await host.loadState();
-  let validated: { phase: Phase };
-  try {
-    validated = await Effect.runPromise(validatePhaseChangeEffect(s, participantId, phase, getDecisionTargetCount(s)));
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : "Phase validation failed",
-    };
-  }
+  return Effect.runPromise(setPhaseForRoomEffect(host, participantId, phase));
+}
 
-  s.phase = validated.phase;
-  if (validated.phase === "vote") {
-    s.votingParticipantIds = s.participants.map((participant) => participant.id);
-  }
-  s.timer = { startedAt: null, durationSeconds: null, expired: false };
-  await host.saveState();
+export function setPhaseForRoomEffect(
+  host: RoomCommandHost,
+  participantId: string,
+  phase: Phase,
+): Effect.Effect<{ success: boolean; error?: string }> {
+  return Effect.gen(function* () {
+    const s = yield* Effect.promise(() => host.loadState());
+    const validation = yield* Effect.either(validatePhaseChangeEffect(s, participantId, phase, getDecisionTargetCount(s)));
+    if (validation._tag === "Left") {
+      return { success: false, error: validation.left.message };
+    }
 
-  host.broadcast({ type: "phase-changed", phase: validated.phase });
-  host.broadcastState(s);
+    s.phase = validation.right.phase;
+    if (validation.right.phase === "vote") {
+      s.votingParticipantIds = s.participants.map((participant) => participant.id);
+    }
+    s.timer = { startedAt: null, durationSeconds: null, expired: false };
+    yield* Effect.promise(() => host.saveState());
 
-  return { success: true };
+    host.broadcast({ type: "phase-changed", phase: validation.right.phase });
+    host.broadcastState(s);
+
+    return { success: true };
+  });
 }
 
 export async function setTimerForRoom(
@@ -43,28 +48,34 @@ export async function setTimerForRoom(
   durationSeconds: number,
   now = Date.now(),
 ): Promise<{ success: boolean; error?: string }> {
-  const s = await host.loadState();
-  let validated: { durationSeconds: number };
-  try {
-    validated = await Effect.runPromise(validateTimerChangeEffect(s, participantId, durationSeconds));
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : "Timer validation failed",
+  return Effect.runPromise(setTimerForRoomEffect(host, participantId, durationSeconds, now));
+}
+
+export function setTimerForRoomEffect(
+  host: RoomCommandHost,
+  participantId: string,
+  durationSeconds: number,
+  now = Date.now(),
+): Effect.Effect<{ success: boolean; error?: string }> {
+  return Effect.gen(function* () {
+    const s = yield* Effect.promise(() => host.loadState());
+    const validation = yield* Effect.either(validateTimerChangeEffect(s, participantId, durationSeconds));
+    if (validation._tag === "Left") {
+      return { success: false, error: validation.left.message };
+    }
+
+    s.timer = {
+      startedAt: now,
+      durationSeconds: validation.right.durationSeconds,
+      expired: false,
     };
-  }
+    yield* Effect.promise(() => host.saveState());
 
-  s.timer = {
-    startedAt: now,
-    durationSeconds: validated.durationSeconds,
-    expired: false,
-  };
-  await host.saveState();
+    host.broadcast({ type: "timer-updated", timer: s.timer });
+    host.broadcastState(s);
 
-  host.broadcast({ type: "timer-updated", timer: s.timer });
-  host.broadcastState(s);
-
-  return { success: true };
+    return { success: true };
+  });
 }
 
 export async function setReviewTargetForRoom(
@@ -72,20 +83,25 @@ export async function setReviewTargetForRoom(
   participantId: string,
   reviewTargetKey: string | null,
 ): Promise<{ success: boolean; error?: string }> {
-  const s = await host.loadState();
-  let validated: { reviewTargetKey: string | null };
-  try {
-    validated = await Effect.runPromise(validateReviewTargetChangeEffect(s, participantId, reviewTargetKey));
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : "Review target validation failed",
-    };
-  }
+  return Effect.runPromise(setReviewTargetForRoomEffect(host, participantId, reviewTargetKey));
+}
 
-  s.reviewTargetKey = validated.reviewTargetKey;
-  await host.saveState();
-  host.broadcast({ type: "review-target-changed", reviewTargetKey: validated.reviewTargetKey });
-  host.broadcastState(s);
-  return { success: true };
+export function setReviewTargetForRoomEffect(
+  host: RoomCommandHost,
+  participantId: string,
+  reviewTargetKey: string | null,
+): Effect.Effect<{ success: boolean; error?: string }> {
+  return Effect.gen(function* () {
+    const s = yield* Effect.promise(() => host.loadState());
+    const validation = yield* Effect.either(validateReviewTargetChangeEffect(s, participantId, reviewTargetKey));
+    if (validation._tag === "Left") {
+      return { success: false, error: validation.left.message };
+    }
+
+    s.reviewTargetKey = validation.right.reviewTargetKey;
+    yield* Effect.promise(() => host.saveState());
+    host.broadcast({ type: "review-target-changed", reviewTargetKey: validation.right.reviewTargetKey });
+    host.broadcastState(s);
+    return { success: true };
+  });
 }

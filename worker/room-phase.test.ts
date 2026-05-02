@@ -2,7 +2,15 @@ import { describe, expect, it } from "vitest";
 
 import type { ServerToClientMessage } from "../src/domain";
 import { createInitialStoredState } from "./room-storage";
-import { setPhaseForRoom, setReviewTargetForRoom, setTimerForRoom } from "./room-phase";
+import {
+  setPhaseForRoom,
+  setPhaseForRoomEffect,
+  setReviewTargetForRoom,
+  setReviewTargetForRoomEffect,
+  setTimerForRoom,
+  setTimerForRoomEffect,
+} from "./room-phase";
+import { Effect } from "effect";
 
 describe("room phase commands", () => {
   it("advances phase, resets timer, and records voting participants", async () => {
@@ -60,5 +68,25 @@ describe("room phase commands", () => {
     expect(result).toEqual({ success: true });
     expect(state.reviewTargetKey).toBeNull();
     expect(broadcasts).toContainEqual({ type: "review-target-changed", reviewTargetKey: null });
+  });
+
+  it("exposes Effect-native phase, timer, and review target commands", async () => {
+    const state = createInitialStoredState("room-effect-phase");
+    state.participants = [{ id: "fac", displayName: "Fac", isFacilitator: true }];
+    state.facilitatorId = "fac";
+    const host = {
+      loadState: async () => state,
+      saveState: async () => {},
+      broadcast: () => {},
+      broadcastState: () => {},
+    };
+
+    await expect(Effect.runPromise(setPhaseForRoomEffect(host, "fac", "write"))).resolves.toEqual({ success: true });
+    expect(state.phase).toBe("write");
+    await expect(Effect.runPromise(setTimerForRoomEffect(host, "fac", 90, 2000))).resolves.toEqual({ success: true });
+    expect(state.timer).toEqual({ startedAt: 2000, durationSeconds: 90, expired: false });
+    state.phase = "review";
+    await expect(Effect.runPromise(setReviewTargetForRoomEffect(host, "fac", null))).resolves.toEqual({ success: true });
+    expect(state.reviewTargetKey).toBeNull();
   });
 });
