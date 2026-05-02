@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { Effect } from "effect";
+import { loadTurnstileScriptEffect } from "./turnstile-effect";
 
 declare global {
   interface Window {
@@ -24,30 +26,13 @@ interface TurnstileWidgetProps {
   onTokenChange: (token: string | null) => void;
 }
 
-const TURNSTILE_SCRIPT_ID = "cloudflare-turnstile-script";
-const TURNSTILE_SCRIPT_SRC = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
-
 function loadTurnstileScript(): Promise<void> {
-  if (window.turnstile) return Promise.resolve();
-
-  const existing = document.getElementById(TURNSTILE_SCRIPT_ID) as HTMLScriptElement | null;
-  if (existing) {
-    return new Promise((resolve, reject) => {
-      existing.addEventListener("load", () => resolve(), { once: true });
-      existing.addEventListener("error", () => reject(new Error("Turnstile script failed to load")), { once: true });
-    });
-  }
-
-  return new Promise((resolve, reject) => {
-    const script = document.createElement("script");
-    script.id = TURNSTILE_SCRIPT_ID;
-    script.src = TURNSTILE_SCRIPT_SRC;
-    script.async = true;
-    script.defer = true;
-    script.addEventListener("load", () => resolve(), { once: true });
-    script.addEventListener("error", () => reject(new Error("Turnstile script failed to load")), { once: true });
-    document.head.appendChild(script);
-  });
+  return Effect.runPromise(loadTurnstileScriptEffect({
+    hasTurnstile: () => Boolean(window.turnstile),
+    findExistingScript: () => document.getElementById("cloudflare-turnstile-script") as HTMLScriptElement | null,
+    createScript: () => document.createElement("script"),
+    appendScript: (script) => document.head.appendChild(script as HTMLScriptElement),
+  }));
 }
 
 export function TurnstileWidget({ siteKey, onTokenChange }: TurnstileWidgetProps) {
@@ -59,26 +44,30 @@ export function TurnstileWidget({ siteKey, onTokenChange }: TurnstileWidgetProps
     let disposed = false;
     onTokenChange(null);
 
-    void loadTurnstileScript()
-      .then(() => {
-        if (disposed || !containerRef.current || !window.turnstile) return;
-        widgetIdRef.current = window.turnstile.render(containerRef.current, {
-          sitekey: siteKey,
-          theme: "dark",
-          callback: (token) => onTokenChange(token),
-          "expired-callback": () => onTokenChange(null),
-          "error-callback": () => {
-            onTokenChange(null);
-            setLoadError("Verification failed. Please retry the challenge.");
-          },
-        });
-      })
-      .catch(() => {
+    void loadChallenge();
+
+    async function loadChallenge() {
+      try {
+        await loadTurnstileScript();
+      } catch {
         if (!disposed) {
           onTokenChange(null);
           setLoadError("Verification could not load. Please refresh and try again.");
         }
+        return;
+      }
+      if (disposed || !containerRef.current || !window.turnstile) return;
+      widgetIdRef.current = window.turnstile.render(containerRef.current, {
+        sitekey: siteKey,
+        theme: "dark",
+        callback: (token) => onTokenChange(token),
+        "expired-callback": () => onTokenChange(null),
+        "error-callback": () => {
+          onTokenChange(null);
+          setLoadError("Verification failed. Please retry the challenge.");
+        },
       });
+    }
 
     return () => {
       disposed = true;
