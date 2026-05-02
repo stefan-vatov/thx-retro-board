@@ -1,5 +1,9 @@
 import { Cause, Effect, Exit, Option, Schema } from "effect";
 import type { RoomState, Phase, RetroItem, RankingMethod } from "./domain";
+import {
+  RoomStateSchema,
+  RetroItemSchema,
+} from "./domain";
 
 export interface PublicConfig {
   turnstileSiteKey: string | null;
@@ -16,92 +20,6 @@ export class ApiError extends Error {
 }
 
 const jsonHeaders = { "Content-Type": "application/json" };
-
-export const PhaseSchema = Schema.Literal("setup", "write", "organise", "vote", "review", "finalize");
-export const RankingMethodSchema = Schema.Literal("score", "pairwise");
-const VoteTargetSchema = Schema.Union(
-  Schema.Struct({ type: Schema.Literal("group"), id: Schema.String }),
-  Schema.Struct({ type: Schema.Literal("item"), id: Schema.String }),
-);
-export const ParticipantSchema = Schema.Struct({
-  id: Schema.String,
-  displayName: Schema.String,
-  isFacilitator: Schema.Boolean,
-});
-export const ColumnSchema = Schema.Struct({
-  id: Schema.String,
-  name: Schema.String,
-  order: Schema.Number,
-});
-export const GroupSchema = Schema.Struct({
-  id: Schema.String,
-  name: Schema.String,
-  columnId: Schema.String,
-  order: Schema.Number,
-});
-export const RetroItemSchema = Schema.Struct({
-  id: Schema.String,
-  text: Schema.String,
-  authorId: Schema.String,
-  columnId: Schema.String,
-  groupId: Schema.NullOr(Schema.String),
-  order: Schema.Number,
-});
-const VoteAllocationSchema = Schema.Struct({
-  participantId: Schema.String,
-  target: Schema.optional(VoteTargetSchema),
-  groupId: Schema.optional(Schema.String),
-  itemId: Schema.optional(Schema.String),
-  count: Schema.Number,
-});
-export const PairwiseChoiceSchema = Schema.Struct({
-  participantId: Schema.String,
-  winner: VoteTargetSchema,
-  loser: VoteTargetSchema,
-  count: Schema.optional(Schema.Number),
-});
-const PairwiseProgressSchema = Schema.Struct({
-  participantId: Schema.String,
-  answered: Schema.Number,
-  total: Schema.Number,
-});
-export const ActionItemSchema = Schema.Struct({
-  id: Schema.String,
-  text: Schema.String,
-  authorId: Schema.String,
-  order: Schema.Number,
-});
-const ReactionSchema = Schema.Struct({
-  participantId: Schema.String,
-  target: VoteTargetSchema,
-  emoji: Schema.String,
-});
-export const TimerStateSchema = Schema.Struct({
-  startedAt: Schema.NullOr(Schema.Number),
-  durationSeconds: Schema.NullOr(Schema.Number),
-  expired: Schema.Boolean,
-});
-export const RoomStateSchema = Schema.Struct({
-  schemaVersion: Schema.Literal(2),
-  roomId: Schema.String,
-  startedAt: Schema.Number,
-  purgeScheduledAt: Schema.NullOr(Schema.Number),
-  phase: PhaseSchema,
-  participants: Schema.Array(ParticipantSchema),
-  items: Schema.Array(RetroItemSchema),
-  columns: Schema.Array(ColumnSchema),
-  groups: Schema.Array(GroupSchema),
-  votes: Schema.Array(VoteAllocationSchema),
-  rankingMethod: RankingMethodSchema,
-  pairwiseChoices: Schema.Array(PairwiseChoiceSchema),
-  pairwiseProgress: Schema.Array(PairwiseProgressSchema),
-  reviewTargetKey: Schema.NullOr(Schema.String),
-  actions: Schema.Array(ActionItemSchema),
-  reactions: Schema.Array(ReactionSchema),
-  timer: TimerStateSchema,
-  voteBudget: Schema.Number,
-  version: Schema.Number,
-});
 const PublicConfigSchema: Schema.Schema<PublicConfig> = Schema.Struct({
   turnstileSiteKey: Schema.NullOr(Schema.String),
 });

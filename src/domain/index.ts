@@ -1,6 +1,22 @@
 export { type Phase, type Participant, type RetroItem, type Column, type Group, type VoteTarget, type ReactionTarget, type Reaction, type VoteAllocation, type PairwiseChoice, type PairwiseProgress, type RankingMethod, type ActionItem, type TimerState, type RoomState } from "./types";
 export { type ServerToClientMessage, type ClientToServerMessage } from "./messages";
 export {
+  ActionItemSchema,
+  ColumnSchema,
+  GroupSchema,
+  PairwiseChoiceSchema,
+  ParticipantSchema,
+  PhaseSchema,
+  RankingMethodSchema,
+  ReactionSchema,
+  RetroItemSchema,
+  RoomStateSchema,
+  ServerToClientMessageSchema,
+  TimerStateSchema,
+  VoteAllocationSchema,
+  VoteTargetSchema,
+} from "./schemas";
+export {
   type AnonymousRetroExport,
   buildAnonymousRetroExport,
   formatRetroExportJson,

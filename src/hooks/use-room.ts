@@ -1,19 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Effect, Exit, Schema } from "effect";
 import {
-  ActionItemSchema,
-  ColumnSchema,
   createWebSocketTicketEffect,
-  GroupSchema,
-  PairwiseChoiceSchema,
-  ParticipantSchema,
-  PhaseSchema,
-  RetroItemSchema,
-  RoomStateSchema,
   runApiEffect,
-  TimerStateSchema,
 } from "../api";
-import { pairwiseComparisonKey } from "../domain";
+import { pairwiseComparisonKey, ServerToClientMessageSchema } from "../domain";
 import type { RoomState, ServerToClientMessage } from "../domain";
 
 export const INITIAL_RECONNECT_DELAY_MS = 750;
@@ -39,28 +30,6 @@ export class RealtimeMessageError extends Error {
     this.name = "RealtimeMessageError";
   }
 }
-
-const ServerToClientMessageSchema = Schema.Union(
-  Schema.Struct({ type: Schema.Literal("snapshot"), state: RoomStateSchema }),
-  Schema.Struct({ type: Schema.Literal("participant-joined"), participant: ParticipantSchema }),
-  Schema.Struct({ type: Schema.Literal("participant-left"), participantId: Schema.String }),
-  Schema.Struct({ type: Schema.Literal("phase-changed"), phase: PhaseSchema }),
-  Schema.Struct({ type: Schema.Literal("item-added"), item: RetroItemSchema }),
-  Schema.Struct({ type: Schema.Literal("items-reordered"), items: Schema.Array(RetroItemSchema) }),
-  Schema.Struct({ type: Schema.Literal("groups-changed"), groups: Schema.Array(GroupSchema) }),
-  Schema.Struct({ type: Schema.Literal("actions-changed"), actions: Schema.Array(ActionItemSchema) }),
-  Schema.Struct({ type: Schema.Literal("columns-changed"), columns: Schema.Array(ColumnSchema), version: Schema.Number }),
-  Schema.Struct({
-    type: Schema.Literal("pairwise-choice-changed"),
-    choice: PairwiseChoiceSchema,
-  }),
-  Schema.Struct({ type: Schema.Literal("review-target-changed"), reviewTargetKey: Schema.NullOr(Schema.String) }),
-  Schema.Struct({ type: Schema.Literal("timer-updated"), timer: TimerStateSchema }),
-  Schema.Struct({ type: Schema.Literal("room-purged"), reason: Schema.String }),
-  Schema.Struct({ type: Schema.Literal("error"), message: Schema.String }),
-  Schema.Struct({ type: Schema.Literal("vote-changed") }),
-  Schema.Struct({ type: Schema.Literal("ranking-method-changed") }),
-);
 
 export function decodeRealtimeMessageEffect(raw: string): Effect.Effect<ServerToClientMessage, RealtimeMessageError> {
   return Effect.gen(function* () {
