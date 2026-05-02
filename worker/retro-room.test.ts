@@ -9,7 +9,9 @@ import {
   validatePhaseChangeEffect,
   validateRankingMethodChangeEffect,
   validateColumnCreateEffect,
+  validateColumnDeleteEffect,
   validateColumnEditEffect,
+  validateColumnReorderEffect,
   validateWriteItemCreateEffect,
   validateWriteItemDeleteEffect,
   validateWriteItemEditEffect,
@@ -179,6 +181,65 @@ describe("RetroRoom Durable Object v2 schema", () => {
       participants: [...state.participants, { id: "p2", displayName: "Pat", isFacilitator: false }],
     }, "p2", "col-1", "Glad"));
     expect(Exit.isFailure(nonFacilitator)).toBe(true);
+  });
+
+  it("validates column reorders through Effect before state changes", async () => {
+    const state = {
+      participants: [{ id: "fac1", displayName: "Facilitator", isFacilitator: true }],
+      facilitatorId: "fac1",
+      phase: "setup",
+      columns: [
+        { id: "col-1", name: "Mad", order: 0 },
+        { id: "col-2", name: "Glad", order: 1 },
+      ],
+    };
+
+    await expect(Effect.runPromise(validateColumnReorderEffect(state, "fac1", ["col-2", "col-1"]))).resolves.toEqual({
+      columns: [
+        { id: "col-2", name: "Glad", order: 0 },
+        { id: "col-1", name: "Mad", order: 1 },
+      ],
+    });
+
+    const missingColumn = await Effect.runPromiseExit(validateColumnReorderEffect(state, "fac1", ["col-2"]));
+    expect(Exit.isFailure(missingColumn)).toBe(true);
+
+    const duplicateColumn = await Effect.runPromiseExit(validateColumnReorderEffect(state, "fac1", ["col-1", "col-1"]));
+    expect(Exit.isFailure(duplicateColumn)).toBe(true);
+  });
+
+  it("validates column deletes through Effect before state changes", async () => {
+    const state = {
+      participants: [{ id: "fac1", displayName: "Facilitator", isFacilitator: true }],
+      facilitatorId: "fac1",
+      phase: "setup",
+      columns: [
+        { id: "col-1", name: "Mad", order: 0 },
+        { id: "col-2", name: "Glad", order: 1 },
+      ],
+      groups: [{ id: "group-1", columnId: "col-1", name: "Theme", order: 0 }],
+      items: [
+        { id: "item-1", text: "Keep", authorId: "fac1", columnId: "col-2", groupId: null, order: 0 },
+        { id: "item-2", text: "Remove", authorId: "fac1", columnId: "col-1", groupId: "group-1", order: 0 },
+      ],
+      votes: [
+        { participantId: "fac1", target: itemVoteTarget("item-1"), weight: 1 },
+        { participantId: "fac1", target: groupVoteTarget("group-1"), weight: 1 },
+      ],
+    };
+
+    await expect(Effect.runPromise(validateColumnDeleteEffect(state, "fac1", "col-1"))).resolves.toEqual({
+      columns: [{ id: "col-2", name: "Glad", order: 0 }],
+      groups: [],
+      items: [{ id: "item-1", text: "Keep", authorId: "fac1", columnId: "col-2", groupId: null, order: 0 }],
+      votes: [{ participantId: "fac1", target: itemVoteTarget("item-1"), weight: 1 }],
+    });
+
+    const missingColumn = await Effect.runPromiseExit(validateColumnDeleteEffect(state, "fac1", "missing"));
+    expect(Exit.isFailure(missingColumn)).toBe(true);
+
+    const wrongPhase = await Effect.runPromiseExit(validateColumnDeleteEffect({ ...state, phase: "write" }, "fac1", "col-1"));
+    expect(Exit.isFailure(wrongPhase)).toBe(true);
   });
 
   it("validates review action mutations through Effect before state changes", async () => {

@@ -129,6 +129,8 @@ type RankingMethodValidationState = Pick<StoredState, "facilitatorId" | "partici
 type PhaseValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase" | "columns" | "rankingMethod">;
 type ColumnCreateValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase" | "columns">;
 type ColumnEditValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase" | "columns">;
+type ColumnReorderValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase" | "columns">;
+type ColumnDeleteValidationState = Pick<StoredState, "facilitatorId" | "participants" | "phase" | "columns" | "groups" | "items" | "votes">;
 type ReviewActionValidationState = Pick<StoredState, "participants" | "phase">;
 type WriteItemCreateValidationState = Pick<StoredState, "participants" | "phase" | "items" | "columns">;
 type WriteItemEditValidationState = Pick<StoredState, "participants" | "phase" | "items">;
@@ -327,6 +329,65 @@ export function validateColumnEditEffect(
       return yield* Effect.fail(new RoomMutationValidationError("Column not found"));
     }
     return { columns: result.columns, column };
+  });
+}
+
+export function validateColumnReorderEffect(
+  state: ColumnReorderValidationState,
+  participantId: string,
+  orderedIds: unknown,
+): Effect.Effect<{ columns: Column[] }, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    if (!state.participants.some((participant) => participant.id === participantId)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Participant not found"));
+    }
+    if (state.facilitatorId !== participantId) {
+      return yield* Effect.fail(new RoomMutationValidationError("Only the facilitator can configure columns"));
+    }
+    if (state.phase !== "setup") {
+      return yield* Effect.fail(new RoomMutationValidationError("Columns can only be configured during setup"));
+    }
+    const validation = validateFullColumnPermutation(state.columns ?? [], orderedIds);
+    if (!validation.valid) {
+      return yield* Effect.fail(new RoomMutationValidationError(validation.error));
+    }
+    return { columns: applyReorderColumns(state.columns ?? [], validation.ids) };
+  });
+}
+
+export function validateColumnDeleteEffect(
+  state: ColumnDeleteValidationState,
+  participantId: string,
+  columnId: string,
+): Effect.Effect<{
+  columns: Column[];
+  groups: Group[];
+  items: RetroItem[];
+  votes: VoteAllocation[];
+}, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    if (!state.participants.some((participant) => participant.id === participantId)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Participant not found"));
+    }
+    if (state.facilitatorId !== participantId) {
+      return yield* Effect.fail(new RoomMutationValidationError("Only the facilitator can configure columns"));
+    }
+    if (state.phase !== "setup") {
+      return yield* Effect.fail(new RoomMutationValidationError("Columns can only be configured during setup"));
+    }
+    if (typeof columnId !== "string" || columnId.trim().length === 0) {
+      return yield* Effect.fail(new RoomMutationValidationError("Column not found"));
+    }
+    const result = applyDeleteColumn(state.columns ?? [], state.groups, state.items, state.votes, columnId);
+    if (result.error) {
+      return yield* Effect.fail(new RoomMutationValidationError(result.error));
+    }
+    return {
+      columns: result.columns,
+      groups: result.groups,
+      items: result.items,
+      votes: result.votes,
+    };
   });
 }
 
@@ -1548,19 +1609,6 @@ export class RetroRoom extends DurableObject<Env> {
     return { success: true };
   }
 
-  private canMutateColumns(s: StoredState, participantId: string): { success: true } | { success: false; error: string } {
-    if (!s.participants.some((participant) => participant.id === participantId)) {
-      return { success: false, error: "Participant not found" };
-    }
-    if (s.facilitatorId !== participantId) {
-      return { success: false, error: "Only the facilitator can configure columns" };
-    }
-    if (s.phase !== "setup") {
-      return { success: false, error: "Columns can only be configured during setup" };
-    }
-    return { success: true };
-  }
-
   private hasParticipant(s: StoredState, participantId: string): boolean {
     return s.participants.some((participant) => participant.id === participantId);
   }
@@ -1723,14 +1771,16 @@ export class RetroRoom extends DurableObject<Env> {
 
   async reorderColumns(participantId: string, orderedIds: unknown): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
-    const allowed = this.canMutateColumns(s, participantId);
-    if (!allowed.success) return allowed;
-
-    const validation = validateFullColumnPermutation(s.columns ?? [], orderedIds);
-    if (!validation.valid) {
-      return { success: false, error: validation.error };
+    let validated: { columns: Column[] };
+    try {
+      validated = await Effect.runPromise(validateColumnReorderEffect(s, participantId, orderedIds));
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof RoomMutationValidationError ? error.message : "Columns could not be reordered",
+      };
     }
-    s.columns = applyReorderColumns(s.columns ?? [], validation.ids);
+    s.columns = validated.columns;
     await this.saveState();
     this.broadcastState(s);
     return { success: true };
@@ -1738,21 +1788,25 @@ export class RetroRoom extends DurableObject<Env> {
 
   async deleteColumn(participantId: string, columnId: string): Promise<{ success: boolean; error?: string }> {
     const s = await this.loadState();
-    const allowed = this.canMutateColumns(s, participantId);
-    if (!allowed.success) return allowed;
-    if (typeof columnId !== "string" || columnId.trim().length === 0) {
-      return { success: false, error: "Column not found" };
+    let validated: {
+      columns: Column[];
+      groups: Group[];
+      items: RetroItem[];
+      votes: VoteAllocation[];
+    };
+    try {
+      validated = await Effect.runPromise(validateColumnDeleteEffect(s, participantId, columnId));
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof RoomMutationValidationError ? error.message : "Column could not be deleted",
+      };
     }
 
-    const result = applyDeleteColumn(s.columns ?? [], s.groups, s.items, s.votes, columnId);
-    if (result.error) {
-      return { success: false, error: result.error };
-    }
-
-    s.columns = result.columns;
-    s.groups = result.groups;
-    s.items = result.items;
-    s.votes = result.votes;
+    s.columns = validated.columns;
+    s.groups = validated.groups;
+    s.items = validated.items;
+    s.votes = validated.votes;
     s.pairwiseChoices = normalizePairwiseChoices(s.pairwiseChoices, s.participants, s.groups, s.items);
     s.reactions = normalizeReactions(s.reactions, s.participants, s.groups, s.items);
     await this.saveState();
