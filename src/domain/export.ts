@@ -68,7 +68,7 @@ export function formatRetroExportMarkdown(exportData: AnonymousRetroExport): str
   for (const column of exportData.columns) {
     const groups = exportData.groups.filter((group) => group.columnId === column.id).sort((a, b) => a.order - b.order);
     const ungroupedItems = exportData.items.filter((item) => item.columnId === column.id && item.groupId === null).sort((a, b) => a.order - b.order);
-    lines.push(`### ${column.name}`, ``);
+    lines.push(`### ${escapeMarkdownText(column.name)}`, ``);
 
     if (groups.length === 0 && ungroupedItems.length === 0) {
       lines.push(`_No items._`, ``);
@@ -77,13 +77,13 @@ export function formatRetroExportMarkdown(exportData: AnonymousRetroExport): str
 
     for (const group of groups) {
       const totalVotes = getTotalVotes(exportData.votes, { type: "group", id: group.id });
-      lines.push(`#### ${group.name} (${formatResultLabel(exportData.rankingMethod, totalVotes, { type: "group", id: group.id }, exportData)})`);
+      lines.push(`#### ${escapeMarkdownText(group.name)} (${formatResultLabel(exportData.rankingMethod, totalVotes, { type: "group", id: group.id }, exportData)})`);
       const groupItems = exportData.items.filter((item) => item.groupId === group.id).sort((a, b) => a.order - b.order);
       if (groupItems.length === 0) {
         lines.push(`- _No items in group._`);
       } else {
         for (const item of groupItems) {
-          lines.push(`- ${item.text}`);
+          lines.push(`- ${escapeMarkdownText(item.text)}`);
         }
       }
       lines.push(``);
@@ -91,7 +91,7 @@ export function formatRetroExportMarkdown(exportData: AnonymousRetroExport): str
 
     for (const item of ungroupedItems) {
       const totalVotes = getTotalVotes(exportData.votes, { type: "item", id: item.id });
-      lines.push(`- ${item.text} (${formatResultLabel(exportData.rankingMethod, totalVotes, { type: "item", id: item.id }, exportData)})`);
+      lines.push(`- ${escapeMarkdownText(item.text)} (${formatResultLabel(exportData.rankingMethod, totalVotes, { type: "item", id: item.id }, exportData)})`);
     }
     if (ungroupedItems.length > 0) lines.push(``);
   }
@@ -104,7 +104,7 @@ export function formatRetroExportMarkdown(exportData: AnonymousRetroExport): str
 
 export function formatActionsMarkdown(actions: AnonymousRetroExport["actions"]): string {
   if (actions.length === 0) return `_No actions captured._\n`;
-  return `${actions.map((action) => `- [ ] ${action.text}`).join("\n")}\n`;
+  return `${actions.map((action) => `- [ ] ${escapeMarkdownText(action.text)}`).join("\n")}\n`;
 }
 
 export function formatActionsCsv(actions: AnonymousRetroExport["actions"]): string {
@@ -168,4 +168,15 @@ function formatResultLabel(method: RankingMethod, totalVotes: number, target: Vo
 function escapeCsvCell(value: string): string {
   const spreadsheetSafeValue = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
   return /[",\n\r]/.test(spreadsheetSafeValue) ? `"${spreadsheetSafeValue.replaceAll("\"", "\"\"")}"` : spreadsheetSafeValue;
+}
+
+function escapeMarkdownText(value: string): string {
+  const markdownSpecialCharacters = new Set(["\\", "`", "*", "_", "{", "}", "[", "]", "(", ")", "#", "+", ".", "!", "|", "-"]);
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .split("")
+    .map((char) => markdownSpecialCharacters.has(char) ? `\\${char}` : char)
+    .join("");
 }

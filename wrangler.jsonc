@@ -3,6 +3,7 @@
   "name": "thx-retro-board",
   "compatibility_date": "2026-04-24",
   "main": "./worker/index.ts",
+  "workers_dev": false,
   "assets": {
     "binding": "ASSETS",
     "not_found_handling": "single-page-application"

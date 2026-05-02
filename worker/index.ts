@@ -41,15 +41,6 @@ function getClientIp(request: Request): string | null {
   return request.headers.get("CF-Connecting-IP");
 }
 
-function shouldRateLimitClientIp(clientIp: string | null): clientIp is string {
-  if (!clientIp) return false;
-  if (clientIp === "127.0.0.1" || clientIp === "::1") return false;
-  if (/^10\./.test(clientIp)) return false;
-  if (/^192\.168\./.test(clientIp)) return false;
-  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(clientIp)) return false;
-  return true;
-}
-
 function isLocalRequest(url: URL): boolean {
   return url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1";
 }
@@ -58,11 +49,17 @@ function hasProductionAntiAbuseConfig(env: Env): boolean {
   return Boolean(env.TURNSTILE_SITE_KEY && env.TURNSTILE_SECRET_KEY && env.ROOM_CREATE_RATE_LIMITER && env.ROOM_ACCESS_RATE_LIMITER);
 }
 
-async function rateLimitRoomAccess(env: Env, request: Request): Promise<Response | null> {
+function getRateLimitKey(request: Request, url: URL, prefix: string): string | null {
+  if (isLocalRequest(url)) return null;
   const clientIp = getClientIp(request);
-  if (!env.ROOM_ACCESS_RATE_LIMITER || !shouldRateLimitClientIp(clientIp)) return null;
+  return `${prefix}:${clientIp && clientIp.trim().length > 0 ? clientIp : "unknown"}`;
+}
 
-  const { success } = await env.ROOM_ACCESS_RATE_LIMITER.limit({ key: `room-access:${clientIp}` });
+async function rateLimitRoomAccess(env: Env, request: Request, url: URL): Promise<Response | null> {
+  const key = getRateLimitKey(request, url, "room-access");
+  if (!env.ROOM_ACCESS_RATE_LIMITER || !key) return null;
+
+  const { success } = await env.ROOM_ACCESS_RATE_LIMITER.limit({ key });
   return success
     ? null
     : Response.json({ error: "Too many room attempts from this network. Please wait a minute and try again." }, { status: 429 });
@@ -76,7 +73,7 @@ function withSecurityHeaders(response: Response): Response {
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data:",
     "font-src 'self' data:",
-    "connect-src 'self' https://challenges.cloudflare.com wss:",
+    "connect-src 'self' https://challenges.cloudflare.com",
     "frame-src https://challenges.cloudflare.com",
     "base-uri 'none'",
     "form-action 'self'",
@@ -95,11 +92,28 @@ async function readJsonBody<T>(request: Request): Promise<T | null> {
   const contentType = request.headers.get("Content-Type") ?? "";
   if (!contentType.includes("application/json")) return null;
   const contentLength = request.headers.get("Content-Length");
-  if (contentLength !== null && Number(contentLength) > MAX_JSON_BODY_BYTES) return null;
+  if (contentLength !== null && (!Number.isFinite(Number(contentLength)) || Number(contentLength) > MAX_JSON_BODY_BYTES)) return null;
 
-  const clone = request.clone();
-  const body = await clone.text();
-  if (body.length > MAX_JSON_BODY_BYTES) return null;
+  const reader = request.body?.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let body = "";
+  if (reader) {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > MAX_JSON_BODY_BYTES) {
+        await reader.cancel();
+        return null;
+      }
+      body += decoder.decode(value, { stream: true });
+    }
+    body += decoder.decode();
+  } else {
+    body = await request.text();
+    if (new TextEncoder().encode(body).byteLength > MAX_JSON_BODY_BYTES) return null;
+  }
 
   try {
     return JSON.parse(body) as T;
@@ -151,27 +165,29 @@ export default {
 
     if (pathname === "/api/rooms") {
       if (method === "POST") {
-        const clientIp = getClientIp(request);
         if (!isLocalRequest(url) && !hasProductionAntiAbuseConfig(env)) {
           return Response.json({ error: "Room creation is temporarily unavailable." }, { status: 503 });
         }
-        if (env.ROOM_CREATE_RATE_LIMITER && shouldRateLimitClientIp(clientIp)) {
-          const { success } = await env.ROOM_CREATE_RATE_LIMITER.limit({ key: `room-create:${clientIp}` });
+        const createLimitKey = getRateLimitKey(request, url, "room-create");
+        if (env.ROOM_CREATE_RATE_LIMITER && createLimitKey) {
+          const { success } = await env.ROOM_CREATE_RATE_LIMITER.limit({ key: createLimitKey });
           if (!success) {
             return Response.json({ error: "Too many rooms created from this network. Please wait a minute and try again." }, { status: 429 });
           }
         }
 
         const body = await readJsonBody<{ turnstileToken?: string }>(request);
+        const clientIp = getClientIp(request);
         const turnstile = await verifyTurnstileToken(env, body?.turnstileToken, clientIp ?? "unknown");
         if (!turnstile.success) {
           return Response.json({ error: turnstile.error }, { status: 403 });
         }
 
         const roomId = generateRoomId();
+        const facilitatorClaimToken = crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
         const stub = getRoomStub(env, roomId);
-        await stub.initRoom(roomId);
-        return Response.json({ roomId });
+        await stub.initRoom(roomId, facilitatorClaimToken);
+        return Response.json({ roomId, facilitatorClaimToken });
       }
       if (method === "GET") {
         return Response.json({ message: "Retro Board API" });
@@ -187,7 +203,7 @@ export default {
       if (!isLocalRequest(url) && !env.ROOM_ACCESS_RATE_LIMITER) {
         return Response.json({ error: "Room access is temporarily unavailable." }, { status: 503 });
       }
-      const lookupLimit = await rateLimitRoomAccess(env, request);
+      const lookupLimit = await rateLimitRoomAccess(env, request, url);
       if (lookupLimit) return lookupLimit;
       const stub = getRoomStub(env, roomId);
 
@@ -206,8 +222,17 @@ export default {
         if (!hasRoom) {
           return Response.json({ error: "Room not found" }, { status: 404 });
         }
-        const state = await stub.getRoomState();
-        return Response.json(state);
+        return Response.json({ roomId });
+      }
+
+      if (suffix === "state" && method === "POST") {
+        const hasRoom = await stub.hasRoom();
+        if (!hasRoom) {
+          return Response.json({ success: false, error: "Room not found" }, { status: 404 });
+        }
+        const body = await readRequiredJsonBody<{ participantId: string; connectionToken?: string }>(request);
+        if (body instanceof Response) return body;
+        return forwardToDO(stub, "/state", request, body);
       }
 
       if (suffix === "vote-budget" && method === "POST") {

@@ -12,7 +12,8 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "preview": "npm run build && vite preview",
-    "deploy": "npm run build && wrangler deploy"
+    "verify": "npm run typecheck && npm run lint && npm run test && npm run build",
+    "deploy": "npm run verify && wrangler deploy"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.33.2",

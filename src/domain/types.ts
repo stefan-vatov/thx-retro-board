@@ -59,6 +59,12 @@ export interface PairwiseChoice {
   loser: VoteTarget;
 }
 
+export interface PairwiseProgress {
+  participantId: string;
+  answered: number;
+  total: number;
+}
+
 export interface ActionItem {
   id: string;
   text: string;
@@ -86,6 +92,7 @@ export interface RoomState {
   votes: VoteAllocation[];
   rankingMethod: RankingMethod;
   pairwiseChoices: PairwiseChoice[];
+  pairwiseProgress: PairwiseProgress[];
   reviewTargetKey: string | null;
   actions: ActionItem[];
   reactions: Reaction[];

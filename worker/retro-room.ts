@@ -44,8 +44,6 @@ import {
   applyCastVote,
   applyRemoveVote,
   getVoteTarget,
-  getVotesForGroup,
-  getVotesForUngroupedItem,
   groupVoteTarget,
   itemVoteTarget,
   sameVoteTarget,
@@ -78,6 +76,8 @@ interface StoredState {
   actions: ActionItem[];
   reactions?: Reaction[];
   facilitatorId: string | null;
+  facilitatorClaimToken?: string | null;
+  votingParticipantIds?: string[];
   voteBudget: number;
   version: number;
   connectionTokens: Record<string, string>;
@@ -86,7 +86,6 @@ interface StoredState {
 
 interface WebSocketTicket {
   participantId: string;
-  connectionToken: string;
   expiresAt: number;
 }
 
@@ -103,6 +102,7 @@ const MAX_WEBSOCKET_MESSAGE_BYTES = 16 * 1024;
 const MAX_WEBSOCKET_MESSAGES_PER_WINDOW = 120;
 const WEBSOCKET_RATE_WINDOW_MS = 10 * 1000;
 const WEBSOCKET_TICKET_TTL_MS = 30 * 1000;
+const ANONYMOUS_VOTE_PARTICIPANT_ID = "__anonymous__";
 
 interface MoveItemPreconditions {
   expectedVersion: number;
@@ -443,10 +443,28 @@ async function readJsonBody<T>(request: Request): Promise<T | null> {
   const contentType = request.headers.get("Content-Type") ?? "";
   if (!contentType.includes("application/json")) return null;
   const contentLength = request.headers.get("Content-Length");
-  if (contentLength !== null && Number(contentLength) > MAX_WEBSOCKET_MESSAGE_BYTES) return null;
+  if (contentLength !== null && (!Number.isFinite(Number(contentLength)) || Number(contentLength) > MAX_WEBSOCKET_MESSAGE_BYTES)) return null;
 
-  const body = await request.text();
-  if (body.length > MAX_WEBSOCKET_MESSAGE_BYTES) return null;
+  const reader = request.body?.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let body = "";
+  if (reader) {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > MAX_WEBSOCKET_MESSAGE_BYTES) {
+        await reader.cancel();
+        return null;
+      }
+      body += decoder.decode(value, { stream: true });
+    }
+    body += decoder.decode();
+  } else {
+    body = await request.text();
+    if (new TextEncoder().encode(body).byteLength > MAX_WEBSOCKET_MESSAGE_BYTES) return null;
+  }
 
   try {
     return JSON.parse(body) as T;
@@ -491,6 +509,8 @@ export class RetroRoom extends DurableObject<Env> {
           reviewTargetKey: null,
           actions: [],
           reactions: [],
+          facilitatorClaimToken: null,
+          votingParticipantIds: [],
         };
         await this.ctx.storage.put("room", this.state);
         return this.state;
@@ -511,6 +531,10 @@ export class RetroRoom extends DurableObject<Env> {
         reviewTargetKey: null,
         actions: normalizeActions(stored.actions, stored.participants ?? []),
         reactions: [],
+        facilitatorClaimToken: typeof stored.facilitatorClaimToken === "string" ? stored.facilitatorClaimToken : null,
+        votingParticipantIds: Array.isArray(stored.votingParticipantIds)
+          ? stored.votingParticipantIds.filter((id) => typeof id === "string" && stored.participants.some((participant) => participant.id === id))
+          : [],
       };
       this.state.votes = normalizeVotes(stored.votes ?? [], this.state.participants, groups, this.state.items);
       this.state.pairwiseChoices = normalizePairwiseChoices(stored.pairwiseChoices, this.state.participants, groups, this.state.items);
@@ -554,6 +578,14 @@ export class RetroRoom extends DurableObject<Env> {
   }
 
   override async alarm(): Promise<void> {
+    const stored = await this.ctx.storage.get<StoredState>("room");
+    if (!stored) return;
+    const purgeScheduledAt = typeof stored.purgeScheduledAt === "number" && Number.isFinite(stored.purgeScheduledAt)
+      ? stored.purgeScheduledAt
+      : null;
+    if (purgeScheduledAt === null || Date.now() < purgeScheduledAt) {
+      return;
+    }
     if (this.sessions.size > 0) {
       await this.cancelEmptyRoomPurge();
       return;
@@ -569,7 +601,7 @@ export class RetroRoom extends DurableObject<Env> {
     }
   }
 
-  async initRoom(roomId: string): Promise<void> {
+  async initRoom(roomId: string, facilitatorClaimToken: string | null = null): Promise<void> {
     const existing = await this.ctx.storage.get<StoredState>("room");
     if (existing) {
       this.state = null;
@@ -593,6 +625,8 @@ export class RetroRoom extends DurableObject<Env> {
       actions: [],
       reactions: [],
       facilitatorId: null,
+      facilitatorClaimToken,
+      votingParticipantIds: [],
       voteBudget: 5,
       version: 0,
       connectionTokens: {},
@@ -602,8 +636,54 @@ export class RetroRoom extends DurableObject<Env> {
     await this.scheduleEmptyRoomPurge();
   }
 
-  async getRoomState(): Promise<RoomState> {
-    const s = await this.loadState();
+  private getPairwiseProgress(s: StoredState) {
+    const targets = this.getDecisionTargetCount(s);
+    const total = targets < 2 ? 0 : (targets * (targets - 1)) / 2;
+    return s.participants.map((participant) => {
+      const answered = (s.pairwiseChoices ?? []).filter((choice) => choice.participantId === participant.id).length;
+      return { participantId: participant.id, answered: Math.min(answered, total), total };
+    });
+  }
+
+  private getDecisionTargetCount(s: StoredState): number {
+    return s.groups.length + s.items.filter((item) => item.groupId === null).length;
+  }
+
+  private getProjectedVotes(s: StoredState, participantId?: string): VoteAllocation[] {
+    if (!participantId) return s.votes;
+    const projected = s.votes.filter((vote) => vote.participantId === participantId);
+    const anonymousTotals = new Map<string, VoteAllocation>();
+    for (const vote of s.votes) {
+      if (vote.participantId === participantId) continue;
+      const target = getVoteTarget(vote);
+      if (target === null) continue;
+      const key = voteTargetKey(target);
+      const existing = anonymousTotals.get(key);
+      anonymousTotals.set(key, {
+        participantId: ANONYMOUS_VOTE_PARTICIPANT_ID,
+        target,
+        count: (existing?.count ?? 0) + vote.count,
+      });
+    }
+    return [...projected, ...anonymousTotals.values()];
+  }
+
+  private getProjectedPairwiseChoices(s: StoredState, participantId?: string): PairwiseChoice[] {
+    if (!participantId) return s.pairwiseChoices ?? [];
+    const projected = (s.pairwiseChoices ?? []).filter((choice) => choice.participantId === participantId);
+    let anonymousIndex = 0;
+    for (const choice of s.pairwiseChoices ?? []) {
+      if (choice.participantId === participantId) continue;
+      projected.push({
+        ...choice,
+        participantId: `${ANONYMOUS_VOTE_PARTICIPANT_ID}-${anonymousIndex}`,
+      });
+      anonymousIndex += 1;
+    }
+    return projected;
+  }
+
+  private toRoomState(s: StoredState, participantId?: string): RoomState {
     const timer = this.computeTimerStatus(s.timer);
     return {
       schemaVersion: 2,
@@ -615,9 +695,10 @@ export class RetroRoom extends DurableObject<Env> {
       items: s.items,
       columns: s.columns ?? s.groups,
       groups: s.groups,
-      votes: s.votes,
+      votes: this.getProjectedVotes(s, participantId),
       rankingMethod: s.rankingMethod ?? "score",
-      pairwiseChoices: s.pairwiseChoices ?? [],
+      pairwiseChoices: this.getProjectedPairwiseChoices(s, participantId),
+      pairwiseProgress: this.getPairwiseProgress(s),
       reviewTargetKey: normalizeReviewTargetKey(s.reviewTargetKey, s.groups, s.items),
       actions: s.actions ?? [],
       reactions: s.reactions ?? [],
@@ -625,6 +706,18 @@ export class RetroRoom extends DurableObject<Env> {
       voteBudget: s.voteBudget,
       version: s.version,
     };
+  }
+
+  async getRoomState(): Promise<RoomState> {
+    const s = await this.loadState();
+    return this.toRoomState(s);
+  }
+
+  async getRoomStateForParticipant(participantId: string, connectionToken: unknown): Promise<{ success: boolean; error?: string; state?: RoomState }> {
+    const s = await this.loadState();
+    const auth = this.authorizeHttpMutation(s, participantId, connectionToken);
+    if (!auth.success) return auth;
+    return { success: true, state: this.toRoomState(s, auth.participantId) };
   }
 
   private computeTimerStatus(timer: StoredTimer): StoredTimer {
@@ -642,7 +735,7 @@ export class RetroRoom extends DurableObject<Env> {
     return stored !== undefined;
   }
 
-  async join(participantId: string, displayName: string, connectionToken?: string): Promise<{ success: boolean; error?: string; state?: RoomState; connectionToken?: string }> {
+  async join(participantId: string, displayName: string, connectionToken?: string, facilitatorClaimToken?: unknown): Promise<{ success: boolean; error?: string; state?: RoomState; connectionToken?: string }> {
     const s = await this.loadState();
     if (typeof participantId !== "string" || participantId.trim().length === 0 || participantId.length > 128) {
       return { success: false, error: "Participant not found" };
@@ -661,8 +754,21 @@ export class RetroRoom extends DurableObject<Env> {
       if (!this.hasValidConnectionToken(s, participantId, connectionToken)) {
         return { success: false, error: "Invalid participant credentials" };
       }
+      if (
+        s.facilitatorId === null
+        && typeof facilitatorClaimToken === "string"
+        && typeof s.facilitatorClaimToken === "string"
+        && facilitatorClaimToken === s.facilitatorClaimToken
+      ) {
+        s.facilitatorId = participantId;
+        s.facilitatorClaimToken = null;
+        s.participants = s.participants.map((participant) =>
+          participant.id === participantId ? { ...participant, isFacilitator: true } : participant,
+        );
+      }
       await this.cancelEmptyRoomPurge();
       this.closeParticipantSocket(participantId, "Participant reconnected");
+      await this.deleteOutstandingWebSocketTicket(participantId);
       const token = generateToken();
       s.connectionTokens[participantId] = token;
       await this.saveState();
@@ -678,7 +784,7 @@ export class RetroRoom extends DurableObject<Env> {
         await this.scheduleEmptyRoomPurge();
       }
 
-      return { success: true, state: await this.getRoomState(), connectionToken: token };
+      return { success: true, state: this.toRoomState(s, participantId), connectionToken: token };
     }
 
     if (s.participants.length >= MAX_PARTICIPANTS_PER_ROOM) {
@@ -686,7 +792,13 @@ export class RetroRoom extends DurableObject<Env> {
     }
 
     await this.cancelEmptyRoomPurge();
-    const isFacilitator = s.participants.length === 0;
+    const canClaimFacilitator = s.facilitatorId === null
+      && typeof facilitatorClaimToken === "string"
+      && typeof s.facilitatorClaimToken === "string"
+      && facilitatorClaimToken === s.facilitatorClaimToken;
+    const isFacilitator = s.participants.length === 0 && s.facilitatorClaimToken === null
+      ? true
+      : canClaimFacilitator;
     const participant: Participant = {
       id: participantId,
       displayName: sanitized,
@@ -695,6 +807,7 @@ export class RetroRoom extends DurableObject<Env> {
     s.participants.push(participant);
     if (isFacilitator) {
       s.facilitatorId = participantId;
+      s.facilitatorClaimToken = null;
     }
     const token = generateToken();
     s.connectionTokens[participantId] = token;
@@ -711,7 +824,7 @@ export class RetroRoom extends DurableObject<Env> {
       await this.scheduleEmptyRoomPurge();
     }
 
-    return { success: true, state: await this.getRoomState(), connectionToken: token };
+    return { success: true, state: this.toRoomState(s, participantId), connectionToken: token };
   }
 
   async purgeByFacilitator(participantId: string): Promise<{ success: boolean; error?: string }> {
@@ -994,8 +1107,14 @@ export class RetroRoom extends DurableObject<Env> {
     if (s.phase === "setup" && phase === "write" && (s.columns ?? []).length === 0) {
       return { success: false, error: "Add at least one column before starting write phase" };
     }
+    if (phase === "vote" && (s.rankingMethod ?? "score") === "pairwise" && this.getDecisionTargetCount(s) > MAX_PAIRWISE_TARGETS) {
+      return { success: false, error: `Pairwise ranking supports at most ${MAX_PAIRWISE_TARGETS} cards or groups` };
+    }
 
     s.phase = phase;
+    if (phase === "vote") {
+      s.votingParticipantIds = s.participants.map((participant) => participant.id);
+    }
     // Reset timer on phase change
     s.timer = { startedAt: null, durationSeconds: null, expired: false };
     await this.saveState();
@@ -1101,20 +1220,24 @@ export class RetroRoom extends DurableObject<Env> {
     this.messageWindows.delete(participantId);
   }
 
+  private async deleteOutstandingWebSocketTicket(participantId: string): Promise<void> {
+    const existingTicket = await this.ctx.storage.get<string>(`ws-ticket-by-participant:${participantId}`);
+    if (existingTicket) {
+      await this.ctx.storage.delete(`ws-ticket:${existingTicket}`);
+    }
+    await this.ctx.storage.delete(`ws-ticket-by-participant:${participantId}`);
+  }
+
   async createWebSocketTicket(participantId: string, connectionToken: unknown): Promise<{ success: boolean; error?: string; ticket?: string }> {
     const s = await this.loadState();
     const auth = this.authorizeHttpMutation(s, participantId, connectionToken);
     if (!auth.success) return auth;
 
-    const existingTicket = await this.ctx.storage.get<string>(`ws-ticket-by-participant:${auth.participantId}`);
-    if (existingTicket) {
-      await this.ctx.storage.delete(`ws-ticket:${existingTicket}`);
-    }
+    await this.deleteOutstandingWebSocketTicket(auth.participantId);
 
     const ticket = generateToken();
     const record: WebSocketTicket = {
       participantId: auth.participantId,
-      connectionToken: connectionToken as string,
       expiresAt: Date.now() + WEBSOCKET_TICKET_TTL_MS,
     };
     await Promise.all([
@@ -1135,7 +1258,6 @@ export class RetroRoom extends DurableObject<Env> {
     if (
       !record
       || typeof record.participantId !== "string"
-      || typeof record.connectionToken !== "string"
       || typeof record.expiresAt !== "number"
     ) {
       return { success: false, error: "Missing or invalid websocket ticket" };
@@ -1152,9 +1274,6 @@ export class RetroRoom extends DurableObject<Env> {
     const s = await this.loadState();
     if (!this.hasParticipant(s, record.participantId)) {
       return { success: false, error: "Participant not found" };
-    }
-    if (!this.hasValidConnectionToken(s, record.participantId, record.connectionToken)) {
-      return { success: false, error: "Websocket ticket expired" };
     }
     return { success: true, participantId: record.participantId };
   }
@@ -1572,6 +1691,9 @@ export class RetroRoom extends DurableObject<Env> {
     if (!this.hasParticipant(s, participantId)) {
       return { success: false, error: "Participant not found" };
     }
+    if (s.votingParticipantIds?.length && !s.votingParticipantIds.includes(participantId)) {
+      return { success: false, error: "Participant joined after voting started" };
+    }
     if ((s.rankingMethod ?? "score") !== "score") {
       return { success: false, error: "This room is using pairwise ranking" };
     }
@@ -1590,20 +1712,6 @@ export class RetroRoom extends DurableObject<Env> {
     s.votes = result.votes;
     await this.saveState();
 
-    const totalForTarget = targetValidation.target.type === "group"
-      ? getVotesForGroup(s.votes, targetValidation.target.id)
-      : getVotesForUngroupedItem(s.votes, targetValidation.target.id);
-    const broadcast: ServerToClientMessage = {
-      type: "vote-changed",
-      target: targetValidation.target,
-      groupId: targetValidation.target.type === "group" ? targetValidation.target.id : "",
-      itemId: targetValidation.target.type === "item" ? targetValidation.target.id : undefined,
-      participantId,
-      delta: count,
-      totalForGroup: totalForTarget,
-      totalForItem: targetValidation.target.type === "item" ? totalForTarget : undefined,
-    };
-    this.broadcast(broadcast);
     this.broadcastState(s);
 
     return { success: true };
@@ -1618,6 +1726,9 @@ export class RetroRoom extends DurableObject<Env> {
 
     if (!this.hasParticipant(s, participantId)) {
       return { success: false, error: "Participant not found" };
+    }
+    if (s.votingParticipantIds?.length && !s.votingParticipantIds.includes(participantId)) {
+      return { success: false, error: "Participant joined after voting started" };
     }
     if ((s.rankingMethod ?? "score") !== "score") {
       return { success: false, error: "This room is using pairwise ranking" };
@@ -1642,20 +1753,6 @@ export class RetroRoom extends DurableObject<Env> {
     s.votes = applyRemoveVote(s.votes, participantId, targetValidation.target);
     await this.saveState();
 
-    const totalForTarget = targetValidation.target.type === "group"
-      ? getVotesForGroup(s.votes, targetValidation.target.id)
-      : getVotesForUngroupedItem(s.votes, targetValidation.target.id);
-    const broadcast: ServerToClientMessage = {
-      type: "vote-changed",
-      target: targetValidation.target,
-      groupId: targetValidation.target.type === "group" ? targetValidation.target.id : "",
-      itemId: targetValidation.target.type === "item" ? targetValidation.target.id : undefined,
-      participantId,
-      delta: -1,
-      totalForGroup: totalForTarget,
-      totalForItem: targetValidation.target.type === "item" ? totalForTarget : undefined,
-    };
-    this.broadcast(broadcast);
     this.broadcastState(s);
 
     return { success: true };
@@ -1672,6 +1769,9 @@ export class RetroRoom extends DurableObject<Env> {
     }
     if (!this.hasParticipant(s, participantId)) {
       return { success: false, error: "Participant not found" };
+    }
+    if (s.votingParticipantIds?.length && !s.votingParticipantIds.includes(participantId)) {
+      return { success: false, error: "Participant joined after voting started" };
     }
 
     const winnerValidation = this.resolveVoteTarget(winner);
@@ -1707,7 +1807,6 @@ export class RetroRoom extends DurableObject<Env> {
     ];
     await this.saveState();
 
-    this.broadcast({ type: "pairwise-choice-changed", choice });
     this.broadcastState(s);
 
     return { success: true };
@@ -1723,43 +1822,27 @@ export class RetroRoom extends DurableObject<Env> {
   }
 
   private broadcastState(s: StoredState, excludeId?: string) {
-    const timer = this.computeTimerStatus(s.timer);
-    const state: RoomState = {
-      schemaVersion: 2,
-      roomId: s.roomId,
-      startedAt: s.startedAt ?? Date.now(),
-      purgeScheduledAt: s.purgeScheduledAt ?? null,
-      phase: s.phase,
-      participants: s.participants,
-      items: s.items,
-      columns: s.columns ?? s.groups,
-      groups: s.groups,
-      votes: s.votes,
-      rankingMethod: s.rankingMethod ?? "score",
-      pairwiseChoices: s.pairwiseChoices ?? [],
-      reviewTargetKey: normalizeReviewTargetKey(s.reviewTargetKey, s.groups, s.items),
-      actions: s.actions ?? [],
-      reactions: s.reactions ?? [],
-      timer,
-      voteBudget: s.voteBudget,
-      version: s.version,
-    };
-    this.broadcast({ type: "snapshot", state }, excludeId);
+    for (const [participantId, ws] of this.sessions) {
+      if (participantId === excludeId || ws.readyState !== WebSocket.READY_STATE_OPEN) continue;
+      ws.send(JSON.stringify({ type: "snapshot", state: this.toRoomState(s, participantId) }));
+    }
   }
 
   override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
     if (url.pathname === "/join" && request.method === "POST") {
-      const body = await readJsonBody<{ participantId: string; displayName: string; connectionToken?: string }>(request);
+      const body = await readJsonBody<{ participantId: string; displayName: string; connectionToken?: string; facilitatorClaimToken?: string }>(request);
       if (!body) return Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
-      const result = await this.join(body.participantId, body.displayName, body.connectionToken);
+      const result = await this.join(body.participantId, body.displayName, body.connectionToken, body.facilitatorClaimToken);
       return Response.json(result);
     }
 
-    if (url.pathname === "/state" && request.method === "GET") {
-      const state = await this.getRoomState();
-      return Response.json(state);
+    if (url.pathname === "/state" && request.method === "POST") {
+      const body = await readJsonBody<{ participantId: string; connectionToken?: string }>(request);
+      if (!body) return Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
+      const result = await this.getRoomStateForParticipant(body.participantId, body.connectionToken);
+      return Response.json(result, { status: result.success ? 200 : 403 });
     }
 
     if (url.pathname === "/vote-budget" && request.method === "POST") {
@@ -1878,7 +1961,7 @@ export class RetroRoom extends DurableObject<Env> {
         this.broadcast(presenceMsg, participantId);
       }
 
-      const snapshot = await this.getRoomState();
+      const snapshot = this.toRoomState(s, participantId);
       server.send(JSON.stringify({ type: "snapshot", state: snapshot }));
 
       return new Response(null, {
@@ -2192,6 +2275,8 @@ export class RetroRoom extends DurableObject<Env> {
       reviewTargetKey: null,
       actions: [],
       facilitatorId: null,
+      facilitatorClaimToken: null,
+      votingParticipantIds: [],
       voteBudget: 5,
       version: 0,
       connectionTokens: {},

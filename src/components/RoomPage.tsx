@@ -149,6 +149,17 @@ function getStoredIdentity(roomId: string): { participantId: string; displayName
   return { participantId, displayName, connectionToken };
 }
 
+function getFacilitatorClaimToken(roomId: string): string | undefined {
+  return sessionStorage.getItem(`retro-facilitator-claim-${roomId}`) ?? undefined;
+}
+
+function clearStoredIdentity(roomId: string): void {
+  localStorage.removeItem(`retro-participant-${roomId}`);
+  localStorage.removeItem(`retro-name-${roomId}`);
+  localStorage.removeItem(`retro-token-${roomId}`);
+  sessionStorage.removeItem(`retro-facilitator-claim-${roomId}`);
+}
+
 function classifyRoomLoadError(error: unknown): RoomLoadError {
   if (error instanceof ApiError && error.status && error.status >= 500) {
     return {
@@ -965,11 +976,12 @@ export function RoomPage() {
   useEffect(() => {
     if (!roomPurged) return undefined;
     const timeout = window.setTimeout(() => {
+      if (roomId) clearStoredIdentity(roomId);
       setLocalRoomState(null);
       setPageState("not-found");
     }, 0);
     return () => window.clearTimeout(timeout);
-  }, [roomPurged]);
+  }, [roomId, roomPurged]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => setTimerPending(false), 0);
@@ -1019,37 +1031,27 @@ export function RoomPage() {
     if (!roomId) return;
     setPageState("loading");
     setRoomLoadError(null);
+    if (!identity.displayName || !identity.connectionToken) {
+      setPageState("join");
+      return;
+    }
     try {
-      const state = await getRoomState(roomId);
-      setLocalRoomState(state);
-      const existing = state.participants.find((p) => p.id === participantId);
-      if (existing) {
-        const name = identity.displayName || existing.displayName;
-        try {
-          const result = await joinRoom(roomId, participantId, name, identity.connectionToken);
-          if (result.success) {
-            localStorage.setItem(`retro-name-${roomId}`, name);
-            setLocalRoomState(result.state ?? state);
-            if (result.connectionToken) {
-              localStorage.setItem(`retro-token-${roomId}`, result.connectionToken);
-              setConnectionToken(result.connectionToken);
-            }
-          } else {
-            resetStoredIdentity();
-            setPageState("join");
-            return;
-          }
-        } catch {
-          resetStoredIdentity();
-          setPageState("join");
-          return;
-        }
-        setPageState("room");
-      } else {
+      const result = await joinRoom(roomId, participantId, identity.displayName, identity.connectionToken, getFacilitatorClaimToken(roomId));
+      if (!result.success) {
+        resetStoredIdentity();
         setPageState("join");
+        return;
       }
+      localStorage.setItem(`retro-name-${roomId}`, identity.displayName);
+      setLocalRoomState(result.state ?? null);
+      if (result.connectionToken) {
+        localStorage.setItem(`retro-token-${roomId}`, result.connectionToken);
+        setConnectionToken(result.connectionToken);
+      }
+      setPageState("room");
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) {
+        clearStoredIdentity(roomId);
         setPageState("not-found");
         return;
       }
@@ -1081,7 +1083,7 @@ export function RoomPage() {
 
     setJoinLoading(true);
     try {
-      const result = await joinRoom(roomId, participantId, trimmed, connectionToken);
+      const result = await joinRoom(roomId, participantId, trimmed, connectionToken, getFacilitatorClaimToken(roomId));
       if (!result.success) {
         setJoinError(result.error ?? "Failed to join room. Please try again.");
         return;
@@ -1092,6 +1094,7 @@ export function RoomPage() {
         localStorage.setItem(`retro-token-${roomId}`, result.connectionToken);
         setConnectionToken(result.connectionToken);
       }
+      sessionStorage.removeItem(`retro-facilitator-claim-${roomId}`);
       setPageState("room");
     } catch {
       setJoinError("Failed to join room. Please check your connection and try again.");
@@ -1118,7 +1121,7 @@ export function RoomPage() {
         setVoteBudgetDirty(false);
         // Refetch authoritative state to handle any missed WebSocket broadcasts during reconnect
         try {
-          const state = await getRoomState(roomId);
+          const state = await getRoomState(roomId, participantId, connectionToken);
           setLocalRoomState(state);
         } catch {
           // Refetch failed; local optimistic update stands and WebSocket will reconcile
@@ -1141,7 +1144,7 @@ export function RoomPage() {
       if (result.success) {
         setRankingMsg(rankingMethod === "pairwise" ? "Pairwise ranking selected." : "Score voting selected.");
         try {
-          const state = await getRoomState(roomId);
+          const state = await getRoomState(roomId, participantId, connectionToken);
           setLocalRoomState(state);
         } catch {
           // WebSocket snapshot will reconcile if the refetch misses.
@@ -1169,7 +1172,7 @@ export function RoomPage() {
         // Refetch authoritative state so the UI updates even if the WebSocket broadcast
         // was missed during a post-reload reconnect window
         try {
-          const state = await getRoomState(roomId);
+          const state = await getRoomState(roomId, participantId, connectionToken);
           setLocalRoomState(state);
         } catch {
           // Refetch failed; local optimistic update stands and WebSocket will reconcile
@@ -1210,7 +1213,7 @@ export function RoomPage() {
       }
       setTimerMsg("Timer started.");
       try {
-        const state = await getRoomState(roomId);
+        const state = await getRoomState(roomId, participantId, connectionToken);
         setLocalRoomState(state);
       } catch {
         // WebSocket snapshot will reconcile if refetch misses.
@@ -1235,6 +1238,7 @@ export function RoomPage() {
         setPurgeMsg(result.error ?? "Failed to delete room data.");
         return;
       }
+      clearStoredIdentity(roomId);
       setLocalRoomState(null);
       setPageState("not-found");
     } catch {
@@ -1272,8 +1276,9 @@ export function RoomPage() {
       }
       setColumnInputs((current) => ({ ...current, [columnId]: "" }));
       restoreColumnFocusRef.current = columnId;
+      setPendingColumnId(null);
       try {
-        const state = await getRoomState(roomId);
+        const state = await getRoomState(roomId, participantId, connectionToken);
         setLocalRoomState(state);
       } catch {
         if (result.item && roomState) {
@@ -1323,7 +1328,7 @@ export function RoomPage() {
       setEditingItemId(null);
       setEditingItemText("");
       try {
-        const state = await getRoomState(roomId);
+        const state = await getRoomState(roomId, participantId, connectionToken);
         setLocalRoomState(state);
       } catch {
         if (result.item && roomState) {
@@ -1353,7 +1358,7 @@ export function RoomPage() {
       }
       if (editingItemId === itemId) handleCancelEditItem();
       try {
-        const state = await getRoomState(roomId);
+        const state = await getRoomState(roomId, participantId, connectionToken);
         setLocalRoomState(state);
       } catch {
         if (roomState) {

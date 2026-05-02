@@ -102,15 +102,20 @@ describe("Worker fetch", () => {
 describe("POST /api/rooms", () => {
   it("rate limits room creation before allocating a Durable Object", async () => {
     const response = await worker.fetch(
-      new Request("http://localhost/api/rooms", {
+      new Request("https://retro.thethracian.com/api/rooms", {
         method: "POST",
         headers: { "CF-Connecting-IP": "198.51.100.10" },
       }),
       {
         ASSETS: undefined,
         RETRO_ROOM: undefined as unknown as Env["RETRO_ROOM"],
+        TURNSTILE_SITE_KEY: "site-key",
+        TURNSTILE_SECRET_KEY: "secret-key",
         ROOM_CREATE_RATE_LIMITER: {
           limit: async () => ({ success: false }),
+        },
+        ROOM_ACCESS_RATE_LIMITER: {
+          limit: async () => ({ success: true }),
         },
       },
       {} as ExecutionContext,
@@ -242,7 +247,7 @@ describe("POST /api/rooms", () => {
 });
 
 describe("GET /api/rooms/:roomId", () => {
-  it("returns room state for an existing room", async () => {
+  it("returns only room metadata for an existing room before participant auth", async () => {
     const createRes = await exports.default.fetch(createRoomRequest());
     const { roomId } = await createRes.json() as { roomId: string };
 
@@ -250,13 +255,41 @@ describe("GET /api/rooms/:roomId", () => {
     expect(getRes.status).toBe(200);
     const state = await getRes.json() as { roomId: string; phase: string; version: number };
     expect(state.roomId).toBe(roomId);
-    expect(state.phase).toBe("setup");
-    expect(typeof state.version).toBe("number");
+    expect(state).not.toHaveProperty("phase");
+    expect(state).not.toHaveProperty("participants");
   });
 
   it("returns 404 for non-existent room", async () => {
     const res = await exports.default.fetch("http://localhost/api/rooms/nonexistent-room");
     expect(res.status).toBe(404);
+  });
+
+  it("requires participant credentials before returning full room state", async () => {
+    const createRes = await exports.default.fetch(createRoomRequest());
+    const { roomId, facilitatorClaimToken } = await createRes.json() as { roomId: string; facilitatorClaimToken: string };
+
+    const joinRes = await exports.default.fetch(`http://localhost/api/rooms/${roomId}/join`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ participantId: "fac", displayName: "Facilitator", facilitatorClaimToken }),
+    });
+    const join = await joinRes.json() as { connectionToken?: string };
+
+    const unauthenticated = await exports.default.fetch(`http://localhost/api/rooms/${roomId}/state`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ participantId: "fac", connectionToken: "wrong" }),
+    });
+    expect(unauthenticated.status).toBe(403);
+
+    const authenticated = await exports.default.fetch(`http://localhost/api/rooms/${roomId}/state`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ participantId: "fac", connectionToken: join.connectionToken }),
+    });
+    expect(authenticated.status).toBe(200);
+    const result = await authenticated.json() as { success: boolean; state?: { roomId: string; phase: string } };
+    expect(result).toMatchObject({ success: true, state: { roomId, phase: "setup" } });
   });
 });
 
@@ -294,26 +327,49 @@ describe("POST /api/rooms/:roomId/join", () => {
 
   it("first participant becomes facilitator", async () => {
     const createRes = await exports.default.fetch(createRoomRequest());
-    const { roomId } = await createRes.json() as { roomId: string };
+    const { roomId, facilitatorClaimToken } = await createRes.json() as { roomId: string; facilitatorClaimToken: string };
 
     const joinRes = await exports.default.fetch(`http://localhost/api/rooms/${roomId}/join`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ participantId: "p1", displayName: "Alice" }),
+      body: JSON.stringify({ participantId: "p1", displayName: "Alice", facilitatorClaimToken }),
     });
     const result = await joinRes.json() as { success: boolean; state?: { participants: Array<{ isFacilitator: boolean }> } };
     expect(result.success).toBe(true);
     expect(result.state?.participants[0]?.isFacilitator).toBe(true);
   });
 
+  it("does not let an early invite opener claim facilitator without the creator token", async () => {
+    const createRes = await exports.default.fetch(createRoomRequest());
+    const { roomId, facilitatorClaimToken } = await createRes.json() as { roomId: string; facilitatorClaimToken: string };
+
+    const earlyJoinRes = await exports.default.fetch(`http://localhost/api/rooms/${roomId}/join`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ participantId: "early", displayName: "Early opener" }),
+    });
+    const earlyJoin = await earlyJoinRes.json() as { success: boolean; state?: { participants: Array<{ id: string; isFacilitator: boolean }> } };
+    expect(earlyJoin.success).toBe(true);
+    expect(earlyJoin.state?.participants.find((participant) => participant.id === "early")?.isFacilitator).toBe(false);
+
+    const creatorJoinRes = await exports.default.fetch(`http://localhost/api/rooms/${roomId}/join`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ participantId: "creator", displayName: "Creator", facilitatorClaimToken }),
+    });
+    const creatorJoin = await creatorJoinRes.json() as { success: boolean; state?: { participants: Array<{ id: string; isFacilitator: boolean }> } };
+    expect(creatorJoin.success).toBe(true);
+    expect(creatorJoin.state?.participants.find((participant) => participant.id === "creator")?.isFacilitator).toBe(true);
+  });
+
   it("second participant is not facilitator", async () => {
     const createRes = await exports.default.fetch(createRoomRequest());
-    const { roomId } = await createRes.json() as { roomId: string };
+    const { roomId, facilitatorClaimToken } = await createRes.json() as { roomId: string; facilitatorClaimToken: string };
 
     await exports.default.fetch(`http://localhost/api/rooms/${roomId}/join`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ participantId: "p1", displayName: "Alice" }),
+      body: JSON.stringify({ participantId: "p1", displayName: "Alice", facilitatorClaimToken }),
     });
 
     const joinRes2 = await exports.default.fetch(`http://localhost/api/rooms/${roomId}/join`, {
@@ -351,13 +407,19 @@ describe("POST /api/rooms/:roomId/join", () => {
     const createRes = await exports.default.fetch(createRoomRequest());
     const { roomId } = await createRes.json() as { roomId: string };
 
-    await exports.default.fetch(`http://localhost/api/rooms/${roomId}/join`, {
+    const joinRes = await exports.default.fetch(`http://localhost/api/rooms/${roomId}/join`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ participantId: "p1", displayName: "Alice" }),
     });
-    const beforeRes = await exports.default.fetch(`http://localhost/api/rooms/${roomId}`);
-    const before = await beforeRes.json() as { purgeScheduledAt: number | null };
+    const join = await joinRes.json() as { connectionToken?: string };
+    const beforeRes = await exports.default.fetch(`http://localhost/api/rooms/${roomId}/state`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ participantId: "p1", connectionToken: join.connectionToken }),
+    });
+    const beforeBody = await beforeRes.json() as { state: { purgeScheduledAt: number | null } };
+    const before = beforeBody.state;
     expect(before.purgeScheduledAt).not.toBeNull();
 
     await exports.default.fetch(`http://localhost/api/rooms/${roomId}/join`, {
@@ -365,8 +427,13 @@ describe("POST /api/rooms/:roomId/join", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ participantId: "p1", displayName: "Alice" }),
     });
-    const afterRes = await exports.default.fetch(`http://localhost/api/rooms/${roomId}`);
-    const after = await afterRes.json() as { purgeScheduledAt: number | null };
+    const afterRes = await exports.default.fetch(`http://localhost/api/rooms/${roomId}/state`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ participantId: "p1", connectionToken: join.connectionToken }),
+    });
+    const afterBody = await afterRes.json() as { state: { purgeScheduledAt: number | null } };
+    const after = afterBody.state;
 
     expect(after.purgeScheduledAt).toBe(before.purgeScheduledAt);
   });
@@ -430,12 +497,12 @@ describe("POST /api/rooms/:roomId/join", () => {
 describe("POST /api/rooms/:roomId/vote-budget", () => {
   it("sets vote budget for facilitator", async () => {
     const createRes = await exports.default.fetch(createRoomRequest());
-    const { roomId } = await createRes.json() as { roomId: string };
+    const { roomId, facilitatorClaimToken } = await createRes.json() as { roomId: string; facilitatorClaimToken: string };
 
     const joinRes = await exports.default.fetch(`http://localhost/api/rooms/${roomId}/join`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ participantId: "fac", displayName: "Facilitator" }),
+      body: JSON.stringify({ participantId: "fac", displayName: "Facilitator", facilitatorClaimToken }),
     });
     const join = await joinRes.json() as { connectionToken?: string };
 

@@ -14,7 +14,6 @@ import {
   getVotesForUngroupedItem,
   groupVoteTarget,
   itemVoteTarget,
-  pairwiseComparisonKey,
   voteTargetKey,
 } from "../domain";
 import { ReactionBar } from "./Reactions";
@@ -290,25 +289,20 @@ function PairwiseVoteBoard({
   const previousAnsweredCount = useRef<number | null>(null);
   const comparisons = getPairwiseComparisons(roomState);
   const decisionTargets = getDecisionTargets(roomState);
-  const comparisonKeys = new Set(comparisons.map((comparison) => comparison.key));
   const answeredCount = comparisons.filter((comparison) =>
     getPairwiseChoice(roomState.pairwiseChoices ?? [], participantId, comparison.left.target, comparison.right.target) !== null,
   ).length;
   const participantProgress = roomState.participants.map((participant) => {
-    const answeredKeys = new Set(
-      (roomState.pairwiseChoices ?? [])
-        .filter((choice) => choice.participantId === participant.id)
-        .map((choice) => pairwiseComparisonKey(choice.winner, choice.loser))
-        .filter((key) => comparisonKeys.has(key)),
-    );
-    const answered = answeredKeys.size;
-    const percent = comparisons.length === 0 ? 0 : Math.round((answered / comparisons.length) * 100);
+    const serverProgress = roomState.pairwiseProgress?.find((progress) => progress.participantId === participant.id);
+    const answered = serverProgress?.answered ?? (participant.id === participantId ? answeredCount : 0);
+    const total = serverProgress?.total ?? comparisons.length;
+    const percent = total === 0 ? 0 : Math.round((answered / total) * 100);
     return {
       participant,
       answered,
-      total: comparisons.length,
+      total,
       percent,
-      complete: comparisons.length > 0 && answered === comparisons.length,
+      complete: total > 0 && answered === total,
     };
   });
   const totalParticipantPairs = participantProgress.reduce((sum, progress) => sum + progress.total, 0);

@@ -26,7 +26,10 @@ function makeRoomState(groups: Group[] = [], items: RetroItem[] = [], votes: Roo
     votes,
     rankingMethod: "score",
     pairwiseChoices: [],
+    pairwiseProgress: [],
+    reviewTargetKey: null,
     actions: [],
+    reactions: [],
     timer: { startedAt: null, durationSeconds: null, expired: false },
     voteBudget: 5,
     version: 1,
@@ -139,7 +142,10 @@ describe("VoteBoard mixed target voting", () => {
         { participantId: "fac1", winner: itemVoteTarget("item-1"), loser: itemVoteTarget("item-2") },
         { participantId: "fac1", winner: itemVoteTarget("item-1"), loser: itemVoteTarget("item-3") },
         { participantId: "fac1", winner: itemVoteTarget("item-2"), loser: itemVoteTarget("item-3") },
-        { participantId: "p2", winner: itemVoteTarget("item-2"), loser: itemVoteTarget("item-3") },
+      ],
+      pairwiseProgress: [
+        { participantId: "fac1", answered: 3, total: 3 },
+        { participantId: "p2", answered: 1, total: 3 },
       ],
     };
 

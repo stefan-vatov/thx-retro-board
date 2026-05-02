@@ -264,14 +264,34 @@ describe("RetroRoom Durable Object v2 schema", () => {
   });
 
   it("purges stored room data after the empty-room alarm fires", async () => {
-    const stub = await initRaw("test-v2-empty-room-purge");
+    const roomId = "test-v2-empty-room-purge";
+    const id = env.RETRO_ROOM.idFromName(roomId);
+    const stub = env.RETRO_ROOM.get(id);
+    await stub.seedStoredStateForTest({
+      roomId,
+      purgeScheduledAt: Date.now() - 1,
+    });
 
     const state = await stub.getRoomState();
-    expect(state.purgeScheduledAt).toBeGreaterThan(Date.now());
+    expect(state.purgeScheduledAt).toBeLessThanOrEqual(Date.now());
 
     await stub.runEmptyRoomAlarmForTest();
 
     await expect(stub.hasRoom()).resolves.toBe(false);
+  });
+
+  it("ignores stale empty-room alarms before the scheduled purge time", async () => {
+    const roomId = "test-v2-empty-room-stale-alarm";
+    const id = env.RETRO_ROOM.idFromName(roomId);
+    const stub = env.RETRO_ROOM.get(id);
+    await stub.seedStoredStateForTest({
+      roomId,
+      purgeScheduledAt: Date.now() + 60_000,
+    });
+
+    await stub.runEmptyRoomAlarmForTest();
+
+    await expect(stub.hasRoom()).resolves.toBe(true);
   });
 
   it("lets only the facilitator manually purge room data", async () => {
@@ -398,6 +418,39 @@ describe("RetroRoom Durable Object v2 schema", () => {
       success: false,
       error: "Pairwise ranking supports at most 50 cards or groups",
     });
+  });
+
+  it("blocks entering pairwise vote when the board has too many decision targets", async () => {
+    const roomId = "test-v2-pairwise-target-cap-phase";
+    const id = env.RETRO_ROOM.idFromName(roomId);
+    const stub = env.RETRO_ROOM.get(id);
+    const columns = getDefaultColumns();
+    const firstColumnId = columns[0]!.id;
+
+    await stub.seedStoredStateForTest({
+      roomId,
+      phase: "organise",
+      rankingMethod: "pairwise",
+      columns,
+      groups: [],
+      votes: [],
+      participants: [{ id: "fac1", displayName: "Facilitator", isFacilitator: true }],
+      facilitatorId: "fac1",
+      items: Array.from({ length: 51 }, (_, index) => ({
+        id: `item-${index}`,
+        text: `Item ${index}`,
+        authorId: "fac1",
+        columnId: firstColumnId,
+        groupId: null,
+        order: index,
+      })),
+    });
+
+    await expect(stub.setPhase("fac1", "vote")).resolves.toMatchObject({
+      success: false,
+      error: "Pairwise ranking supports at most 50 cards or groups",
+    });
+    expect((await stub.getRoomState()).phase).toBe("organise");
   });
 
   it("stores distinct columns, column-scoped groups, original item column IDs, and group votes", async () => {
@@ -584,6 +637,21 @@ describe("RetroRoom Durable Object v2 schema", () => {
     expect(await stub.getRoomState()).toEqual(beforeOverBudget);
   });
 
+  it("does not count participants who join after voting starts", async () => {
+    const stub = await init("test-v2-vote-roster-freeze");
+    await stub.join("fac1", "Facilitator");
+    const column = await stub.createColumn("fac1", "Lane");
+    const ungroupedItem = await stub.addItem("fac1", "Ungrouped topic", column.column!.id);
+    await stub.setPhase("fac1", "organise");
+    await stub.setPhase("fac1", "vote");
+    await stub.join("late", "Late participant");
+
+    await expect(stub.castVote("late", itemVoteTarget(ungroupedItem.item!.id), 1)).resolves.toMatchObject({
+      success: false,
+      error: "Participant joined after voting started",
+    });
+  });
+
   it("accepts pairwise choices between grouped and ungrouped targets across columns", async () => {
     const stub = await initRaw("test-v2-pairwise-cross-board-targets");
     await stub.join("fac1", "Facilitator");
@@ -663,6 +731,37 @@ describe("RetroRoom Durable Object v2 schema", () => {
       { participantId: "fac1", target: groupVoteTarget(group.group!.id), count: 1 },
       { participantId: "fac1", target: itemVoteTarget(ungroupedItem.item!.id), count: 1 },
       { participantId: "p2", target: itemVoteTarget(ungroupedItem.item!.id), count: 1 },
+    ]);
+  });
+
+  it("projects other participants' votes anonymously in participant state", async () => {
+    const stub = await init("test-v2-vote-privacy-projection");
+    const fac = await stub.join("fac1", "Facilitator");
+    const p2 = await stub.join("p2", "Participant");
+    const column = await stub.createColumn("fac1", "Lane");
+    const ungroupedItem = await stub.addItem("fac1", "Ungrouped topic", column.column!.id);
+    await stub.setPhase("fac1", "organise");
+    const group = await stub.createGroup("fac1", "Group target", column.column!.id);
+    await stub.setPhase("fac1", "vote");
+    await stub.castVote("fac1", groupVoteTarget(group.group!.id), 2);
+    await stub.castVote("p2", groupVoteTarget(group.group!.id), 1);
+    await stub.castVote("p2", itemVoteTarget(ungroupedItem.item!.id), 1);
+
+    const facState = await stub.getRoomStateForParticipant("fac1", fac.connectionToken);
+    expect(facState.success).toBe(true);
+    expect(facState.state?.votes).toEqual([
+      { participantId: "fac1", target: groupVoteTarget(group.group!.id), count: 2 },
+      { participantId: "__anonymous__", target: groupVoteTarget(group.group!.id), count: 1 },
+      { participantId: "__anonymous__", target: itemVoteTarget(ungroupedItem.item!.id), count: 1 },
+    ]);
+    expect(facState.state?.votes.some((vote) => vote.participantId === "p2")).toBe(false);
+
+    const p2State = await stub.getRoomStateForParticipant("p2", p2.connectionToken);
+    expect(p2State.success).toBe(true);
+    expect(p2State.state?.votes).toEqual([
+      { participantId: "p2", target: groupVoteTarget(group.group!.id), count: 1 },
+      { participantId: "p2", target: itemVoteTarget(ungroupedItem.item!.id), count: 1 },
+      { participantId: "__anonymous__", target: groupVoteTarget(group.group!.id), count: 2 },
     ]);
   });
 

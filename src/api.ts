@@ -20,7 +20,7 @@ export async function getPublicConfig(): Promise<PublicConfig> {
   return res.json() as Promise<PublicConfig>;
 }
 
-export async function createRoom(turnstileToken?: string): Promise<{ roomId: string }> {
+export async function createRoom(turnstileToken?: string): Promise<{ roomId: string; facilitatorClaimToken?: string }> {
   const res = await fetch("/api/rooms", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -30,16 +30,28 @@ export async function createRoom(turnstileToken?: string): Promise<{ roomId: str
     const body = await res.json().catch(() => null) as { error?: string } | null;
     throw new Error(body?.error ?? "Failed to create room");
   }
-  return res.json() as Promise<{ roomId: string }>;
+  return res.json() as Promise<{ roomId: string; facilitatorClaimToken?: string }>;
 }
 
-export async function getRoomState(roomId: string): Promise<RoomState> {
-  const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}`);
+export async function getRoomState(
+  roomId: string,
+  participantId: string,
+  connectionToken: string | undefined,
+): Promise<RoomState> {
+  const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/state`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ participantId, connectionToken }),
+  });
   if (!res.ok) {
     const message = res.status === 404 ? "Room not found" : "Failed to load room";
     throw new ApiError(message, res.status);
   }
-  return res.json() as Promise<RoomState>;
+  const result = await res.json() as { success?: boolean; error?: string; state?: RoomState };
+  if (!result.success || !result.state) {
+    throw new ApiError(result.error ?? "Failed to load room", res.status);
+  }
+  return result.state;
 }
 
 export async function joinRoom(
@@ -47,11 +59,12 @@ export async function joinRoom(
   participantId: string,
   displayName: string,
   connectionToken?: string,
+  facilitatorClaimToken?: string,
 ): Promise<{ success: boolean; error?: string; state?: RoomState; connectionToken?: string }> {
   const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/join`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ participantId, displayName, connectionToken }),
+    body: JSON.stringify({ participantId, displayName, connectionToken, facilitatorClaimToken }),
   });
   return res.json() as Promise<{ success: boolean; error?: string; state?: RoomState; connectionToken?: string }>;
 }

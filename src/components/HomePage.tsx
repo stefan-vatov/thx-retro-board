@@ -38,7 +38,10 @@ export function HomePage() {
     setCreating(true);
     setError(null);
     try {
-      const { roomId } = await createRoom(turnstileToken ?? undefined);
+      const { roomId, facilitatorClaimToken } = await createRoom(turnstileToken ?? undefined);
+      if (facilitatorClaimToken) {
+        sessionStorage.setItem(`retro-facilitator-claim-${roomId}`, facilitatorClaimToken);
+      }
       navigate(`/room/${roomId}`);
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : "Failed to create room. Please check your connection and try again.");
