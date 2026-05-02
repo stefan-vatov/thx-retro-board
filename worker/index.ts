@@ -1,22 +1,16 @@
-import { Effect, Schema } from "effect";
 import type { RetroRoom } from "./retro-room";
+import { ROOM_ID_LENGTH } from "../src/domain";
 import {
-  generateRoomId,
-  ROOM_ID_LENGTH,
-} from "../src/domain";
-import {
-  getRateLimitKey,
   hasProductionAntiAbuseConfig,
   isLocalRequest,
   rateLimitRoomAccess,
 } from "./anti-abuse";
+import { handleCreateRoomRequestEffect } from "./index-effect";
 import {
-  readJsonBody,
   readValidatedJsonBody,
 } from "./http-effect";
 import {
   AddItemRequestSchema,
-  CreateRoomRequestSchema,
   EditItemRequestSchema,
   JoinRoomRequestSchema,
   OptionalConnectionTokenSchema,
@@ -27,7 +21,7 @@ import {
   VoteBudgetRequestSchema,
 } from "./room-request-schemas";
 import { withSecurityHeaders } from "./security-headers";
-import { verifyTurnstileToken } from "./turnstile";
+import { Effect } from "effect";
 
 export interface Env {
   ASSETS?: Fetcher;
@@ -84,33 +78,7 @@ export default {
 
     if (pathname === "/api/rooms") {
       if (method === "POST") {
-        if (!isLocalRequest(url) && !hasProductionAntiAbuseConfig(env)) {
-          return Response.json({ error: "Room creation is temporarily unavailable." }, { status: 503 });
-        }
-        const createLimitKey = getRateLimitKey(request, url, "room-create");
-        if (env.ROOM_CREATE_RATE_LIMITER && createLimitKey) {
-          const { success } = await env.ROOM_CREATE_RATE_LIMITER.limit({ key: createLimitKey });
-          if (!success) {
-            return Response.json({ error: "Too many rooms created from this network. Please wait a minute and try again." }, { status: 429 });
-          }
-        }
-
-        const rawBody = await readJsonBody<unknown>(request, { maxBytes: MAX_JSON_BODY_BYTES });
-        const body = rawBody === null
-          ? {}
-          : await Effect.runPromiseExit(Schema.decodeUnknown(CreateRoomRequestSchema)(rawBody)).then((decoded) =>
-              decoded._tag === "Success" ? decoded.value : {});
-        const clientIp = request.headers.get("CF-Connecting-IP");
-        const turnstile = await verifyTurnstileToken({ secret: env.TURNSTILE_SECRET_KEY }, body?.turnstileToken, clientIp ?? "unknown");
-        if (!turnstile.success) {
-          return Response.json({ error: turnstile.error }, { status: 403 });
-        }
-
-        const roomId = generateRoomId();
-        const facilitatorClaimToken = crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
-        const stub = getRoomStub(env, roomId);
-        await stub.initRoom(roomId, facilitatorClaimToken);
-        return Response.json({ roomId, facilitatorClaimToken });
+        return Effect.runPromise(handleCreateRoomRequestEffect(request, env, url));
       }
       if (method === "GET") {
         return Response.json({ message: "Retro Board API" });
