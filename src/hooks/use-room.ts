@@ -4,7 +4,7 @@ import {
   createWebSocketTicketEffect,
   runApiEffect,
 } from "../api";
-import { pairwiseComparisonKey, ServerToClientMessageSchema } from "../domain";
+import { ClientToServerMessageSchema, pairwiseComparisonKey, ServerToClientMessageSchema } from "../domain";
 import type { RoomState, ServerToClientMessage } from "../domain";
 
 export const INITIAL_RECONNECT_DELAY_MS = 750;
@@ -42,6 +42,13 @@ export function decodeRealtimeMessageEffect(raw: string): Effect.Effect<ServerTo
     );
     return decoded as ServerToClientMessage;
   });
+}
+
+export function prepareRealtimeSendEffect(message: unknown): Effect.Effect<string, RealtimeMessageError> {
+  return Schema.decodeUnknown(ClientToServerMessageSchema)(message).pipe(
+    Effect.mapError(() => new RealtimeMessageError("Invalid realtime command")),
+    Effect.map((validated) => JSON.stringify(validated)),
+  );
 }
 
 interface UseRoomResult {
@@ -244,8 +251,13 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
       return false;
     }
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      const encoded = Effect.runSyncExit(prepareRealtimeSendEffect(message));
+      if (Exit.isFailure(encoded)) {
+        setLastError("Invalid realtime command.");
+        return false;
+      }
       setLastError(null);
-      wsRef.current.send(JSON.stringify(message));
+      wsRef.current.send(encoded.value);
       return true;
     }
     setLastError("Reconnecting. Please try again once the room is connected.");

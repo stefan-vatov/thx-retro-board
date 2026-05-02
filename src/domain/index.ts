@@ -2,6 +2,7 @@ export { type Phase, type Participant, type RetroItem, type Column, type Group, 
 export { type ServerToClientMessage, type ClientToServerMessage } from "./messages";
 export {
   ActionItemSchema,
+  ClientToServerMessageSchema,
   ColumnSchema,
   GroupSchema,
   PairwiseChoiceSchema,

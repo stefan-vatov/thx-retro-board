@@ -7,6 +7,7 @@ import {
   INITIAL_RECONNECT_DELAY_MS,
   MAX_RECONNECT_ATTEMPTS,
   MAX_RECONNECT_DELAY_MS,
+  prepareRealtimeSendEffect,
   shouldResetRealtimeReconnectAttempts,
 } from "./use-room";
 
@@ -52,6 +53,27 @@ describe("realtime message decoding", () => {
 
   it("rejects non-json websocket payloads as typed failures", async () => {
     const exit = await Effect.runPromiseExit(decodeRealtimeMessageEffect("{not json"));
+
+    expect(Exit.isFailure(exit)).toBe(true);
+  });
+});
+
+describe("realtime outbound message encoding", () => {
+  it("serializes valid client commands through an Effect boundary", async () => {
+    await expect(Effect.runPromise(prepareRealtimeSendEffect({
+      type: "set-phase",
+      phase: "vote",
+    }))).resolves.toBe(JSON.stringify({
+      type: "set-phase",
+      phase: "vote",
+    }));
+  });
+
+  it("rejects invalid client commands before sending", async () => {
+    const exit = await Effect.runPromiseExit(prepareRealtimeSendEffect({
+      type: "set-phase",
+      phase: "done",
+    }));
 
     expect(Exit.isFailure(exit)).toBe(true);
   });

@@ -1,6 +1,7 @@
 import { Effect, Exit, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import {
+  ClientToServerMessageSchema,
   RoomStateSchema,
   ServerToClientMessageSchema,
 } from "./schemas";
@@ -50,5 +51,34 @@ describe("Effect domain schemas", () => {
       type: "snapshot",
       state: roomState,
     });
+  });
+
+  it("decodes valid outbound websocket commands with the shared domain schema", async () => {
+    await expect(Effect.runPromise(Schema.decodeUnknown(ClientToServerMessageSchema)({
+      type: "move-item-to-group",
+      itemId: "item-1",
+      groupId: null,
+      index: 0,
+      expectedVersion: 2,
+      sourceGroupId: "group-1",
+      sourceIndex: 1,
+    }))).resolves.toEqual({
+      type: "move-item-to-group",
+      itemId: "item-1",
+      groupId: null,
+      index: 0,
+      expectedVersion: 2,
+      sourceGroupId: "group-1",
+      sourceIndex: 1,
+    });
+  });
+
+  it("rejects malformed outbound websocket commands before they reach the socket", async () => {
+    const exit = await Effect.runPromiseExit(Schema.decodeUnknown(ClientToServerMessageSchema)({
+      type: "set-phase",
+      phase: "done",
+    }));
+
+    expect(Exit.isFailure(exit)).toBe(true);
   });
 });
