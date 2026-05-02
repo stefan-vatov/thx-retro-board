@@ -1,4 +1,74 @@
-import type { Phase, Participant, RetroItem, Group, Column, VoteAllocation, TimerState, RoomState, VoteTarget, ActionItem, PairwiseChoice, RankingMethod, Reaction, ReactionTarget } from "./types";
+import type { Phase, Participant, RetroItem, Group, Column, VoteAllocation, TimerState, RoomState, ActionItem } from "./types";
+
+import {
+  getVoteTarget,
+  groupVoteTarget,
+  sameVoteTarget,
+} from "./state-targets";
+import {
+  hasDuplicateGroupNameInColumn,
+  isValidColumnName,
+  isValidGroupName,
+  reorderList,
+  sanitizeActionText,
+  sanitizeColumnName,
+  sanitizeGroupName,
+} from "./state-sanitize";
+
+export {
+  getGroupedItems,
+  getUngroupedItems,
+} from "./state-items";
+export {
+  getDecisionTargets,
+  getPairwiseChoice,
+  getPairwiseComparisons,
+  getReviewTargets,
+  sortReviewTargets,
+  type DecisionTarget,
+  type PairwiseComparison,
+  type ReviewTarget,
+} from "./state-review";
+export {
+  getReactionsForTarget,
+  getReactionCount,
+  hasParticipantReaction,
+  isAllowedReactionEmoji,
+} from "./state-reactions";
+export {
+  hasDuplicateGroupNameInColumn,
+  isValidActionText,
+  isValidColumnName,
+  isValidDisplayName,
+  isValidGroupName,
+  isValidItemText,
+  MAX_ACTION_TEXT_LENGTH,
+  MAX_COLUMN_NAME_LENGTH,
+  reorderList,
+  sanitizeActionText,
+  sanitizeColumnName,
+  sanitizeDisplayName,
+  sanitizeGroupName,
+  sanitizeItemText,
+} from "./state-sanitize";
+export {
+  getVoteTarget,
+  groupVoteTarget,
+  itemVoteTarget,
+  pairwiseComparisonKey,
+  sameVoteTarget,
+  voteTargetKey,
+} from "./state-targets";
+export {
+  applyCastVote,
+  applyRemoveVote,
+  getRemainingBudget,
+  getVotesByParticipant,
+  getVotesForGroup,
+  getVotesForItem,
+  getVotesForTarget,
+  getVotesForUngroupedItem,
+} from "./state-votes";
 
 export const DEFAULT_COLUMNS: readonly Column[] = [
   { id: "mad", name: "Mad", order: 0 },
@@ -6,9 +76,7 @@ export const DEFAULT_COLUMNS: readonly Column[] = [
   { id: "sad", name: "Sad", order: 2 },
 ] as const;
 
-export const MAX_COLUMN_NAME_LENGTH = 100;
 export const MAX_COLUMNS = 8;
-export const MAX_ACTION_TEXT_LENGTH = 240;
 
 export function getDefaultColumns(): Column[] {
   return DEFAULT_COLUMNS.map((column) => ({ ...column }));
@@ -73,288 +141,10 @@ export function isPhaseAllowed(actionPhase: Phase, currentPhase: Phase): boolean
   return actionPhase === currentPhase;
 }
 
-export function voteTargetKey(target: VoteTarget): string {
-  return `${target.type}:${target.id}`;
-}
-
-export function pairwiseComparisonKey(left: VoteTarget, right: VoteTarget): string {
-  return [voteTargetKey(left), voteTargetKey(right)].sort().join("::");
-}
-
-export function groupVoteTarget(groupId: string): VoteTarget {
-  return { type: "group", id: groupId };
-}
-
-export function itemVoteTarget(itemId: string): VoteTarget {
-  return { type: "item", id: itemId };
-}
-
-export function getVoteTarget(vote: VoteAllocation): VoteTarget | null {
-  if (
-    vote.target
-    && (vote.target.type === "group" || vote.target.type === "item")
-    && typeof vote.target.id === "string"
-  ) {
-    return vote.target;
-  }
-  if (typeof vote.groupId === "string") {
-    return groupVoteTarget(vote.groupId);
-  }
-  if (typeof vote.itemId === "string") {
-    return groupVoteTarget(vote.itemId);
-  }
-  return null;
-}
-
-export function sameVoteTarget(left: VoteTarget, right: VoteTarget): boolean {
-  return left.type === right.type && left.id === right.id;
-}
-
-export function isAllowedReactionEmoji(emoji: string): boolean {
-  const normalized = emoji.trim();
-  if (normalized.length === 0 || normalized.length > 32) return false;
-
-  const segmenter = typeof Intl !== "undefined" && "Segmenter" in Intl
-    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
-    : null;
-  if (segmenter && Array.from(segmenter.segment(normalized)).length !== 1) return false;
-
-  return /[\p{Extended_Pictographic}\p{Emoji_Presentation}\p{Regional_Indicator}]/u.test(normalized);
-}
-
-export function getReactionsForTarget(reactions: Reaction[] | undefined, target: ReactionTarget): Reaction[] {
-  return (reactions ?? []).filter((reaction) => sameVoteTarget(reaction.target, target));
-}
-
-export function getReactionCount(reactions: Reaction[] | undefined, target: ReactionTarget, emoji: string): number {
-  return getReactionsForTarget(reactions, target).filter((reaction) => reaction.emoji === emoji).length;
-}
-
-export function hasParticipantReaction(reactions: Reaction[] | undefined, participantId: string, target: ReactionTarget, emoji: string): boolean {
-  return getReactionsForTarget(reactions, target).some((reaction) => reaction.participantId === participantId && reaction.emoji === emoji);
-}
-
-export function getVotesForTarget(votes: VoteAllocation[], target: VoteTarget): number {
-  return votes
-    .filter((v) => {
-      const voteTarget = getVoteTarget(v);
-      return voteTarget !== null && sameVoteTarget(voteTarget, target);
-    })
-    .reduce((sum, v) => sum + v.count, 0);
-}
-
-export function getVotesForGroup(votes: VoteAllocation[], groupId: string): number {
-  return getVotesForTarget(votes, groupVoteTarget(groupId));
-}
-
-export function getVotesForUngroupedItem(votes: VoteAllocation[], itemId: string): number {
-  return getVotesForTarget(votes, itemVoteTarget(itemId));
-}
-
-/** @deprecated Votes target groups. Use getVotesForGroup. */
-export const getVotesForItem = getVotesForGroup;
-
-export function getVotesByParticipant(votes: VoteAllocation[], participantId: string): number {
-  return votes
-    .filter((v) => v.participantId === participantId)
-    .reduce((sum, v) => sum + v.count, 0);
-}
-
-export function getRemainingBudget(votes: VoteAllocation[], participantId: string, budget: number): number {
-  return budget - getVotesByParticipant(votes, participantId);
-}
-
-export interface ReviewTarget {
-  target: VoteTarget;
-  columnId: string;
-  order: number;
-  totalVotes: number;
-  wins: number;
-  losses: number;
-  comparisons: number;
-  score: number;
-  method: RankingMethod;
-}
-
-export interface DecisionTarget {
-  target: VoteTarget;
-  columnId: string;
-  order: number;
-  label: string;
-}
-
-export interface PairwiseComparison {
-  key: string;
-  columnId: string;
-  left: DecisionTarget;
-  right: DecisionTarget;
-}
-
-export function getDecisionTargets(state: Pick<RoomState, "groups" | "items">): DecisionTarget[] {
-  const groups = state.groups.map((group) => ({
-    target: groupVoteTarget(group.id),
-    columnId: group.columnId,
-    order: group.order,
-    label: group.name,
-  }));
-  const ungroupedItems = getUngroupedItems(state.items).map((item) => ({
-    target: itemVoteTarget(item.id),
-    columnId: item.columnId,
-    order: item.order,
-    label: item.text,
-  }));
-  return [...groups, ...ungroupedItems];
-}
-
-export function getPairwiseComparisons(state: Pick<RoomState, "columns" | "groups" | "items">): PairwiseComparison[] {
-  const columnOrder = new Map(state.columns.map((column) => [column.id, column.order]));
-  const sortedTargets = getDecisionTargets(state).sort((a, b) => {
-    const columnDifference = (columnOrder.get(a.columnId) ?? Number.MAX_SAFE_INTEGER) - (columnOrder.get(b.columnId) ?? Number.MAX_SAFE_INTEGER);
-    if (columnDifference !== 0) return columnDifference;
-    const orderDifference = a.order - b.order;
-    if (orderDifference !== 0) return orderDifference;
-    return voteTargetKey(a.target).localeCompare(voteTargetKey(b.target));
-  });
-
-  const comparisons: PairwiseComparison[] = [];
-  for (let leftIndex = 0; leftIndex < sortedTargets.length; leftIndex += 1) {
-    for (let rightIndex = leftIndex + 1; rightIndex < sortedTargets.length; rightIndex += 1) {
-      const left = sortedTargets[leftIndex];
-      const right = sortedTargets[rightIndex];
-      if (!left || !right) continue;
-      comparisons.push({
-        key: pairwiseComparisonKey(left.target, right.target),
-        columnId: left.columnId === right.columnId ? left.columnId : "__cross_column__",
-        left,
-        right,
-      });
-    }
-  }
-
-  return comparisons;
-}
-
-export function getPairwiseChoice(
-  choices: PairwiseChoice[],
-  participantId: string,
-  left: VoteTarget,
-  right: VoteTarget,
-): PairwiseChoice | null {
-  const key = pairwiseComparisonKey(left, right);
-  return choices.find((choice) =>
-    choice.participantId === participantId
-    && pairwiseComparisonKey(choice.winner, choice.loser) === key,
-  ) ?? null;
-}
-
-export function getReviewTargets(state: Pick<RoomState, "columns" | "groups" | "items" | "votes"> & Partial<Pick<RoomState, "rankingMethod" | "pairwiseChoices">>): ReviewTarget[] {
-  const method = state.rankingMethod ?? "score";
-  const pairwiseTotals = new Map<string, { wins: number; losses: number }>();
-  for (const choice of state.pairwiseChoices ?? []) {
-    const winnerKey = voteTargetKey(choice.winner);
-    const loserKey = voteTargetKey(choice.loser);
-    const winner = pairwiseTotals.get(winnerKey) ?? { wins: 0, losses: 0 };
-    const loser = pairwiseTotals.get(loserKey) ?? { wins: 0, losses: 0 };
-    const count = Number.isInteger(choice.count) && choice.count !== undefined && choice.count > 0 ? choice.count : 1;
-    pairwiseTotals.set(winnerKey, { ...winner, wins: winner.wins + count });
-    pairwiseTotals.set(loserKey, { ...loser, losses: loser.losses + count });
-  }
-
-  return getDecisionTargets(state).map((decisionTarget) => {
-    const pairwise = pairwiseTotals.get(voteTargetKey(decisionTarget.target)) ?? { wins: 0, losses: 0 };
-    const totalVotes = getVotesForTarget(state.votes, decisionTarget.target);
-    return {
-      target: decisionTarget.target,
-      columnId: decisionTarget.columnId,
-      order: decisionTarget.order,
-      totalVotes,
-      wins: pairwise.wins,
-      losses: pairwise.losses,
-      comparisons: pairwise.wins + pairwise.losses,
-      score: method === "pairwise" ? pairwise.wins : totalVotes,
-      method,
-    };
-  });
-}
-
-export function sortReviewTargets(
-  targets: ReviewTarget[],
-  columns: Column[],
-): ReviewTarget[] {
-  const columnOrder = new Map(columns.map((column) => [column.id, column.order]));
-  return [...targets].sort((a, b) => {
-    const scoreDifference = b.score - a.score;
-    if (scoreDifference !== 0) return scoreDifference;
-    const comparisonDifference = b.comparisons - a.comparisons;
-    if (comparisonDifference !== 0) return comparisonDifference;
-    const columnDifference = (columnOrder.get(a.columnId) ?? Number.MAX_SAFE_INTEGER) - (columnOrder.get(b.columnId) ?? Number.MAX_SAFE_INTEGER);
-    if (columnDifference !== 0) return columnDifference;
-    const orderDifference = a.order - b.order;
-    if (orderDifference !== 0) return orderDifference;
-    return voteTargetKey(a.target).localeCompare(voteTargetKey(b.target));
-  });
-}
-
 export function isTimerExpired(timer: TimerState): boolean {
   if (timer.startedAt === null || timer.durationSeconds === null) return false;
   const elapsed = (Date.now() - timer.startedAt) / 1000;
   return elapsed >= timer.durationSeconds;
-}
-
-export function sanitizeDisplayName(name: string): string {
-  return name.trim().slice(0, 50);
-}
-
-export function isValidDisplayName(name: string): boolean {
-  return sanitizeDisplayName(name).length > 0;
-}
-
-export function sanitizeItemText(text: string): string {
-  return text.trim().slice(0, 500);
-}
-
-export function isValidItemText(text: string): boolean {
-  return sanitizeItemText(text).length > 0;
-}
-
-export function sanitizeActionText(text: string): string {
-  return text.trim().replace(/\s+/g, " ").slice(0, MAX_ACTION_TEXT_LENGTH);
-}
-
-export function isValidActionText(text: string): boolean {
-  return sanitizeActionText(text).length > 0;
-}
-
-export function reorderList<T>(list: T[], orderedIds: string[], idExtractor: (item: T) => string): T[] {
-  const map = new Map(list.map((item) => [idExtractor(item), item]));
-  return orderedIds
-    .map((id) => map.get(id))
-    .filter((item): item is T => item !== undefined);
-}
-
-export function sanitizeGroupName(name: string): string {
-  return name.trim().slice(0, MAX_COLUMN_NAME_LENGTH);
-}
-
-export function isValidGroupName(name: string): boolean {
-  return sanitizeGroupName(name).length > 0;
-}
-
-export const sanitizeColumnName = sanitizeGroupName;
-export const isValidColumnName = isValidGroupName;
-
-export function hasDuplicateGroupNameInColumn(
-  groups: Group[],
-  columnId: string,
-  rawName: string,
-  excludedGroupId?: string,
-): boolean {
-  const sanitized = sanitizeGroupName(rawName);
-  return groups.some((group) =>
-    group.columnId === columnId
-    && group.id !== excludedGroupId
-    && sanitizeGroupName(group.name) === sanitized,
-  );
 }
 
 export function validateExistingColumnId(
@@ -368,18 +158,6 @@ export function validateExistingColumnId(
     return { valid: false, error: "Column not found" };
   }
   return { valid: true, columnId };
-}
-
-export function getUngroupedItems(items: RetroItem[]): RetroItem[] {
-  return items
-    .filter((item) => item.groupId === null)
-    .sort((a, b) => a.order - b.order);
-}
-
-export function getGroupedItems(items: RetroItem[], groupId: string): RetroItem[] {
-  return items
-    .filter((item) => item.groupId === groupId)
-    .sort((a, b) => a.order - b.order);
 }
 
 export function applyReorderItems(items: RetroItem[], orderedIds: string[]): RetroItem[] {
@@ -696,71 +474,4 @@ export function applyMoveItemToGroup(
   });
 
   return [...compactedDifferentGroup, ...updatedSameGroup];
-}
-
-export function applyCastVote(
-  votes: VoteAllocation[],
-  participantId: string,
-  targetOrGroupId: VoteTarget | string,
-  count: number,
-  budget: number,
-): { votes: VoteAllocation[]; error?: string } {
-  const target = typeof targetOrGroupId === "string" ? groupVoteTarget(targetOrGroupId) : targetOrGroupId;
-  if (count < 1 || !Number.isInteger(count)) {
-    return { votes, error: "Vote count must be a positive integer" };
-  }
-
-  const currentUsed = getVotesByParticipant(votes, participantId);
-  const remaining = budget - currentUsed;
-  if (count > remaining) {
-    return { votes, error: `Over budget: ${remaining} votes remaining` };
-  }
-
-  const existing = votes.find(
-    (v) => {
-      const voteTarget = getVoteTarget(v);
-      return v.participantId === participantId && voteTarget !== null && sameVoteTarget(voteTarget, target);
-    },
-  );
-
-  if (existing) {
-    const updated = votes.map((v) => {
-      const voteTarget = getVoteTarget(v);
-      return v.participantId === participantId && voteTarget !== null && sameVoteTarget(voteTarget, target)
-        ? { ...v, count: v.count + count }
-        : v;
-    });
-    return { votes: updated };
-  }
-
-  return { votes: [...votes, { participantId, target, count }] };
-}
-
-export function applyRemoveVote(
-  votes: VoteAllocation[],
-  participantId: string,
-  targetOrGroupId: VoteTarget | string,
-): VoteAllocation[] {
-  const target = typeof targetOrGroupId === "string" ? groupVoteTarget(targetOrGroupId) : targetOrGroupId;
-  const existing = votes.find(
-    (v) => {
-      const voteTarget = getVoteTarget(v);
-      return v.participantId === participantId && voteTarget !== null && sameVoteTarget(voteTarget, target);
-    },
-  );
-  if (!existing) return votes;
-
-  if (existing.count <= 1) {
-    return votes.filter((v) => {
-      const voteTarget = getVoteTarget(v);
-      return !(v.participantId === participantId && voteTarget !== null && sameVoteTarget(voteTarget, target));
-    });
-  }
-
-  return votes.map((v) => {
-    const voteTarget = getVoteTarget(v);
-    return v.participantId === participantId && voteTarget !== null && sameVoteTarget(voteTarget, target)
-      ? { ...v, count: v.count - 1 }
-      : v;
-  });
 }
