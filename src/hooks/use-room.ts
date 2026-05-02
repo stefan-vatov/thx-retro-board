@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { createWebSocketTicket } from "../api";
+import { createWebSocketTicketEffect, runApiEffect } from "../api";
 import { pairwiseComparisonKey } from "../domain";
 import type { RoomState, ServerToClientMessage } from "../domain";
 
@@ -90,7 +90,7 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const wsUrl = `${protocol}//${window.location.host}/api/rooms/${encodeURIComponent(roomId)}/ws`;
       setRoomPurgedState(false);
-      const ticket = await createWebSocketTicket(roomId, participantId, connectionToken);
+      const ticket = await runApiEffect(createWebSocketTicketEffect(roomId, participantId, connectionToken));
       if (disposed) return;
       if (!ticket.success || !ticket.ticket) {
         setConnected(false);

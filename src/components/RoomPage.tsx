@@ -22,7 +22,20 @@ import {
   Vote,
   X,
 } from "lucide-react";
-import { ApiError, addItem, deleteItem, editItem, joinRoom, getRoomState, purgeRoom, setVoteBudget, setRankingMethod, setPhase, setTimer } from "../api";
+import {
+  ApiError,
+  addItemEffect,
+  deleteItemEffect,
+  editItemEffect,
+  getRoomStateEffect,
+  joinRoomEffect,
+  purgeRoomEffect,
+  runApiEffect,
+  setPhaseEffect,
+  setRankingMethodEffect,
+  setTimerEffect,
+  setVoteBudgetEffect,
+} from "../api";
 import { useRoom } from "../hooks";
 import type { RoomState, Phase, Column, RetroItem, RankingMethod } from "../domain";
 import { sanitizeItemText, isValidItemText, PHASE_ORDER, sanitizeColumnName, isValidColumnName, MAX_COLUMN_NAME_LENGTH, MAX_COLUMNS, itemVoteTarget } from "../domain";
@@ -1036,7 +1049,7 @@ export function RoomPage() {
       return;
     }
     try {
-      const result = await joinRoom(roomId, participantId, identity.displayName, identity.connectionToken, getFacilitatorClaimToken(roomId));
+      const result = await runApiEffect(joinRoomEffect(roomId, participantId, identity.displayName, identity.connectionToken, getFacilitatorClaimToken(roomId)));
       if (!result.success) {
         resetStoredIdentity();
         setPageState("join");
@@ -1083,7 +1096,7 @@ export function RoomPage() {
 
     setJoinLoading(true);
     try {
-      const result = await joinRoom(roomId, participantId, trimmed, connectionToken, getFacilitatorClaimToken(roomId));
+      const result = await runApiEffect(joinRoomEffect(roomId, participantId, trimmed, connectionToken, getFacilitatorClaimToken(roomId)));
       if (!result.success) {
         setJoinError(result.error ?? "Failed to join room. Please try again.");
         return;
@@ -1114,14 +1127,14 @@ export function RoomPage() {
     }
     setBudgetPending(true);
     try {
-      const result = await setVoteBudget(roomId, participantId, connectionToken, budget);
+      const result = await runApiEffect(setVoteBudgetEffect(roomId, participantId, connectionToken, budget));
       if (result.success) {
         setBudgetMsg("Vote budget updated.");
         setVoteBudgetInput(String(budget));
         setVoteBudgetDirty(false);
         // Refetch authoritative state to handle any missed WebSocket broadcasts during reconnect
         try {
-          const state = await getRoomState(roomId, participantId, connectionToken);
+          const state = await runApiEffect(getRoomStateEffect(roomId, participantId, connectionToken));
           setLocalRoomState(state);
         } catch {
           // Refetch failed; local optimistic update stands and WebSocket will reconcile
@@ -1140,11 +1153,11 @@ export function RoomPage() {
     clearError();
     setRankingPending(true);
     try {
-      const result = await setRankingMethod(roomId, participantId, connectionToken, rankingMethod);
+      const result = await runApiEffect(setRankingMethodEffect(roomId, participantId, connectionToken, rankingMethod));
       if (result.success) {
         setRankingMsg(rankingMethod === "pairwise" ? "Pairwise ranking selected." : "Score voting selected.");
         try {
-          const state = await getRoomState(roomId, participantId, connectionToken);
+          const state = await runApiEffect(getRoomStateEffect(roomId, participantId, connectionToken));
           setLocalRoomState(state);
         } catch {
           // WebSocket snapshot will reconcile if the refetch misses.
@@ -1165,14 +1178,14 @@ export function RoomPage() {
     if (!nextPhase) return;
     setPhasePending(true);
     try {
-      const result = await setPhase(roomId, participantId, connectionToken, nextPhase);
+      const result = await runApiEffect(setPhaseEffect(roomId, participantId, connectionToken, nextPhase));
       if (result.success) {
         setPhaseMsg(`Advanced to ${nextPhase}.`);
         window.setTimeout(() => phaseStatusRef.current?.focus(), 0);
         // Refetch authoritative state so the UI updates even if the WebSocket broadcast
         // was missed during a post-reload reconnect window
         try {
-          const state = await getRoomState(roomId, participantId, connectionToken);
+          const state = await runApiEffect(getRoomStateEffect(roomId, participantId, connectionToken));
           setLocalRoomState(state);
         } catch {
           // Refetch failed; local optimistic update stands and WebSocket will reconcile
@@ -1206,14 +1219,14 @@ export function RoomPage() {
     const durationSeconds = minutes * 60;
     setTimerPending(true);
     try {
-      const result = await setTimer(roomId, participantId, connectionToken, durationSeconds);
+      const result = await runApiEffect(setTimerEffect(roomId, participantId, connectionToken, durationSeconds));
       if (!result.success) {
         setTimerInputError(result.error ?? "Failed to start timer.");
         return;
       }
       setTimerMsg("Timer started.");
       try {
-        const state = await getRoomState(roomId, participantId, connectionToken);
+        const state = await runApiEffect(getRoomStateEffect(roomId, participantId, connectionToken));
         setLocalRoomState(state);
       } catch {
         // WebSocket snapshot will reconcile if refetch misses.
@@ -1233,7 +1246,7 @@ export function RoomPage() {
     setPurgeMsg(null);
     setPurgePending(true);
     try {
-      const result = await purgeRoom(roomId, participantId, connectionToken);
+      const result = await runApiEffect(purgeRoomEffect(roomId, participantId, connectionToken));
       if (!result.success) {
         setPurgeMsg(result.error ?? "Failed to delete room data.");
         return;
@@ -1269,7 +1282,7 @@ export function RoomPage() {
     const nextText = sanitizeItemText(rawText);
     setPendingColumnId(columnId);
     try {
-      const result = await addItem(roomId, participantId, connectionToken, nextText, columnId);
+      const result = await runApiEffect(addItemEffect(roomId, participantId, connectionToken, nextText, columnId));
       if (!result.success) {
         setColumnErrors((current) => ({ ...current, [columnId]: result.error ?? "Failed to add card." }));
         return;
@@ -1278,7 +1291,7 @@ export function RoomPage() {
       restoreColumnFocusRef.current = columnId;
       setPendingColumnId(null);
       try {
-        const state = await getRoomState(roomId, participantId, connectionToken);
+        const state = await runApiEffect(getRoomStateEffect(roomId, participantId, connectionToken));
         setLocalRoomState(state);
       } catch {
         if (result.item && roomState) {
@@ -1320,7 +1333,7 @@ export function RoomPage() {
     const nextText = sanitizeItemText(editingItemText);
     setPendingItemId(itemId);
     try {
-      const result = await editItem(roomId, participantId, connectionToken, itemId, nextText);
+      const result = await runApiEffect(editItemEffect(roomId, participantId, connectionToken, itemId, nextText));
       if (!result.success) {
         setColumnErrors((current) => ({ ...current, __global: result.error ?? "Failed to edit card." }));
         return;
@@ -1328,7 +1341,7 @@ export function RoomPage() {
       setEditingItemId(null);
       setEditingItemText("");
       try {
-        const state = await getRoomState(roomId, participantId, connectionToken);
+        const state = await runApiEffect(getRoomStateEffect(roomId, participantId, connectionToken));
         setLocalRoomState(state);
       } catch {
         if (result.item && roomState) {
@@ -1351,14 +1364,14 @@ export function RoomPage() {
     setColumnErrors((current) => ({ ...current, __global: undefined }));
     setPendingItemId(itemId);
     try {
-      const result = await deleteItem(roomId, participantId, connectionToken, itemId);
+      const result = await runApiEffect(deleteItemEffect(roomId, participantId, connectionToken, itemId));
       if (!result.success) {
         setColumnErrors((current) => ({ ...current, __global: result.error ?? "Failed to delete card." }));
         return;
       }
       if (editingItemId === itemId) handleCancelEditItem();
       try {
-        const state = await getRoomState(roomId, participantId, connectionToken);
+        const state = await runApiEffect(getRoomStateEffect(roomId, participantId, connectionToken));
         setLocalRoomState(state);
       } catch {
         if (roomState) {

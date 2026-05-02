@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import type { RetroRoom } from "./retro-room";
 import { generateRoomId, ROOM_ID_LENGTH } from "../src/domain";
 
@@ -13,6 +14,7 @@ export interface Env {
 export { RetroRoom } from "./retro-room";
 
 const MAX_JSON_BODY_BYTES = 32 * 1024;
+const turnstileFailure = "Verification failed. Please retry and create the room again.";
 
 function getRoomStub(env: Env, roomId: string) {
   const id = env.RETRO_ROOM.idFromName(roomId);
@@ -94,38 +96,44 @@ function withSecurityHeaders(response: Response): Response {
   return secured;
 }
 
-async function readJsonBody<T>(request: Request): Promise<T | null> {
-  const contentType = request.headers.get("Content-Type") ?? "";
-  if (!contentType.includes("application/json")) return null;
-  const contentLength = request.headers.get("Content-Length");
-  if (contentLength !== null && (!Number.isFinite(Number(contentLength)) || Number(contentLength) > MAX_JSON_BODY_BYTES)) return null;
+function readJsonBodyEffect<T>(request: Request): Effect.Effect<T | null> {
+  return Effect.promise(async () => {
+    const contentType = request.headers.get("Content-Type") ?? "";
+    if (!contentType.includes("application/json")) return null;
+    const contentLength = request.headers.get("Content-Length");
+    if (contentLength !== null && (!Number.isFinite(Number(contentLength)) || Number(contentLength) > MAX_JSON_BODY_BYTES)) return null;
 
-  const reader = request.body?.getReader();
-  const decoder = new TextDecoder();
-  let bytes = 0;
-  let body = "";
-  if (reader) {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      bytes += value.byteLength;
-      if (bytes > MAX_JSON_BODY_BYTES) {
-        await reader.cancel();
-        return null;
+    const reader = request.body?.getReader();
+    const decoder = new TextDecoder();
+    let bytes = 0;
+    let body = "";
+    if (reader) {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value.byteLength;
+        if (bytes > MAX_JSON_BODY_BYTES) {
+          await reader.cancel();
+          return null;
+        }
+        body += decoder.decode(value, { stream: true });
       }
-      body += decoder.decode(value, { stream: true });
+      body += decoder.decode();
+    } else {
+      body = await request.text();
+      if (new TextEncoder().encode(body).byteLength > MAX_JSON_BODY_BYTES) return null;
     }
-    body += decoder.decode();
-  } else {
-    body = await request.text();
-    if (new TextEncoder().encode(body).byteLength > MAX_JSON_BODY_BYTES) return null;
-  }
 
-  try {
-    return JSON.parse(body) as T;
-  } catch {
-    return null;
-  }
+    try {
+      return JSON.parse(body) as T;
+    } catch {
+      return null;
+    }
+  });
+}
+
+function readJsonBody<T>(request: Request): Promise<T | null> {
+  return Effect.runPromise(readJsonBodyEffect<T>(request));
 }
 
 async function readRequiredJsonBody<T>(request: Request): Promise<T | Response> {
@@ -133,11 +141,15 @@ async function readRequiredJsonBody<T>(request: Request): Promise<T | Response> 
   return body ?? Response.json({ success: false, error: "Valid JSON body is required" }, { status: 400 });
 }
 
-async function verifyTurnstileToken(env: Env, token: unknown, remoteIp: string): Promise<{ success: true } | { success: false; error: string }> {
+function verifyTurnstileTokenEffect(
+  env: Env,
+  token: unknown,
+  remoteIp: string,
+): Effect.Effect<{ success: true } | { success: false; error: string }> {
   const secret = env.TURNSTILE_SECRET_KEY;
-  if (!secret) return { success: true };
+  if (!secret) return Effect.succeed({ success: true });
   if (typeof token !== "string" || token.trim().length === 0) {
-    return { success: false, error: "Verification is required before creating a room." };
+    return Effect.succeed({ success: false, error: "Verification is required before creating a room." });
   }
 
   const formData = new FormData();
@@ -147,14 +159,24 @@ async function verifyTurnstileToken(env: Env, token: unknown, remoteIp: string):
     formData.append("remoteip", remoteIp);
   }
 
-  const response = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
-    method: "POST",
-    body: formData,
+  return Effect.gen(function* () {
+    const response = yield* Effect.promise(() =>
+      fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+        method: "POST",
+        body: formData,
+      }).catch(() => undefined),
+    );
+    if (!response) return { success: false, error: turnstileFailure };
+
+    const result = yield* Effect.promise(() => (response.json() as Promise<{ success?: boolean } | null>).catch(() => null));
+    return result?.success === true
+      ? { success: true }
+      : { success: false, error: turnstileFailure };
   });
-  const result = await response.json().catch(() => null) as { success?: boolean } | null;
-  return result?.success === true
-    ? { success: true }
-    : { success: false, error: "Verification failed. Please retry and create the room again." };
+}
+
+function verifyTurnstileToken(env: Env, token: unknown, remoteIp: string): Promise<{ success: true } | { success: false; error: string }> {
+  return Effect.runPromise(verifyTurnstileTokenEffect(env, token, remoteIp));
 }
 
 export default {

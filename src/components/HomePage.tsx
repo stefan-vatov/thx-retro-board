@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowRight, CheckCircle2, Columns3, Loader2, ShieldCheck, Sparkles, Timer, UsersRound, Vote } from "lucide-react";
-import { createRoom, getPublicConfig } from "../api";
+import { createRoomEffect, getPublicConfigEffect, runApiEffect } from "../api";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
 import { TurnstileWidget } from "./TurnstileWidget";
@@ -17,7 +17,7 @@ export function HomePage() {
 
   useEffect(() => {
     let disposed = false;
-    void getPublicConfig().then((config) => {
+    void runApiEffect(getPublicConfigEffect()).then((config) => {
       if (!disposed) setTurnstileSiteKey(config.turnstileSiteKey);
     });
     return () => {
@@ -38,7 +38,7 @@ export function HomePage() {
     setCreating(true);
     setError(null);
     try {
-      const { roomId, facilitatorClaimToken } = await createRoom(turnstileToken ?? undefined);
+      const { roomId, facilitatorClaimToken } = await runApiEffect(createRoomEffect(turnstileToken ?? undefined));
       if (facilitatorClaimToken) {
         sessionStorage.setItem(`retro-facilitator-claim-${roomId}`, facilitatorClaimToken);
       }

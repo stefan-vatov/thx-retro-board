@@ -1,3 +1,4 @@
+import { Cause, Effect, Exit, Option } from "effect";
 import type { RoomState, Phase, RetroItem, RankingMethod } from "./domain";
 
 export interface PublicConfig {
@@ -14,183 +15,176 @@ export class ApiError extends Error {
   }
 }
 
-export async function getPublicConfig(): Promise<PublicConfig> {
-  const res = await fetch("/api/config");
-  if (!res.ok) return { turnstileSiteKey: null };
-  return res.json() as Promise<PublicConfig>;
-}
+const jsonHeaders = { "Content-Type": "application/json" };
 
-export async function createRoom(turnstileToken?: string): Promise<{ roomId: string; facilitatorClaimToken?: string }> {
-  const res = await fetch("/api/rooms", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ turnstileToken }),
+function fetchEffect(input: RequestInfo | URL, init?: RequestInit): Effect.Effect<Response, ApiError> {
+  return Effect.tryPromise({
+    try: () => fetch(input, init),
+    catch: (error) => new ApiError(error instanceof Error ? error.message : "Network request failed"),
   });
-  if (!res.ok) {
-    const body = await res.json().catch(() => null) as { error?: string } | null;
-    throw new Error(body?.error ?? "Failed to create room");
-  }
-  return res.json() as Promise<{ roomId: string; facilitatorClaimToken?: string }>;
 }
 
-export async function getRoomState(
+function responseJsonEffect<T>(response: Response, fallbackMessage: string): Effect.Effect<T, ApiError> {
+  return Effect.tryPromise({
+    try: () => response.json() as Promise<T>,
+    catch: () => new ApiError(fallbackMessage, response.status),
+  });
+}
+
+function requestJsonEffect<T>(
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+  options?: {
+    readonly failureMessage?: string;
+    readonly statusMessage?: (status: number) => string;
+  },
+): Effect.Effect<T, ApiError> {
+  const failureMessage = options?.failureMessage ?? "Request failed";
+  return Effect.gen(function* () {
+    const response = yield* fetchEffect(input, init);
+    if (!response.ok) {
+      const body = yield* responseJsonEffect<{ error?: string } | null>(response, failureMessage).pipe(
+        Effect.catchAll(() => Effect.succeed(null)),
+      );
+      const message = options?.statusMessage?.(response.status) ?? body?.error ?? failureMessage;
+      return yield* Effect.fail(new ApiError(message, response.status));
+    }
+    return yield* responseJsonEffect<T>(response, failureMessage);
+  });
+}
+
+function postJsonEffect<T>(path: string, body: unknown): Effect.Effect<T, ApiError> {
+  return requestJsonEffect<T>(path, {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify(body),
+  });
+}
+
+export async function runApiEffect<A>(effect: Effect.Effect<A, ApiError>): Promise<A> {
+  const exit = await Effect.runPromiseExit(effect);
+  if (Exit.isSuccess(exit)) return exit.value;
+  throw Option.getOrElse(Cause.failureOption(exit.cause), () => new ApiError("Request failed"));
+}
+
+export const getPublicConfigEffect = (): Effect.Effect<PublicConfig, ApiError> =>
+  Effect.gen(function* () {
+    const response = yield* fetchEffect("/api/config");
+    if (!response.ok) return { turnstileSiteKey: null };
+    return yield* responseJsonEffect<PublicConfig>(response, "Failed to load public config");
+  });
+
+export const createRoomEffect = (
+  turnstileToken?: string,
+): Effect.Effect<{ roomId: string; facilitatorClaimToken?: string }, ApiError> =>
+  postJsonEffect<{ roomId: string; facilitatorClaimToken?: string }>("/api/rooms", { turnstileToken }).pipe(
+    Effect.mapError((error) => new ApiError(error.message || "Failed to create room", error.status)),
+  );
+
+export const getRoomStateEffect = (
   roomId: string,
   participantId: string,
   connectionToken: string | undefined,
-): Promise<RoomState> {
-  const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/state`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ participantId, connectionToken }),
-  });
-  if (!res.ok) {
-    const message = res.status === 404 ? "Room not found" : "Failed to load room";
-    throw new ApiError(message, res.status);
-  }
-  const result = await res.json() as { success?: boolean; error?: string; state?: RoomState };
+): Effect.Effect<RoomState, ApiError> => Effect.gen(function* () {
+  const result = yield* postJsonEffect<{ success?: boolean; error?: string; state?: RoomState }>(
+    `/api/rooms/${encodeURIComponent(roomId)}/state`,
+    { participantId, connectionToken },
+  ).pipe(
+    Effect.mapError((error) => error.status === undefined
+      ? error
+      : new ApiError(error.status === 404 ? "Room not found" : "Failed to load room", error.status)),
+  );
   if (!result.success || !result.state) {
-    throw new ApiError(result.error ?? "Failed to load room", res.status);
+    return yield* Effect.fail(new ApiError(result.error ?? "Failed to load room"));
   }
   return result.state;
-}
+});
 
-export async function joinRoom(
+export const joinRoomEffect = (
   roomId: string,
   participantId: string,
   displayName: string,
   connectionToken?: string,
   facilitatorClaimToken?: string,
-): Promise<{ success: boolean; error?: string; state?: RoomState; connectionToken?: string }> {
-  const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/join`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ participantId, displayName, connectionToken, facilitatorClaimToken }),
-  });
-  return res.json() as Promise<{ success: boolean; error?: string; state?: RoomState; connectionToken?: string }>;
-}
+): Effect.Effect<{ success: boolean; error?: string; state?: RoomState; connectionToken?: string }, ApiError> =>
+  postJsonEffect(`/api/rooms/${encodeURIComponent(roomId)}/join`, { participantId, displayName, connectionToken, facilitatorClaimToken });
 
-export async function createWebSocketTicket(
+export const createWebSocketTicketEffect = (
   roomId: string,
   participantId: string,
   connectionToken: string | undefined,
-): Promise<{ success: boolean; error?: string; ticket?: string }> {
-  const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/ws-ticket`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ participantId, connectionToken }),
-  });
-  return res.json() as Promise<{ success: boolean; error?: string; ticket?: string }>;
-}
+): Effect.Effect<{ success: boolean; error?: string; ticket?: string }, ApiError> =>
+  postJsonEffect(`/api/rooms/${encodeURIComponent(roomId)}/ws-ticket`, { participantId, connectionToken });
 
-export async function setVoteBudget(
+export const setVoteBudgetEffect = (
   roomId: string,
   participantId: string,
   connectionToken: string | undefined,
   budget: number,
-): Promise<{ success: boolean; error?: string }> {
-  const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/vote-budget`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ participantId, connectionToken, budget }),
-  });
-  return res.json() as Promise<{ success: boolean; error?: string }>;
-}
+): Effect.Effect<{ success: boolean; error?: string }, ApiError> =>
+  postJsonEffect(`/api/rooms/${encodeURIComponent(roomId)}/vote-budget`, { participantId, connectionToken, budget });
 
-export async function setRankingMethod(
+export const setRankingMethodEffect = (
   roomId: string,
   participantId: string,
   connectionToken: string | undefined,
   rankingMethod: RankingMethod,
-): Promise<{ success: boolean; error?: string }> {
-  const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/ranking-method`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ participantId, connectionToken, rankingMethod }),
-  });
-  return res.json() as Promise<{ success: boolean; error?: string }>;
-}
+): Effect.Effect<{ success: boolean; error?: string }, ApiError> =>
+  postJsonEffect(`/api/rooms/${encodeURIComponent(roomId)}/ranking-method`, { participantId, connectionToken, rankingMethod });
 
-export async function setPhase(
+export const setPhaseEffect = (
   roomId: string,
   participantId: string,
   connectionToken: string | undefined,
   phase: Phase,
-): Promise<{ success: boolean; error?: string }> {
-  const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/phase`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ participantId, connectionToken, phase }),
-  });
-  return res.json() as Promise<{ success: boolean; error?: string }>;
-}
+): Effect.Effect<{ success: boolean; error?: string }, ApiError> =>
+  postJsonEffect(`/api/rooms/${encodeURIComponent(roomId)}/phase`, { participantId, connectionToken, phase });
 
-export async function addItem(
+export const addItemEffect = (
   roomId: string,
   participantId: string,
   connectionToken: string | undefined,
   text: string,
   columnId: string,
-): Promise<{ success: boolean; error?: string; item?: RetroItem }> {
-  const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/items`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ participantId, connectionToken, text, columnId }),
-  });
-  return res.json() as Promise<{ success: boolean; error?: string; item?: RetroItem }>;
-}
+): Effect.Effect<{ success: boolean; error?: string; item?: RetroItem }, ApiError> =>
+  postJsonEffect(`/api/rooms/${encodeURIComponent(roomId)}/items`, { participantId, connectionToken, text, columnId });
 
-export async function editItem(
+export const editItemEffect = (
   roomId: string,
   participantId: string,
   connectionToken: string | undefined,
   itemId: string,
   text: string,
-): Promise<{ success: boolean; error?: string; item?: RetroItem }> {
-  const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/items/${encodeURIComponent(itemId)}`, {
+): Effect.Effect<{ success: boolean; error?: string; item?: RetroItem }, ApiError> =>
+  requestJsonEffect(`/api/rooms/${encodeURIComponent(roomId)}/items/${encodeURIComponent(itemId)}`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: jsonHeaders,
     body: JSON.stringify({ participantId, connectionToken, text }),
   });
-  return res.json() as Promise<{ success: boolean; error?: string; item?: RetroItem }>;
-}
 
-export async function deleteItem(
+export const deleteItemEffect = (
   roomId: string,
   participantId: string,
   connectionToken: string | undefined,
   itemId: string,
-): Promise<{ success: boolean; error?: string }> {
-  const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/items/${encodeURIComponent(itemId)}`, {
+): Effect.Effect<{ success: boolean; error?: string }, ApiError> =>
+  requestJsonEffect(`/api/rooms/${encodeURIComponent(roomId)}/items/${encodeURIComponent(itemId)}`, {
     method: "DELETE",
-    headers: { "Content-Type": "application/json" },
+    headers: jsonHeaders,
     body: JSON.stringify({ participantId, connectionToken }),
   });
-  return res.json() as Promise<{ success: boolean; error?: string }>;
-}
 
-export async function setTimer(
+export const setTimerEffect = (
   roomId: string,
   participantId: string,
   connectionToken: string | undefined,
   durationSeconds: number,
-): Promise<{ success: boolean; error?: string }> {
-  const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/timer`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ participantId, connectionToken, durationSeconds }),
-  });
-  return res.json() as Promise<{ success: boolean; error?: string }>;
-}
+): Effect.Effect<{ success: boolean; error?: string }, ApiError> =>
+  postJsonEffect(`/api/rooms/${encodeURIComponent(roomId)}/timer`, { participantId, connectionToken, durationSeconds });
 
-export async function purgeRoom(
+export const purgeRoomEffect = (
   roomId: string,
   participantId: string,
   connectionToken: string | undefined,
-): Promise<{ success: boolean; error?: string }> {
-  const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/purge`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ participantId, connectionToken }),
-  });
-  return res.json() as Promise<{ success: boolean; error?: string }>;
-}
+): Effect.Effect<{ success: boolean; error?: string }, ApiError> =>
+  postJsonEffect(`/api/rooms/${encodeURIComponent(roomId)}/purge`, { participantId, connectionToken });

@@ -214,6 +214,47 @@ describe("POST /api/rooms", () => {
     });
   });
 
+  it("fails closed with a controlled response when Turnstile verification cannot be reached", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url === "https://challenges.cloudflare.com/turnstile/v0/siteverify") {
+        throw new TypeError("turnstile unavailable");
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    try {
+      const response = await worker.fetch(
+        new Request("https://retro.thethracian.com/api/rooms", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "CF-Connecting-IP": "198.51.100.21" },
+          body: JSON.stringify({ turnstileToken: "token" }),
+        }),
+        {
+          ASSETS: undefined,
+          RETRO_ROOM: undefined as unknown as Env["RETRO_ROOM"],
+          TURNSTILE_SITE_KEY: "site-key",
+          TURNSTILE_SECRET_KEY: "secret-key",
+          ROOM_CREATE_RATE_LIMITER: {
+            limit: async () => ({ success: true }),
+          },
+          ROOM_ACCESS_RATE_LIMITER: {
+            limit: async () => ({ success: true }),
+          },
+        },
+        {} as ExecutionContext,
+      );
+
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toEqual({
+        error: "Verification failed. Please retry and create the room again.",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("fails closed for production room creation when anti-abuse config is incomplete", async () => {
     const response = await worker.fetch(
       new Request("https://retro.thethracian.com/api/rooms", {

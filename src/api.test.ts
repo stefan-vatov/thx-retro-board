@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, getRoomState } from "./api";
+import { Effect, Exit } from "effect";
+import { ApiError, getRoomStateEffect, runApiEffect } from "./api";
 import type { RoomState } from "./domain";
 
 const roomState: RoomState = {
@@ -32,17 +33,28 @@ describe("getRoomState", () => {
   it("classifies true missing rooms as 404 ApiError", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: "Room not found" }, { status: 404 })));
 
-    await expect(getRoomState("missing-room", "p1", "token")).rejects.toMatchObject({
+    await expect(runApiEffect(getRoomStateEffect("missing-room", "p1", "token"))).rejects.toMatchObject({
       name: "ApiError",
       message: "Room not found",
       status: 404,
     } satisfies Partial<ApiError>);
   });
 
+  it("exposes an Effect-native room state request with typed ApiError failures", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: "Room not found" }, { status: 404 })));
+
+    const exit = await Effect.runPromiseExit(getRoomStateEffect("missing-room", "p1", "token"));
+
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      expect(exit.cause.toString()).toContain("Room not found");
+    }
+  });
+
   it("preserves server failure status instead of treating it as not found", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: "Nope" }, { status: 500 })));
 
-    await expect(getRoomState("server-error", "p1", "token")).rejects.toMatchObject({
+    await expect(runApiEffect(getRoomStateEffect("server-error", "p1", "token"))).rejects.toMatchObject({
       name: "ApiError",
       message: "Failed to load room",
       status: 500,
@@ -56,8 +68,8 @@ describe("getRoomState", () => {
       .mockResolvedValueOnce(Response.json({ success: true, state: roomState }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(getRoomState("ROOM123", "p1", "token")).rejects.toThrow(/networkerror/i);
-    await expect(getRoomState("ROOM123", "p1", "token")).resolves.toEqual(roomState);
+    await expect(runApiEffect(getRoomStateEffect("ROOM123", "p1", "token"))).rejects.toThrow(/networkerror/i);
+    await expect(runApiEffect(getRoomStateEffect("ROOM123", "p1", "token"))).resolves.toEqual(roomState);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

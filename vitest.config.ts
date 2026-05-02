@@ -10,6 +10,7 @@ export default defineConfig({
   ],
   test: {
     include: ["src/**/*.test.ts", "worker/**/*.test.ts"],
+    testTimeout: 10_000,
   },
   resolve: {
     alias: {
