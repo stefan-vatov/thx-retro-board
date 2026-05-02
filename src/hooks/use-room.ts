@@ -150,7 +150,11 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
 
       ws.addEventListener("message", (event) => {
         if (wsRef.current !== ws || disposed) return;
-        void runRealtimeMessageDecode(event.data as string).then((msg) => {
+        void handleRealtimeMessage(event.data as string);
+      });
+
+      async function handleRealtimeMessage(raw: string) {
+        const msg = await runRealtimeMessageDecode(raw);
           if (!msg || wsRef.current !== ws || disposed) return;
           if (msg.type === "snapshot") {
             setState(msg.state as RoomState);
@@ -210,8 +214,7 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
           } else if (msg.type === "error") {
             setLastError(msg.message);
           }
-        });
-      });
+      }
 
       ws.addEventListener("close", () => {
         if (wsRef.current !== ws || disposed) return;
