@@ -6,20 +6,12 @@ import type {
   Phase,
   Participant,
   RetroItem,
-  Group,
-  Column,
   ActionItem,
   ReactionTarget,
-  VoteAllocation,
   VoteTarget,
   RankingMethod,
   ServerToClientMessage,
 } from "../src/domain";
-import {
-  groupVoteTarget,
-  sameVoteTarget,
-} from "../src/domain";
-
 import type {
   ItemReorderPreconditions,
   MoveItemPreconditions,
@@ -36,17 +28,6 @@ import {
 import {
   authorizeParticipantEffect,
   parseClientWebSocketMessageEffect,
-  RoomMutationValidationError,
-  validateColumnCreateEffect,
-  validateColumnDeleteEffect,
-  validateColumnEditEffect,
-  validateColumnReorderEffect,
-  validateGroupCreateEffect,
-  validateGroupDeleteEffect,
-  validateGroupEditEffect,
-  validateGroupReorderEffect,
-  validateItemMoveEffect,
-  validateItemReorderEffect,
   validatePairwiseChoiceEffect,
   validateParticipantJoinEffect,
   validateRankingMethodChangeEffect,
@@ -61,9 +42,22 @@ import {
   deleteActionForRoom,
   editActionForRoom,
 } from "./room-actions";
+import {
+  createColumnForRoom,
+  deleteColumnForRoom,
+  editColumnForRoom,
+  reorderColumnsForRoom,
+} from "./room-columns";
 import type { RoomCommandHost } from "./room-command-host";
+import {
+  createGroupForRoom,
+  deleteGroupForRoom,
+  editGroupForRoom,
+  moveItemToGroupForRoom,
+  reorderGroupsForRoom,
+  reorderItemsForRoom,
+} from "./room-groups";
 import { addItemForRoom, deleteItemForRoom, editItemForRoom } from "./room-items";
-import { normalizePairwiseChoices, normalizeReactions } from "./room-normalize";
 import { toRoomState } from "./room-presenter";
 import { setPhaseForRoom, setReviewTargetForRoom, setTimerForRoom } from "./room-phase";
 import { handleRoomRealtimeMessage } from "./room-realtime";
@@ -470,175 +464,44 @@ export class RetroRoom extends DurableObject<Env> {
     );
   }
 
-  async createColumn(participantId: string, rawName: string): Promise<{ success: boolean; error?: string; column?: Column }> {
-    const s = await this.loadState();
-    let validated: { name: string; order: number };
-    try {
-      validated = await Effect.runPromise(validateColumnCreateEffect(s, participantId, rawName));
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof RoomMutationValidationError ? error.message : "Column could not be created",
-      };
-    }
-
-    const column: Column = {
-      id: crypto.randomUUID(),
-      name: validated.name,
-      order: validated.order,
-    };
-    s.columns = [...(s.columns ?? []), column];
-    await this.saveState();
-    this.broadcastState(s);
-
-    return { success: true, column };
+  async createColumn(participantId: string, rawName: string): ReturnType<typeof createColumnForRoom> {
+    return createColumnForRoom(this.commandHost(), participantId, rawName);
   }
 
-  async editColumn(participantId: string, columnId: string, rawName: string): Promise<{ success: boolean; error?: string; column?: Column }> {
-    const s = await this.loadState();
-    let validated: { columns: Column[]; column: Column };
-    try {
-      validated = await Effect.runPromise(validateColumnEditEffect(s, participantId, columnId, rawName));
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof RoomMutationValidationError ? error.message : "Column could not be updated",
-      };
-    }
-    s.columns = validated.columns;
-    await this.saveState();
-    this.broadcastState(s);
-    return { success: true, column: validated.column };
+  async editColumn(participantId: string, columnId: string, rawName: string): ReturnType<typeof editColumnForRoom> {
+    return editColumnForRoom(this.commandHost(), participantId, columnId, rawName);
   }
 
-  async reorderColumns(participantId: string, orderedIds: unknown): Promise<{ success: boolean; error?: string }> {
-    const s = await this.loadState();
-    let validated: { columns: Column[] };
-    try {
-      validated = await Effect.runPromise(validateColumnReorderEffect(s, participantId, orderedIds));
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof RoomMutationValidationError ? error.message : "Columns could not be reordered",
-      };
-    }
-    s.columns = validated.columns;
-    await this.saveState();
-    this.broadcastState(s);
-    return { success: true };
+  async reorderColumns(participantId: string, orderedIds: unknown): ReturnType<typeof reorderColumnsForRoom> {
+    return reorderColumnsForRoom(this.commandHost(), participantId, orderedIds);
   }
 
-  async deleteColumn(participantId: string, columnId: string): Promise<{ success: boolean; error?: string }> {
-    const s = await this.loadState();
-    let validated: {
-      columns: Column[];
-      groups: Group[];
-      items: RetroItem[];
-      votes: VoteAllocation[];
-    };
-    try {
-      validated = await Effect.runPromise(validateColumnDeleteEffect(s, participantId, columnId));
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof RoomMutationValidationError ? error.message : "Column could not be deleted",
-      };
-    }
-
-    s.columns = validated.columns;
-    s.groups = validated.groups;
-    s.items = validated.items;
-    s.votes = validated.votes;
-    s.pairwiseChoices = normalizePairwiseChoices(s.pairwiseChoices, s.participants, s.groups, s.items);
-    s.reactions = normalizeReactions(s.reactions, s.participants, s.groups, s.items);
-    await this.saveState();
-    this.broadcastState(s);
-    return { success: true };
+  async deleteColumn(participantId: string, columnId: string): ReturnType<typeof deleteColumnForRoom> {
+    return deleteColumnForRoom(this.commandHost(), participantId, columnId);
   }
 
-  async createGroup(participantId: string, rawName: string, columnId?: string): Promise<{ success: boolean; error?: string; group?: Group }> {
-    const s = await this.loadState();
-    const validation = await Effect.runPromise(Effect.either(validateGroupCreateEffect(s, participantId, rawName, columnId)));
-    if (validation._tag === "Left") {
-      return { success: false, error: validation.left.message };
-    }
-    const validated = validation.right;
-
-    const group: Group = {
-      id: crypto.randomUUID(),
-      name: validated.name,
-      columnId: validated.columnId,
-      order: validated.order,
-    };
-    s.groups.push(group);
-    await this.saveState();
-    this.broadcastState(s);
-
-    return { success: true, group };
+  async createGroup(participantId: string, rawName: string, columnId?: string): ReturnType<typeof createGroupForRoom> {
+    return createGroupForRoom(this.commandHost(), participantId, rawName, columnId);
   }
 
   async reorderItems(
     participantId: string,
     orderedIds: unknown,
     preconditions?: Partial<ItemReorderPreconditions>,
-  ): Promise<{ success: boolean; error?: string }> {
-    const s = await this.loadState();
-    const validation = await Effect.runPromise(Effect.either(validateItemReorderEffect(s, participantId, orderedIds, preconditions)));
-    if (validation._tag === "Left") {
-      return { success: false, error: validation.left.message };
-    }
-
-    s.items = validation.right.items;
-    await this.saveState();
-
-    const broadcast: ServerToClientMessage = { type: "items-reordered", items: s.items };
-    this.broadcast(broadcast);
-    this.broadcastState(s);
-
-    return { success: true };
+  ): ReturnType<typeof reorderItemsForRoom> {
+    return reorderItemsForRoom(this.commandHost(), participantId, orderedIds, preconditions);
   }
 
-  async editGroup(participantId: string, groupId: string, rawName: string): Promise<{ success: boolean; error?: string; group?: Group }> {
-    const s = await this.loadState();
-    const validation = await Effect.runPromise(Effect.either(validateGroupEditEffect(s, participantId, groupId, rawName)));
-    if (validation._tag === "Left") {
-      return { success: false, error: validation.left.message };
-    }
-    const validated = validation.right;
-    s.groups = validated.groups;
-    await this.saveState();
-    this.broadcastState(s);
-    return { success: true, group: validated.group };
+  async editGroup(participantId: string, groupId: string, rawName: string): ReturnType<typeof editGroupForRoom> {
+    return editGroupForRoom(this.commandHost(), participantId, groupId, rawName);
   }
 
-  async deleteGroup(participantId: string, groupId: string): Promise<{ success: boolean; error?: string }> {
-    const s = await this.loadState();
-    const validation = await Effect.runPromise(Effect.either(validateGroupDeleteEffect(s, participantId, groupId)));
-    if (validation._tag === "Left") {
-      return { success: false, error: validation.left.message };
-    }
-    const validated = validation.right;
-    s.groups = validated.groups;
-    s.items = validated.items;
-    s.votes = validated.votes;
-    s.pairwiseChoices = normalizePairwiseChoices(s.pairwiseChoices, s.participants, s.groups, s.items);
-    s.reactions = (s.reactions ?? []).filter((reaction) => !sameVoteTarget(reaction.target, groupVoteTarget(groupId)));
-    await this.saveState();
-    this.broadcastState(s);
-    return { success: true };
+  async deleteGroup(participantId: string, groupId: string): ReturnType<typeof deleteGroupForRoom> {
+    return deleteGroupForRoom(this.commandHost(), participantId, groupId);
   }
 
-  async reorderGroups(participantId: string, orderedIds: unknown, expectedVersion?: unknown): Promise<{ success: boolean; error?: string }> {
-    const s = await this.loadState();
-    const validation = await Effect.runPromise(Effect.either(validateGroupReorderEffect(s, participantId, orderedIds, expectedVersion)));
-    if (validation._tag === "Left") {
-      return { success: false, error: validation.left.message };
-    }
-
-    s.groups = validation.right.groups;
-    await this.saveState();
-    this.broadcastState(s);
-    return { success: true };
+  async reorderGroups(participantId: string, orderedIds: unknown, expectedVersion?: unknown): ReturnType<typeof reorderGroupsForRoom> {
+    return reorderGroupsForRoom(this.commandHost(), participantId, orderedIds, expectedVersion);
   }
 
   async moveItemToGroup(
@@ -647,26 +510,8 @@ export class RetroRoom extends DurableObject<Env> {
     targetGroupId: string | null,
     targetIndex: number,
     preconditions?: Partial<MoveItemPreconditions>,
-  ): Promise<{ success: boolean; error?: string }> {
-    const s = await this.loadState();
-    const validation = await Effect.runPromise(Effect.either(validateItemMoveEffect(
-      s,
-      participantId,
-      itemId,
-      targetGroupId,
-      targetIndex,
-      preconditions,
-    )));
-    if (validation._tag === "Left") {
-      return { success: false, error: validation.left.message };
-    }
-
-    s.items = validation.right.items;
-    await this.saveState();
-
-    this.broadcastState(s);
-
-    return { success: true };
+  ): ReturnType<typeof moveItemToGroupForRoom> {
+    return moveItemToGroupForRoom(this.commandHost(), participantId, itemId, targetGroupId, targetIndex, preconditions);
   }
 
   async toggleReaction(participantId: string, target: ReactionTarget, emoji: string): Promise<{ success: boolean; error?: string }> {
