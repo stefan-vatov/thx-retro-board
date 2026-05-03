@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import type { RankingMethod, ReactionTarget, VoteTarget } from "../src/domain";
+import { saveAndBroadcastStateEffect } from "./room-command-effect";
 import type { RoomCommandHost } from "./room-command-host";
 import {
   validatePairwiseChoiceEffect,
@@ -31,8 +32,7 @@ export function setVoteBudgetForRoomEffect(
     }
 
     s.voteBudget = validation.right.budget;
-    yield* Effect.promise(() => host.saveState());
-    host.broadcastState(s);
+    yield* saveAndBroadcastStateEffect(host, s);
     return { success: true };
   });
 }
@@ -89,8 +89,7 @@ export function toggleReactionForRoomEffect(
       return { success: false, error: validation.left.message };
     }
     s.reactions = validation.right.reactions;
-    yield* Effect.promise(() => host.saveState());
-    host.broadcastState(s);
+    yield* saveAndBroadcastStateEffect(host, s);
     return { success: true };
   });
 }
@@ -118,8 +117,7 @@ export function castVoteForRoomEffect(
     }
 
     s.votes = validation.right.votes;
-    yield* Effect.promise(() => host.saveState());
-    host.broadcastState(s);
+    yield* saveAndBroadcastStateEffect(host, s);
 
     return { success: true };
   });
@@ -146,8 +144,7 @@ export function removeVoteForRoomEffect(
     }
 
     s.votes = validation.right.votes;
-    yield* Effect.promise(() => host.saveState());
-    host.broadcastState(s);
+    yield* saveAndBroadcastStateEffect(host, s);
 
     return { success: true };
   });
@@ -176,8 +173,7 @@ export function choosePairwiseForRoomEffect(
     }
 
     s.pairwiseChoices = validation.right.pairwiseChoices;
-    yield* Effect.promise(() => host.saveState());
-    host.broadcastState(s);
+    yield* saveAndBroadcastStateEffect(host, s);
 
     return { success: true };
   });
