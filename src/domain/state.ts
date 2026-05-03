@@ -36,10 +36,15 @@ export {
 } from "./state-items";
 export {
   getDecisionTargets,
+  getDecisionTargetsEffect,
   getPairwiseChoice,
+  getPairwiseChoiceEffect,
   getPairwiseComparisons,
+  getPairwiseComparisonsEffect,
   getReviewTargets,
+  getReviewTargetsEffect,
   sortReviewTargets,
+  sortReviewTargetsEffect,
   type DecisionTarget,
   type PairwiseComparison,
   type ReviewTarget,

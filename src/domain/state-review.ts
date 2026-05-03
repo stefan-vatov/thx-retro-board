@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import type { Column, PairwiseChoice, RankingMethod, RoomState, VoteTarget } from "./types";
 
 import { getUngroupedItems } from "./state-items";
@@ -51,6 +52,10 @@ export function getDecisionTargets(state: Pick<RoomState, "groups" | "items">): 
   return [...groups, ...ungroupedItems];
 }
 
+export function getDecisionTargetsEffect(state: Pick<RoomState, "groups" | "items">): Effect.Effect<DecisionTarget[]> {
+  return Effect.sync(() => getDecisionTargets(state));
+}
+
 export function getPairwiseComparisons(state: Pick<RoomState, "columns" | "groups" | "items">): PairwiseComparison[] {
   const columnOrder = new Map(state.columns.map((column) => [column.id, column.order]));
   const sortedTargets = getDecisionTargets(state).sort((a, b) => {
@@ -79,6 +84,12 @@ export function getPairwiseComparisons(state: Pick<RoomState, "columns" | "group
   return comparisons;
 }
 
+export function getPairwiseComparisonsEffect(
+  state: Pick<RoomState, "columns" | "groups" | "items">,
+): Effect.Effect<PairwiseComparison[]> {
+  return Effect.sync(() => getPairwiseComparisons(state));
+}
+
 export function getPairwiseChoice(
   choices: PairwiseChoice[],
   participantId: string,
@@ -90,6 +101,15 @@ export function getPairwiseChoice(
     choice.participantId === participantId
     && pairwiseComparisonKey(choice.winner, choice.loser) === key,
   ) ?? null;
+}
+
+export function getPairwiseChoiceEffect(
+  choices: PairwiseChoice[],
+  participantId: string,
+  left: VoteTarget,
+  right: VoteTarget,
+): Effect.Effect<PairwiseChoice | null> {
+  return Effect.sync(() => getPairwiseChoice(choices, participantId, left, right));
 }
 
 export function getReviewTargets(
@@ -124,6 +144,12 @@ export function getReviewTargets(
   });
 }
 
+export function getReviewTargetsEffect(
+  state: Pick<RoomState, "columns" | "groups" | "items" | "votes"> & Partial<Pick<RoomState, "rankingMethod" | "pairwiseChoices">>,
+): Effect.Effect<ReviewTarget[]> {
+  return Effect.sync(() => getReviewTargets(state));
+}
+
 export function sortReviewTargets(
   targets: ReviewTarget[],
   columns: Column[],
@@ -140,4 +166,11 @@ export function sortReviewTargets(
     if (orderDifference !== 0) return orderDifference;
     return voteTargetKey(a.target).localeCompare(voteTargetKey(b.target));
   });
+}
+
+export function sortReviewTargetsEffect(
+  targets: ReviewTarget[],
+  columns: Column[],
+): Effect.Effect<ReviewTarget[]> {
+  return Effect.sync(() => sortReviewTargets(targets, columns));
 }

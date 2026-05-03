@@ -1,8 +1,11 @@
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   getDefaultColumns,
   getReviewTargets,
+  getReviewTargetsEffect,
   sortReviewTargets,
+  sortReviewTargetsEffect,
   groupVoteTarget,
   itemVoteTarget,
 } from "./state";
@@ -97,5 +100,37 @@ describe("review target helpers", () => {
       groupVoteTarget("group-b"),
     ]);
     expect(targets.map((target) => target.totalVotes)).toEqual([3, 3, 2]);
+  });
+
+  it("builds and sorts review targets through Effect boundaries", async () => {
+    const state = makeState({
+      roomId: "review-targets-effect",
+      columns: [
+        { id: "col-b", name: "B", order: 1 },
+        { id: "col-a", name: "A", order: 0 },
+      ],
+      groups: [
+        { id: "group-a", name: "Group A", columnId: "col-a", order: 1 },
+        { id: "group-b", name: "Group B", columnId: "col-b", order: 0 },
+      ],
+      items: [
+        { id: "item-a", text: "Ungrouped A", authorId: "p1", columnId: "col-a", groupId: null, order: 0 },
+      ],
+      votes: [
+        { participantId: "p1", target: itemVoteTarget("item-a"), count: 3 },
+        { participantId: "p2", target: groupVoteTarget("group-b"), count: 2 },
+        { participantId: "p3", target: groupVoteTarget("group-a"), count: 3 },
+      ],
+    });
+
+    const targets = await Effect.runPromise(getReviewTargetsEffect(state).pipe(
+      Effect.flatMap((reviewTargets) => sortReviewTargetsEffect(reviewTargets, state.columns)),
+    ));
+
+    expect(targets.map((target) => target.target)).toEqual([
+      itemVoteTarget("item-a"),
+      groupVoteTarget("group-a"),
+      groupVoteTarget("group-b"),
+    ]);
   });
 });
