@@ -15,10 +15,14 @@ import {
   groupVoteTarget,
   itemVoteTarget,
   getVotesForTarget,
+  getVotesForTargetEffect,
   getVotesByParticipant,
   getRemainingBudget,
+  getRemainingBudgetEffect,
   applyCastVote,
+  applyCastVoteEffect,
   applyRemoveVote,
+  applyRemoveVoteEffect,
 } from "./state";
 
 describe("column helpers", () => {
@@ -185,6 +189,11 @@ describe("vote helpers", () => {
     expect(getVotesForUngroupedItem(mixedVotes, "same-id")).toBe(1);
     expect(getVotesByParticipant(mixedVotes, "p1")).toBe(3);
   });
+
+  it("aggregates vote totals and remaining budget through Effect boundaries", async () => {
+    await expect(Effect.runPromise(getVotesForTargetEffect(votes, groupVoteTarget("i1")))).resolves.toBe(3);
+    await expect(Effect.runPromise(getRemainingBudgetEffect(votes, "p1", 5))).resolves.toBe(2);
+  });
 });
 
 describe("applyCastVote", () => {
@@ -192,6 +201,12 @@ describe("applyCastVote", () => {
     const result = applyCastVote([], "p1", "g1", 1, 5);
     expect(result.error).toBeUndefined();
     expect(result.votes).toEqual([{ participantId: "p1", target: groupVoteTarget("g1"), count: 1 }]);
+  });
+
+  it("adds a new vote allocation through an Effect boundary", async () => {
+    await expect(Effect.runPromise(applyCastVoteEffect([], "p1", "g1", 1, 5))).resolves.toEqual({
+      votes: [{ participantId: "p1", target: groupVoteTarget("g1"), count: 1 }],
+    });
   });
 
   it("stacks votes on the same group", () => {
@@ -279,6 +294,14 @@ describe("applyRemoveVote", () => {
     const votes = [{ participantId: "p1", target: itemVoteTarget("i1"), count: 1 }];
     const result = applyRemoveVote(votes, "p1", itemVoteTarget("i1"));
     expect(result).toEqual([]);
+  });
+
+  it("removes allocations through an Effect boundary", async () => {
+    await expect(Effect.runPromise(applyRemoveVoteEffect(
+      [{ participantId: "p1", target: itemVoteTarget("i1"), count: 1 }],
+      "p1",
+      itemVoteTarget("i1"),
+    ))).resolves.toEqual([]);
   });
 
   it("does nothing if no allocation exists", () => {

@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import type { VoteAllocation, VoteTarget } from "./types";
 
 import {
@@ -14,6 +15,10 @@ export function getVotesForTarget(votes: VoteAllocation[], target: VoteTarget): 
       return voteTarget !== null && sameVoteTarget(voteTarget, target);
     })
     .reduce((sum, v) => sum + v.count, 0);
+}
+
+export function getVotesForTargetEffect(votes: VoteAllocation[], target: VoteTarget): Effect.Effect<number> {
+  return Effect.sync(() => getVotesForTarget(votes, target));
 }
 
 export function getVotesForGroup(votes: VoteAllocation[], groupId: string): number {
@@ -33,8 +38,20 @@ export function getVotesByParticipant(votes: VoteAllocation[], participantId: st
     .reduce((sum, v) => sum + v.count, 0);
 }
 
+export function getVotesByParticipantEffect(votes: VoteAllocation[], participantId: string): Effect.Effect<number> {
+  return Effect.sync(() => getVotesByParticipant(votes, participantId));
+}
+
 export function getRemainingBudget(votes: VoteAllocation[], participantId: string, budget: number): number {
   return budget - getVotesByParticipant(votes, participantId);
+}
+
+export function getRemainingBudgetEffect(
+  votes: VoteAllocation[],
+  participantId: string,
+  budget: number,
+): Effect.Effect<number> {
+  return Effect.sync(() => getRemainingBudget(votes, participantId, budget));
 }
 
 export function applyCastVote(
@@ -73,6 +90,16 @@ export function applyCastVote(
   return { votes: [...votes, { participantId, target, count }] };
 }
 
+export function applyCastVoteEffect(
+  votes: VoteAllocation[],
+  participantId: string,
+  targetOrGroupId: VoteTarget | string,
+  count: number,
+  budget: number,
+): Effect.Effect<{ votes: VoteAllocation[]; error?: string }> {
+  return Effect.sync(() => applyCastVote(votes, participantId, targetOrGroupId, count, budget));
+}
+
 export function applyRemoveVote(
   votes: VoteAllocation[],
   participantId: string,
@@ -98,4 +125,12 @@ export function applyRemoveVote(
       ? { ...v, count: v.count - 1 }
       : v;
   });
+}
+
+export function applyRemoveVoteEffect(
+  votes: VoteAllocation[],
+  participantId: string,
+  targetOrGroupId: VoteTarget | string,
+): Effect.Effect<VoteAllocation[]> {
+  return Effect.sync(() => applyRemoveVote(votes, participantId, targetOrGroupId));
 }

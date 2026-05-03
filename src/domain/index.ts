@@ -61,11 +61,14 @@ export {
   getReactionCount,
   hasParticipantReaction,
   getVotesForTarget,
+  getVotesForTargetEffect,
   getVotesForItem,
   getVotesForGroup,
   getVotesForUngroupedItem,
   getVotesByParticipant,
+  getVotesByParticipantEffect,
   getRemainingBudget,
+  getRemainingBudgetEffect,
   getDecisionTargets,
   getDecisionTargetsEffect,
   getPairwiseComparisons,
@@ -111,6 +114,8 @@ export {
   validateExistingColumnIdEffect,
   applyMoveItemToGroup,
   applyCastVote,
+  applyCastVoteEffect,
   applyRemoveVote,
+  applyRemoveVoteEffect,
 } from "./state";
 export { generateRoomId, ROOM_ID_LENGTH } from "./room-id";

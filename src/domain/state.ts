@@ -81,12 +81,17 @@ export {
 } from "./state-targets";
 export {
   applyCastVote,
+  applyCastVoteEffect,
   applyRemoveVote,
+  applyRemoveVoteEffect,
   getRemainingBudget,
+  getRemainingBudgetEffect,
   getVotesByParticipant,
+  getVotesByParticipantEffect,
   getVotesForGroup,
   getVotesForItem,
   getVotesForTarget,
+  getVotesForTargetEffect,
   getVotesForUngroupedItem,
 } from "./state-votes";
 export {
