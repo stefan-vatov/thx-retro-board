@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   copyExportCardEffect,
   copyInviteLinkEffect,
+  downloadExportCardEffect,
   writeClipboardTextEffect,
 } from "./clipboard-effect";
 
@@ -137,5 +138,62 @@ describe("copyInviteLinkEffect", () => {
       copyFailed: true,
       manualUrl: "https://example.test/room/abc",
     });
+  });
+});
+
+describe("downloadExportCardEffect", () => {
+  it("creates a downloadable export file through the injected browser boundary", async () => {
+    const calls: string[] = [];
+    const blob = { marker: "blob" };
+    const link = {
+      href: "",
+      download: "",
+      click: () => calls.push("click"),
+      remove: () => calls.push("remove"),
+    };
+
+    await expect(
+      Effect.runPromise(
+        downloadExportCardEffect(
+          {
+            filename: "retro-room-actions.csv",
+            mimeType: "text/csv",
+            content: "action,status",
+          },
+          {
+            createBlob: (parts, options) => {
+              calls.push(`blob:${parts.join("")}:${options.type}`);
+              return blob;
+            },
+            createObjectUrl: (createdBlob) => {
+              calls.push(`url:${createdBlob === blob}`);
+              return "blob:retro-export";
+            },
+            createLink: () => {
+              calls.push("link");
+              return link;
+            },
+            appendLink: (createdLink) => {
+              calls.push(`append:${createdLink === link}`);
+            },
+            revokeObjectUrl: (url) => calls.push(`revoke:${url}`),
+          },
+        ),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(link).toMatchObject({
+      href: "blob:retro-export",
+      download: "retro-room-actions.csv",
+    });
+    expect(calls).toEqual([
+      "blob:action,status:text/csv;charset=utf-8",
+      "url:true",
+      "link",
+      "append:true",
+      "click",
+      "remove",
+      "revoke:blob:retro-export",
+    ]);
   });
 });

@@ -10,7 +10,10 @@ import {
   formatRetroExportMarkdownEffect,
   getAnonymousActionsEffect,
 } from "../domain";
-import { copyExportCardEffect } from "./clipboard-effect";
+import {
+  copyExportCardEffect,
+  downloadExportCardEffect,
+} from "./clipboard-effect";
 
 interface ExportCard {
   id: string;
@@ -140,7 +143,17 @@ export function FinalBoard({ roomState }: { roomState: RoomState }) {
               <button
                 type="button"
                 className="btn btn--primary btn--sm"
-                onClick={() => downloadExport(card)}
+                onClick={() => {
+                  void Effect.runPromise(
+                    downloadExportCardEffect(card, {
+                      createBlob: (parts, options) => new Blob(parts, options),
+                      createObjectUrl: (blob) => URL.createObjectURL(blob),
+                      createLink: () => document.createElement("a"),
+                      appendLink: (link) => document.body.append(link),
+                      revokeObjectUrl: (url) => URL.revokeObjectURL(url),
+                    }),
+                  );
+                }}
               >
                 Download
               </button>
@@ -158,18 +171,4 @@ export function FinalBoard({ roomState }: { roomState: RoomState }) {
       </div>
     </section>
   );
-}
-
-function downloadExport(card: ExportCard) {
-  const blob = new Blob([card.content], {
-    type: `${card.mimeType};charset=utf-8`,
-  });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = card.filename;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
 }

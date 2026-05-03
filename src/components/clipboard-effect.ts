@@ -77,3 +77,50 @@ export function copyInviteLinkEffect(
     ),
   );
 }
+
+export type DownloadableExportCard = {
+  filename: string;
+  mimeType: string;
+  content: string;
+};
+
+export type DownloadLink = {
+  href: string;
+  download: string;
+  click: () => void;
+  remove: () => void;
+};
+
+export type ExportDownloadDeps<
+  BlobLike = Blob,
+  LinkLike extends DownloadLink = DownloadLink,
+> = {
+  createBlob: (parts: BlobPart[], options: BlobPropertyBag) => BlobLike;
+  createObjectUrl: (blob: BlobLike) => string;
+  createLink: () => LinkLike;
+  appendLink: (link: LinkLike) => void;
+  revokeObjectUrl: (url: string) => void;
+};
+
+export function downloadExportCardEffect<
+  BlobLike,
+  LinkLike extends DownloadLink,
+>(
+  card: DownloadableExportCard,
+  deps: ExportDownloadDeps<BlobLike, LinkLike>,
+): Effect.Effect<void> {
+  return Effect.sync(() => {
+    const blob = deps.createBlob([card.content], {
+      type: `${card.mimeType};charset=utf-8`,
+    });
+    const url = deps.createObjectUrl(blob);
+    const link = deps.createLink();
+
+    link.href = url;
+    link.download = card.filename;
+    deps.appendLink(link);
+    link.click();
+    link.remove();
+    deps.revokeObjectUrl(url);
+  });
+}
