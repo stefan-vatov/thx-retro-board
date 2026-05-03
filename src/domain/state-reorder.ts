@@ -28,6 +28,10 @@ export function applyReorderItems(items: RetroItem[], orderedIds: string[]): Ret
   ];
 }
 
+export function applyReorderItemsEffect(items: RetroItem[], orderedIds: string[]): Effect.Effect<RetroItem[]> {
+  return Effect.sync(() => applyReorderItems(items, orderedIds));
+}
+
 export function validateItemReorderPayload(
   items: RetroItem[],
   orderedIds: unknown,
@@ -103,6 +107,13 @@ export function validateItemReorderPayloadEffect(
 export function applyReorderGroups<T extends { id: string; order: number }>(groups: T[], orderedIds: string[]): T[] {
   const reordered = reorderList(groups, orderedIds, (group) => group.id);
   return reordered.map((group, index) => ({ ...group, order: index }));
+}
+
+export function applyReorderGroupsEffect<T extends { id: string; order: number }>(
+  groups: T[],
+  orderedIds: string[],
+): Effect.Effect<T[]> {
+  return Effect.sync(() => applyReorderGroups(groups, orderedIds));
 }
 
 export function validateGroupReorderPayload(
@@ -181,6 +192,10 @@ export function applyReorderColumnGroups(groups: Group[], orderedIds: string[]):
   return groups.map((group) => reorderedById.get(group.id) ?? group);
 }
 
+export function applyReorderColumnGroupsEffect(groups: Group[], orderedIds: string[]): Effect.Effect<Group[]> {
+  return Effect.sync(() => applyReorderColumnGroups(groups, orderedIds));
+}
+
 export function applyMoveItemToGroup(
   items: RetroItem[],
   itemId: string,
@@ -215,4 +230,13 @@ export function applyMoveItemToGroup(
   });
 
   return [...compactedDifferentGroup, ...updatedSameGroup];
+}
+
+export function applyMoveItemToGroupEffect(
+  items: RetroItem[],
+  itemId: string,
+  targetGroupId: string | null,
+  targetIndex: number,
+): Effect.Effect<RetroItem[]> {
+  return Effect.sync(() => applyMoveItemToGroup(items, itemId, targetGroupId, targetIndex));
 }

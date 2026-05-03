@@ -1,3 +1,5 @@
+import { Effect } from "effect";
+
 import type { RetroItem, Group, VoteAllocation } from "./types";
 
 import {
@@ -128,9 +130,13 @@ export {
 } from "./state-votes";
 export {
   applyMoveItemToGroup,
+  applyMoveItemToGroupEffect,
   applyReorderColumnGroups,
+  applyReorderColumnGroupsEffect,
   applyReorderGroups,
+  applyReorderGroupsEffect,
   applyReorderItems,
+  applyReorderItemsEffect,
   ReorderValidationError,
   validateGroupReorderPayload,
   validateGroupReorderPayloadEffect,
@@ -162,6 +168,14 @@ export function applyEditGroup(groups: Group[], groupId: string, rawName: string
     return { groups, error: "Group name already exists in this column" };
   }
   return { groups: groups.map((group) => group.id === groupId ? { ...group, name: sanitized } : group) };
+}
+
+export function applyEditGroupEffect(
+  groups: Group[],
+  groupId: string,
+  rawName: string,
+): Effect.Effect<{ groups: Group[]; error?: string }> {
+  return Effect.sync(() => applyEditGroup(groups, groupId, rawName));
 }
 
 export function applyDeleteGroup(
@@ -196,4 +210,13 @@ export function applyDeleteGroup(
   });
 
   return { groups: remainingGroups, items: nextItems, votes: nextVotes };
+}
+
+export function applyDeleteGroupEffect(
+  groups: Group[],
+  items: RetroItem[],
+  votes: VoteAllocation[],
+  groupId: string,
+): Effect.Effect<{ groups: Group[]; items: RetroItem[]; votes: VoteAllocation[]; error?: string }> {
+  return Effect.sync(() => applyDeleteGroup(groups, items, votes, groupId));
 }

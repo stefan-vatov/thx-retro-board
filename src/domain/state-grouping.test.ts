@@ -6,18 +6,23 @@ import {
   hasDuplicateGroupNameInColumn,
   hasDuplicateGroupNameInColumnEffect,
   applyEditGroup,
+  applyEditGroupEffect,
   getUngroupedItems,
   getUngroupedItemsEffect,
   getGroupedItems,
   getGroupedItemsEffect,
   applyReorderItems,
+  applyReorderItemsEffect,
   validateGroupReorderPayloadEffect,
   validateItemReorderPayload,
   validateItemReorderPayloadEffect,
   applyReorderGroups,
+  applyReorderGroupsEffect,
   validateGroupReorderPayload,
   applyDeleteGroup,
+  applyDeleteGroupEffect,
   applyMoveItemToGroup,
+  applyMoveItemToGroupEffect,
 } from "./state";
 import type { Group, RetroItem } from "./types";
 
@@ -85,6 +90,11 @@ describe("group name uniqueness", () => {
       groups,
       error: "Group name already exists in this column",
     });
+  });
+
+  it("edits groups through an Effect boundary", async () => {
+    await expect(Effect.runPromise(applyEditGroupEffect(groups, "group-c", " Renamed ")))
+      .resolves.toEqual(applyEditGroup(groups, "group-c", "Renamed"));
   });
 });
 
@@ -203,6 +213,11 @@ describe("applyReorderItems", () => {
     expect(result).toHaveLength(3);
     expect(result.map((i) => i.id)).toEqual(["a", "b", "c"]);
   });
+
+  it("reorders items through an Effect boundary", async () => {
+    await expect(Effect.runPromise(applyReorderItemsEffect(items, ["b", "a"])))
+      .resolves.toEqual(applyReorderItems(items, ["b", "a"]));
+  });
 });
 
 describe("validateItemReorderPayload", () => {
@@ -255,6 +270,11 @@ describe("applyReorderGroups", () => {
     const result = applyReorderGroups(groups, ["g3", "g1", "g2"]);
     expect(result.map((g) => g.id)).toEqual(["g3", "g1", "g2"]);
     expect(result.map((g) => g.order)).toEqual([0, 1, 2]);
+  });
+
+  it("reorders groups through an Effect boundary", async () => {
+    await expect(Effect.runPromise(applyReorderGroupsEffect(groups, ["g3", "g1", "g2"])))
+      .resolves.toEqual(applyReorderGroups(groups, ["g3", "g1", "g2"]));
   });
 });
 
@@ -314,6 +334,21 @@ describe("applyDeleteGroup", () => {
       expect.objectContaining({ id: "i3", columnId: "col-2", groupId: "g3", order: 0 }),
     ]);
     expect(result.votes).toEqual([{ participantId: "p2", groupId: "g2", itemId: "g2", count: 2 }]);
+  });
+
+  it("deletes groups through an Effect boundary", async () => {
+    const groups: Group[] = [
+      { id: "g1", name: "A", columnId: "col-1", order: 0 },
+      { id: "g2", name: "B", columnId: "col-1", order: 1 },
+    ];
+    const items: RetroItem[] = [
+      { id: "i1", text: "One", authorId: "p1", columnId: "col-1", groupId: "g1", order: 0 },
+      { id: "i2", text: "Two", authorId: "p1", columnId: "col-1", groupId: "g2", order: 0 },
+    ];
+    const votes = [{ participantId: "p1", groupId: "g1", itemId: "g1", count: 1 }];
+
+    await expect(Effect.runPromise(applyDeleteGroupEffect(groups, items, votes, "g1")))
+      .resolves.toEqual(applyDeleteGroup(groups, items, votes, "g1"));
   });
 });
 
@@ -379,5 +414,10 @@ describe("applyMoveItemToGroup", () => {
     expect(moved.authorId).toBe("p1");
     expect(moved.columnId).toBe("col-1");
     expect(moved.groupId).toBe("g1");
+  });
+
+  it("moves items through an Effect boundary", async () => {
+    await expect(Effect.runPromise(applyMoveItemToGroupEffect(items, "a", "g1", 0)))
+      .resolves.toEqual(applyMoveItemToGroup(items, "a", "g1", 0));
   });
 });
