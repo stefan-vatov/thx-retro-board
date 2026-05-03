@@ -117,6 +117,32 @@ describe("room lifecycle effects", () => {
     ]);
   });
 
+  it("cancels empty-room purge through injected Effect dependencies", async () => {
+    const state = createState(1_000);
+    state.purgeScheduledAt = 30_000;
+    const calls: Array<[string, unknown?]> = [];
+
+    await Effect.runPromise(cancelEmptyRoomPurgeEffect({} as never, 20_000, {
+      deleteAlarm: () => Effect.sync(() => {
+        calls.push(["deleteAlarm"]);
+      }),
+      getLoadedState: () => Effect.succeed(state),
+      saveState: () => Effect.sync(() => {
+        calls.push(["save"]);
+      }),
+      setAlarm: (_host, timestamp) => Effect.sync(() => {
+        calls.push(["setAlarm", timestamp]);
+      }),
+    }));
+
+    expect(state.purgeScheduledAt).toBeNull();
+    expect(calls).toEqual([
+      ["deleteAlarm"],
+      ["save"],
+      ["setAlarm", 1_000 + MAX_ROOM_LIFETIME_MS],
+    ]);
+  });
+
   it("purges expired rooms before serving them", async () => {
     const state = createState(1_000);
     const { host, calls } = createHost(state, 0);

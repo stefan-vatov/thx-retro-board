@@ -33,6 +33,20 @@ export const scheduleEmptyRoomPurgeDeps: ScheduleEmptyRoomPurgeDeps = {
   saveState: (host) => Effect.promise(() => host.saveState()),
 };
 
+export interface CancelEmptyRoomPurgeDeps {
+  deleteAlarm: (host: RoomLifecycleHost) => Effect.Effect<void>;
+  getLoadedState: (host: RoomLifecycleHost) => Effect.Effect<StoredState | null>;
+  saveState: (host: RoomLifecycleHost) => Effect.Effect<void>;
+  setAlarm: (host: RoomLifecycleHost, timestamp: number) => Effect.Effect<void>;
+}
+
+export const cancelEmptyRoomPurgeDeps: CancelEmptyRoomPurgeDeps = {
+  deleteAlarm: (host) => Effect.promise(() => host.deleteAlarm()),
+  getLoadedState: (host) => Effect.sync(() => host.getLoadedState()),
+  saveState: (host) => Effect.promise(() => host.saveState()),
+  setAlarm: (host, timestamp) => Effect.promise(() => host.setAlarm(timestamp)),
+};
+
 export function getAbsoluteRoomExpiresAt(
   state: Pick<StoredState, "startedAt">,
   now = Date.now(),
@@ -71,17 +85,18 @@ export function scheduleEmptyRoomPurgeEffect(
 export function cancelEmptyRoomPurgeEffect(
   host: RoomLifecycleHost,
   now = Date.now(),
+  deps: CancelEmptyRoomPurgeDeps = cancelEmptyRoomPurgeDeps,
 ): Effect.Effect<void> {
   return Effect.gen(function* () {
-    yield* Effect.promise(() => host.deleteAlarm());
-    const state = host.getLoadedState();
+    yield* deps.deleteAlarm(host);
+    const state = yield* deps.getLoadedState(host);
     if (!state) return;
     if (state.purgeScheduledAt !== null) {
       state.purgeScheduledAt = null;
-      yield* Effect.promise(() => host.saveState());
+      yield* deps.saveState(host);
     }
     const expiresAt = yield* getAbsoluteRoomExpiresAtEffect(state, now);
-    yield* Effect.promise(() => host.setAlarm(expiresAt));
+    yield* deps.setAlarm(host, expiresAt);
   });
 }
 
