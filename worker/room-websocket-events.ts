@@ -63,13 +63,19 @@ export function handleRoomWebSocketMessageEffect(
 }
 
 export function handleRoomWebSocketClose(host: RoomWebSocketEventHost, ws: WebSocket): void {
-  const attachment = ws.deserializeAttachment() as { participantId: string } | null;
-  const participantId = attachment?.participantId;
-  if (!participantId) return;
+  void Effect.runPromise(handleRoomWebSocketCloseEffect(host, ws));
+}
 
-  if (host.getSession(participantId) !== ws) return;
-  host.removeSession(participantId);
-  host.removeRealtimeParticipant(participantId);
-  host.broadcast({ type: "participant-left", participantId });
-  void host.scheduleEmptyRoomPurge();
+export function handleRoomWebSocketCloseEffect(host: RoomWebSocketEventHost, ws: WebSocket): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    const attachment = ws.deserializeAttachment() as { participantId: string } | null;
+    const participantId = attachment?.participantId;
+    if (!participantId) return;
+
+    if (host.getSession(participantId) !== ws) return;
+    host.removeSession(participantId);
+    host.removeRealtimeParticipant(participantId);
+    host.broadcast({ type: "participant-left", participantId });
+    yield* Effect.promise(() => host.scheduleEmptyRoomPurge());
+  });
 }
