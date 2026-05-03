@@ -114,4 +114,28 @@ describe("room phase commands", () => {
     expect(state.phase).toBe("write");
     expect(calls).toEqual(["load", "broadcast:phase-changed", "save:write"]);
   });
+
+  it("starts timers through injected Effect dependencies", async () => {
+    const state = createInitialStoredState("room-effect-injected-timer");
+    state.participants = [{ id: "fac", displayName: "Fac", isFacilitator: true }];
+    state.facilitatorId = "fac";
+    const calls: string[] = [];
+
+    const result = await Effect.runPromise(setTimerForRoomEffect({} as never, "fac", 120, 1000, {
+      loadState: () => Effect.sync(() => {
+        calls.push("load");
+        return state;
+      }),
+      broadcast: (_host, message) => Effect.sync(() => {
+        calls.push(`broadcast:${message.type}`);
+      }),
+      saveAndBroadcastState: (_host, savedState) => Effect.sync(() => {
+        calls.push(`save:${savedState.timer.startedAt}`);
+      }),
+    }));
+
+    expect(result).toEqual({ success: true });
+    expect(state.timer).toEqual({ startedAt: 1000, durationSeconds: 120, expired: false });
+    expect(calls).toEqual(["load", "broadcast:timer-updated", "save:1000"]);
+  });
 });

@@ -22,6 +22,18 @@ export const setPhaseForRoomDeps: SetPhaseForRoomDeps = {
   saveAndBroadcastState: saveAndBroadcastStateEffect,
 };
 
+export interface SetTimerForRoomDeps {
+  loadState: (host: RoomCommandHost) => Effect.Effect<StoredState>;
+  broadcast: (host: RoomCommandHost, message: ServerToClientMessage) => Effect.Effect<void>;
+  saveAndBroadcastState: (host: RoomCommandHost, state: StoredState) => Effect.Effect<void>;
+}
+
+export const setTimerForRoomDeps: SetTimerForRoomDeps = {
+  loadState: (host) => Effect.promise(() => host.loadState()),
+  broadcast: (host, message) => Effect.sync(() => host.broadcast(message)),
+  saveAndBroadcastState: saveAndBroadcastStateEffect,
+};
+
 export async function setPhaseForRoom(
   host: RoomCommandHost,
   participantId: string,
@@ -71,9 +83,10 @@ export function setTimerForRoomEffect(
   participantId: string,
   durationSeconds: number,
   now = Date.now(),
+  deps: SetTimerForRoomDeps = setTimerForRoomDeps,
 ): Effect.Effect<{ success: boolean; error?: string }> {
   return Effect.gen(function* () {
-    const s = yield* Effect.promise(() => host.loadState());
+    const s = yield* deps.loadState(host);
     const validation = yield* Effect.either(validateTimerChangeEffect(s, participantId, durationSeconds));
     if (validation._tag === "Left") {
       return { success: false, error: validation.left.message };
@@ -85,8 +98,8 @@ export function setTimerForRoomEffect(
       expired: false,
     };
 
-    host.broadcast({ type: "timer-updated", timer: s.timer });
-    yield* saveAndBroadcastStateEffect(host, s);
+    yield* deps.broadcast(host, { type: "timer-updated", timer: s.timer });
+    yield* deps.saveAndBroadcastState(host, s);
 
     return { success: true };
   });
