@@ -29,6 +29,7 @@ export {
 } from "./export";
 export {
   createRoomState,
+  createRoomStateEffect,
   createParticipant,
   createItem,
   createColumn,
@@ -38,6 +39,7 @@ export {
   getDefaultColumns,
   MAX_COLUMN_NAME_LENGTH,
   MAX_COLUMNS,
+  ColumnValidationError,
   MAX_ACTION_TEXT_LENGTH,
   PHASE_ORDER,
   canTransition,
@@ -90,6 +92,7 @@ export {
   applyDeleteColumn,
   validateFullColumnPermutation,
   validateExistingColumnId,
+  validateExistingColumnIdEffect,
   applyMoveItemToGroup,
   applyCastVote,
   applyRemoveVote,

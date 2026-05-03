@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { Effect, Exit } from "effect";
 import {
   createRoomState,
+  createRoomStateEffect,
   createParticipant,
   createItem,
   createGroup,
@@ -13,6 +15,7 @@ import {
   sanitizeGroupName,
   isValidGroupName,
   validateExistingColumnId,
+  validateExistingColumnIdEffect,
 } from "./state";
 import type { Group, RetroItem } from "./types";
 
@@ -39,6 +42,11 @@ describe("createRoomState", () => {
   it("accepts custom vote budget", () => {
     const state = createRoomState("room-2", 10);
     expect(state.voteBudget).toBe(10);
+  });
+
+  it("creates room state through an Effect boundary", async () => {
+    const state = await Effect.runPromise(createRoomStateEffect("room-3", 7));
+    expect(state).toMatchObject({ roomId: "room-3", phase: "setup", voteBudget: 7 });
   });
 });
 
@@ -71,6 +79,13 @@ describe("validateExistingColumnId", () => {
     expect(validateExistingColumnId(columns, null)).toEqual({ valid: false, error: "Column is required" });
     expect(validateExistingColumnId(columns, 12)).toEqual({ valid: false, error: "Column is required" });
     expect(validateExistingColumnId(columns, "missing")).toEqual({ valid: false, error: "Column not found" });
+  });
+
+  it("validates configured column IDs through an Effect boundary", async () => {
+    await expect(Effect.runPromise(validateExistingColumnIdEffect(columns, "col-2"))).resolves.toBe("col-2");
+
+    const exit = await Effect.runPromiseExit(validateExistingColumnIdEffect(columns, "missing"));
+    expect(Exit.isFailure(exit)).toBe(true);
   });
 });
 
