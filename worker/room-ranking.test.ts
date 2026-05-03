@@ -180,4 +180,26 @@ describe("room ranking commands", () => {
     }]);
     expect(state.reactions).toEqual([{ participantId: "p1", target: itemVoteTarget("item-a"), emoji: "🔥" }]);
   });
+
+  it("toggles reactions through injected Effect dependencies", async () => {
+    const state = createInitialStoredState("room-a");
+    state.phase = "vote";
+    state.participants = [{ id: "p1", displayName: "P1", isFacilitator: false }];
+    state.items = [{ id: "item-a", text: "A", authorId: "p1", columnId: "mad", groupId: null, order: 0 }];
+    const calls: string[] = [];
+
+    const result = await Effect.runPromise(toggleReactionForRoomEffect({} as never, "p1", itemVoteTarget("item-a"), "🔥", {
+      loadState: () => Effect.sync(() => {
+        calls.push("load");
+        return state;
+      }),
+      saveAndBroadcastState: (_host, savedState) => Effect.sync(() => {
+        calls.push(`save:${savedState.reactions.length}:${savedState.reactions[0]?.emoji}`);
+      }),
+    }));
+
+    expect(result).toEqual({ success: true });
+    expect(state.reactions).toEqual([{ participantId: "p1", target: itemVoteTarget("item-a"), emoji: "🔥" }]);
+    expect(calls).toEqual(["load", "save:1:🔥"]);
+  });
 });

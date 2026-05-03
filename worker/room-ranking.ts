@@ -40,6 +40,16 @@ export const setRankingMethodForRoomDeps: SetRankingMethodForRoomDeps = {
   }),
 };
 
+export interface ToggleReactionForRoomDeps {
+  loadState: (host: RoomCommandHost) => Effect.Effect<StoredState>;
+  saveAndBroadcastState: (host: RoomCommandHost, state: StoredState) => Effect.Effect<void>;
+}
+
+export const toggleReactionForRoomDeps: ToggleReactionForRoomDeps = {
+  loadState: (host) => Effect.promise(() => host.loadState()),
+  saveAndBroadcastState: saveAndBroadcastStateEffect,
+};
+
 export async function setVoteBudgetForRoom(
   host: RoomCommandHost,
   participantId: string,
@@ -112,15 +122,16 @@ export function toggleReactionForRoomEffect(
   participantId: string,
   target: ReactionTarget,
   emoji: string,
+  deps: ToggleReactionForRoomDeps = toggleReactionForRoomDeps,
 ): Effect.Effect<{ success: boolean; error?: string }> {
   return Effect.gen(function* () {
-    const s = yield* Effect.promise(() => host.loadState());
+    const s = yield* deps.loadState(host);
     const validation = yield* Effect.either(validateReactionToggleEffect(s, participantId, target, emoji));
     if (validation._tag === "Left") {
       return { success: false, error: validation.left.message };
     }
     s.reactions = validation.right.reactions;
-    yield* saveAndBroadcastStateEffect(host, s);
+    yield* deps.saveAndBroadcastState(host, s);
     return { success: true };
   });
 }
