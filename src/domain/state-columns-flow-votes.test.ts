@@ -5,8 +5,11 @@ import {
   validateFullColumnPermutation,
   validateFullColumnPermutationEffect,
   applyReorderColumns,
+  applyReorderColumnsEffect,
   applyEditColumn,
+  applyEditColumnEffect,
   applyDeleteColumn,
+  applyDeleteColumnEffect,
   PHASE_ORDER,
   canTransition,
   isPhaseAllowed,
@@ -56,12 +59,32 @@ describe("column helpers", () => {
     expect(result.map((column) => column.order)).toEqual([0, 1, 2]);
   });
 
+  it("reorders columns through an Effect boundary", async () => {
+    const columns = [
+      { id: "start", name: "Start", order: 0 },
+      { id: "stop", name: "Stop", order: 1 },
+      { id: "continue", name: "Continue", order: 2 },
+    ];
+
+    const result = await Effect.runPromise(applyReorderColumnsEffect(columns, ["continue", "start", "stop"]));
+
+    expect(result.map((column) => column.id)).toEqual(["continue", "start", "stop"]);
+    expect(result.map((column) => column.order)).toEqual([0, 1, 2]);
+  });
+
   it("edits column names without changing IDs", () => {
     const columns = [{ id: "start", name: "Start", order: 0 }];
     const result = applyEditColumn(columns, "start", "  Begin  ");
     expect(result.error).toBeUndefined();
     expect(result.columns.find((column) => column.id === "start")?.name).toBe("Begin");
     expect(result.columns.map((column) => column.id)).toEqual(columns.map((column) => column.id));
+  });
+
+  it("edits column names through an Effect boundary", async () => {
+    const columns = [{ id: "start", name: "Start", order: 0 }];
+
+    await expect(Effect.runPromise(applyEditColumnEffect(columns, "start", "  Begin  ")))
+      .resolves.toEqual(applyEditColumn(columns, "start", "Begin"));
   });
 
   it("deletes a column and cascades only its contained groups, items, and votes", () => {
@@ -96,6 +119,28 @@ describe("column helpers", () => {
       { participantId: "p1", groupId: "keep-group", count: 1 },
       { participantId: "p2", groupId: "also-keep-group", count: 3 },
     ]);
+  });
+
+  it("deletes a column through an Effect boundary", async () => {
+    const columns = [
+      { id: "keep", name: "Keep", order: 0 },
+      { id: "delete", name: "Delete", order: 1 },
+    ];
+    const groups = [
+      { id: "keep-group", name: "Keep group", columnId: "keep", order: 0 },
+      { id: "delete-group", name: "Delete group", columnId: "delete", order: 0 },
+    ];
+    const items = [
+      { id: "keep-item", text: "Keep", authorId: "p1", columnId: "keep", groupId: "keep-group", order: 0 },
+      { id: "delete-item", text: "Delete", authorId: "p1", columnId: "delete", groupId: "delete-group", order: 0 },
+    ];
+    const votes = [
+      { participantId: "p1", groupId: "keep-group", count: 1 },
+      { participantId: "p1", groupId: "delete-group", count: 2 },
+    ];
+
+    await expect(Effect.runPromise(applyDeleteColumnEffect(columns, groups, items, votes, "delete")))
+      .resolves.toEqual(applyDeleteColumn(columns, groups, items, votes, "delete"));
   });
 
   it("deletes the final column into an empty board", () => {

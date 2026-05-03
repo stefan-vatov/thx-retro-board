@@ -60,6 +60,10 @@ export function applyReorderColumns(columns: Column[], orderedIds: string[]): Co
   return applyReorderGroups(columns, orderedIds);
 }
 
+export function applyReorderColumnsEffect(columns: Column[], orderedIds: string[]): Effect.Effect<Column[]> {
+  return Effect.sync(() => applyReorderColumns(columns, orderedIds));
+}
+
 export function applyEditColumn(columns: Column[], columnId: string, rawName: string): { columns: Column[]; error?: string } {
   const sanitized = sanitizeColumnName(rawName);
   if (!isValidColumnName(rawName)) {
@@ -69,6 +73,14 @@ export function applyEditColumn(columns: Column[], columnId: string, rawName: st
     return { columns, error: "Column not found" };
   }
   return { columns: columns.map((column) => column.id === columnId ? { ...column, name: sanitized } : column) };
+}
+
+export function applyEditColumnEffect(
+  columns: Column[],
+  columnId: string,
+  rawName: string,
+): Effect.Effect<{ columns: Column[]; error?: string }> {
+  return Effect.sync(() => applyEditColumn(columns, columnId, rawName));
 }
 
 export function applyDeleteColumn(
@@ -115,4 +127,14 @@ export function applyDeleteColumn(
     items: remainingItems,
     votes: remainingVotes,
   };
+}
+
+export function applyDeleteColumnEffect(
+  columns: Column[],
+  groups: Group[],
+  items: RetroItem[],
+  votes: VoteAllocation[],
+  columnId: string,
+): Effect.Effect<{ columns: Column[]; groups: Group[]; items: RetroItem[]; votes: VoteAllocation[]; error?: string }> {
+  return Effect.sync(() => applyDeleteColumn(columns, groups, items, votes, columnId));
 }

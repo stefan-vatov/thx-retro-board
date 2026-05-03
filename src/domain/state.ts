@@ -139,8 +139,11 @@ export {
 } from "./state-reorder";
 export {
   applyDeleteColumn,
+  applyDeleteColumnEffect,
   applyEditColumn,
+  applyEditColumnEffect,
   applyReorderColumns,
+  applyReorderColumnsEffect,
   ColumnPermutationError,
   validateFullColumnPermutation,
   validateFullColumnPermutationEffect,
