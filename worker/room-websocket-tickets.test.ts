@@ -68,6 +68,39 @@ describe("room websocket ticket commands", () => {
     expect(storage.get("ws-ticket-by-participant:p1")).toBe(result.ticket);
   });
 
+  it("creates websocket tickets through injected Effect dependencies", async () => {
+    const state = createInitialStoredState("room-a");
+    state.participants = [{ id: "p1", displayName: "P1", isFacilitator: true }];
+    state.facilitatorId = "p1";
+    state.connectionTokens.p1 = "token";
+    const calls: string[] = [];
+    const stored = new Map<string, unknown>();
+
+    const result = await Effect.runPromise(createWebSocketTicketForRoomEffect({} as never, "p1", "token", 1000, {
+      loadState: () => Effect.sync(() => {
+        calls.push("load");
+        return state;
+      }),
+      deleteOutstandingTicket: (_host, participantId) => Effect.sync(() => {
+        calls.push(`delete:${participantId}`);
+      }),
+      generateTicket: () => Effect.succeed("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+      put: (_host, key, value) => Effect.sync(() => {
+        calls.push(`put:${key}`);
+        stored.set(key, value);
+      }),
+    }));
+
+    expect(result).toEqual({ success: true, ticket: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" });
+    expect(calls).toEqual([
+      "load",
+      "delete:p1",
+      "put:ws-ticket:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "put:ws-ticket-by-participant:p1",
+    ]);
+    expect(stored.get("ws-ticket-by-participant:p1")).toBe("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  });
+
   it("deletes and consumes websocket tickets through Effect APIs", async () => {
     const storage = new Map<string, unknown>([
       ["ws-ticket:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", {

@@ -20,6 +20,20 @@ export class WebSocketTicketValidationError extends Error {
   }
 }
 
+export interface CreateWebSocketTicketDeps {
+  loadState: (host: WebSocketTicketHost) => Effect.Effect<StoredState>;
+  deleteOutstandingTicket: (host: WebSocketTicketHost, participantId: string) => Effect.Effect<void>;
+  generateTicket: () => Effect.Effect<string>;
+  put: (host: WebSocketTicketHost, key: string, value: unknown) => Effect.Effect<void>;
+}
+
+export const createWebSocketTicketDeps: CreateWebSocketTicketDeps = {
+  loadState: (host) => Effect.promise(() => host.loadState()),
+  deleteOutstandingTicket: deleteOutstandingWebSocketTicketForRoomEffect,
+  generateTicket: generateTokenEffect,
+  put: (host, key, value) => Effect.promise(() => host.put(key, value)),
+};
+
 export function validateWebSocketTicketStringEffect(
   ticket: string | null,
 ): Effect.Effect<string, WebSocketTicketValidationError> {
@@ -65,22 +79,23 @@ export function createWebSocketTicketForRoomEffect(
   participantId: string,
   connectionToken: unknown,
   now = Date.now(),
+  deps: CreateWebSocketTicketDeps = createWebSocketTicketDeps,
 ): Effect.Effect<{ success: boolean; error?: string; ticket?: string }> {
   return Effect.gen(function* () {
-    const s = yield* Effect.promise(() => host.loadState());
+    const s = yield* deps.loadState(host);
     const auth = yield* Effect.either(authorizeParticipantEffect(s, participantId, connectionToken));
     if (auth._tag === "Left") return { success: false, error: auth.left.message };
 
-    yield* deleteOutstandingWebSocketTicketForRoomEffect(host, auth.right.participantId);
+    yield* deps.deleteOutstandingTicket(host, auth.right.participantId);
 
-    const ticket = yield* generateTokenEffect();
+    const ticket = yield* deps.generateTicket();
     const record: WebSocketTicket = {
       participantId: auth.right.participantId,
       expiresAt: now + WEBSOCKET_TICKET_TTL_MS,
     };
     yield* Effect.all([
-      Effect.promise(() => host.put(`ws-ticket:${ticket}`, record)),
-      Effect.promise(() => host.put(`ws-ticket-by-participant:${auth.right.participantId}`, ticket)),
+      deps.put(host, `ws-ticket:${ticket}`, record),
+      deps.put(host, `ws-ticket-by-participant:${auth.right.participantId}`, ticket),
     ], { concurrency: "unbounded" });
     return { success: true, ticket };
   });
