@@ -1,9 +1,18 @@
 import { Effect } from "effect";
-import type { ClientToServerMessage, Phase, ReactionTarget, VoteTarget } from "../src/domain";
+import type {
+  ClientToServerMessage,
+  Phase,
+  ReactionTarget,
+  VoteTarget,
+} from "../src/domain";
 import { groupVoteTarget, itemVoteTarget } from "../src/domain";
-import type { ItemReorderPreconditions, MoveItemPreconditions } from "./room-types";
+import type {
+  ItemReorderPreconditions,
+  MoveItemPreconditions,
+} from "./room-types";
 
-type RoomResult = Promise<{ success: boolean; error?: string }>;
+type RoomCommandResult = { success: boolean; error?: string };
+type RoomResult = Promise<RoomCommandResult>;
 
 export class RealtimeVoteTargetError extends Error {
   constructor(message: string) {
@@ -18,9 +27,16 @@ export interface RoomRealtimeController {
   editItem(participantId: string, itemId: string, text: string): RoomResult;
   deleteItem(participantId: string, itemId: string): RoomResult;
   setVoteBudget(participantId: string, budget: number): RoomResult;
-  setRankingMethod(participantId: string, rankingMethod: "score" | "pairwise"): RoomResult;
+  setRankingMethod(
+    participantId: string,
+    rankingMethod: "score" | "pairwise",
+  ): RoomResult;
   setPhase(participantId: string, phase: Phase): RoomResult;
-  createGroup(participantId: string, name: string, columnId?: string): RoomResult;
+  createGroup(
+    participantId: string,
+    name: string,
+    columnId?: string,
+  ): RoomResult;
   editGroup(participantId: string, groupId: string, name: string): RoomResult;
   deleteGroup(participantId: string, groupId: string): RoomResult;
   createColumn(participantId: string, name: string): RoomResult;
@@ -32,7 +48,11 @@ export interface RoomRealtimeController {
     itemIds: unknown,
     preconditions?: Partial<ItemReorderPreconditions>,
   ): RoomResult;
-  reorderGroups(participantId: string, orderedIds: unknown, expectedVersion?: unknown): RoomResult;
+  reorderGroups(
+    participantId: string,
+    orderedIds: unknown,
+    expectedVersion?: unknown,
+  ): RoomResult;
   moveItemToGroup(
     participantId: string,
     itemId: string,
@@ -41,16 +61,57 @@ export interface RoomRealtimeController {
     preconditions?: Partial<MoveItemPreconditions>,
   ): RoomResult;
   setTimer(participantId: string, durationSeconds: number): RoomResult;
-  setReviewTarget(participantId: string, reviewTargetKey: string | null): RoomResult;
-  castVote(participantId: string, target: VoteTarget, count: number): RoomResult;
+  setReviewTarget(
+    participantId: string,
+    reviewTargetKey: string | null,
+  ): RoomResult;
+  castVote(
+    participantId: string,
+    target: VoteTarget,
+    count: number,
+  ): RoomResult;
   removeVote(participantId: string, target: VoteTarget): RoomResult;
-  choosePairwise(participantId: string, winner: VoteTarget, loser: VoteTarget): RoomResult;
-  toggleReaction(participantId: string, target: ReactionTarget, emoji: string): RoomResult;
+  choosePairwise(
+    participantId: string,
+    winner: VoteTarget,
+    loser: VoteTarget,
+  ): RoomResult;
+  toggleReaction(
+    participantId: string,
+    target: ReactionTarget,
+    emoji: string,
+  ): RoomResult;
   createAction(participantId: string, text: string): RoomResult;
   editAction(participantId: string, actionId: string, text: string): RoomResult;
   deleteAction(participantId: string, actionId: string): RoomResult;
   sendParticipantError(participantId: string, message: string): void;
 }
+
+export interface RoomRealtimeDeps {
+  runRoomResult(
+    room: RoomRealtimeController,
+    participantId: string,
+    run: () => RoomResult,
+  ): Effect.Effect<RoomCommandResult>;
+  sendParticipantError(
+    room: RoomRealtimeController,
+    participantId: string,
+    message: string,
+  ): Effect.Effect<void>;
+  join(
+    room: RoomRealtimeController,
+    participantId: string,
+    displayName: string,
+  ): Effect.Effect<RoomCommandResult>;
+}
+
+export const roomRealtimeDeps: RoomRealtimeDeps = {
+  runRoomResult: (_room, _participantId, run) => Effect.promise(run),
+  sendParticipantError: (room, participantId, message) =>
+    Effect.sync(() => room.sendParticipantError(participantId, message)),
+  join: (room, participantId, displayName) =>
+    Effect.promise(() => room.join(participantId, displayName)),
+};
 
 function parseVoteTargetMessage(
   msg: Extract<ClientToServerMessage, { type: "cast-vote" | "remove-vote" }>,
@@ -58,7 +119,10 @@ function parseVoteTargetMessage(
   const hasGroupId = Object.prototype.hasOwnProperty.call(msg, "groupId");
   const hasItemId = Object.prototype.hasOwnProperty.call(msg, "itemId");
   if (hasGroupId && hasItemId) {
-    return { success: false, error: "Vote target must specify exactly one target" };
+    return {
+      success: false,
+      error: "Vote target must specify exactly one target",
+    };
   }
   if (hasGroupId) {
     return typeof msg.groupId === "string" && msg.groupId.trim().length > 0
@@ -90,17 +154,24 @@ export async function handleRoomRealtimeMessage(
   participantId: string,
   msg: ClientToServerMessage,
 ): Promise<void> {
-  return Effect.runPromise(handleRoomRealtimeMessageEffect(room, participantId, msg));
+  return Effect.runPromise(
+    handleRoomRealtimeMessageEffect(room, participantId, msg),
+  );
 }
 
 function reportFailedResultEffect(
   room: RoomRealtimeController,
   participantId: string,
-  result: { success: boolean; error?: string },
+  result: RoomCommandResult,
+  deps: RoomRealtimeDeps,
 ): Effect.Effect<void> {
-  return Effect.sync(() => {
+  return Effect.gen(function* () {
     if (!result.success) {
-      room.sendParticipantError(participantId, result.error ?? "Request failed");
+      yield* deps.sendParticipantError(
+        room,
+        participantId,
+        result.error ?? "Request failed",
+      );
     }
   });
 }
@@ -109,10 +180,11 @@ function runRoomResultEffect(
   room: RoomRealtimeController,
   participantId: string,
   run: () => RoomResult,
+  deps: RoomRealtimeDeps,
 ): Effect.Effect<void> {
   return Effect.gen(function* () {
-    const result = yield* Effect.promise(run);
-    yield* reportFailedResultEffect(room, participantId, result);
+    const result = yield* deps.runRoomResult(room, participantId, run);
+    yield* reportFailedResultEffect(room, participantId, result, deps);
   });
 }
 
@@ -120,88 +192,233 @@ export function handleRoomRealtimeMessageEffect(
   room: RoomRealtimeController,
   participantId: string,
   msg: ClientToServerMessage,
+  deps: RoomRealtimeDeps = roomRealtimeDeps,
 ): Effect.Effect<void> {
   return Effect.gen(function* () {
-  switch (msg.type) {
-    case "join":
-      yield* Effect.promise(() => room.join(participantId, msg.displayName));
-      return;
-    case "add-item":
-      return yield* runRoomResultEffect(room, participantId, () => room.addItem(participantId, msg.text, msg.columnId ?? null));
-    case "edit-item":
-      return yield* runRoomResultEffect(room, participantId, () => room.editItem(participantId, msg.itemId, msg.text));
-    case "delete-item":
-      return yield* runRoomResultEffect(room, participantId, () => room.deleteItem(participantId, msg.itemId));
-    case "set-vote-budget":
-      return yield* runRoomResultEffect(room, participantId, () => room.setVoteBudget(participantId, msg.budget));
-    case "set-ranking-method":
-      return yield* runRoomResultEffect(room, participantId, () => room.setRankingMethod(participantId, msg.rankingMethod));
-    case "set-phase":
-      return yield* runRoomResultEffect(room, participantId, () => room.setPhase(participantId, msg.phase));
-    case "create-group":
-      return yield* runRoomResultEffect(room, participantId, () => room.createGroup(participantId, msg.name, msg.columnId));
-    case "edit-group":
-      return yield* runRoomResultEffect(room, participantId, () => room.editGroup(participantId, msg.groupId, msg.name));
-    case "delete-group":
-      return yield* runRoomResultEffect(room, participantId, () => room.deleteGroup(participantId, msg.groupId));
-    case "create-column":
-      return yield* runRoomResultEffect(room, participantId, () => room.createColumn(participantId, msg.name));
-    case "edit-column":
-      return yield* runRoomResultEffect(room, participantId, () => room.editColumn(participantId, msg.columnId, msg.name));
-    case "reorder-columns":
-      return yield* runRoomResultEffect(room, participantId, () => room.reorderColumns(participantId, msg.columnIds));
-    case "delete-column":
-      return yield* runRoomResultEffect(room, participantId, () => room.deleteColumn(participantId, msg.columnId));
-    case "reorder-items":
-      return yield* runRoomResultEffect(room, participantId, () =>
-        room.reorderItems(participantId, msg.itemIds, {
-          expectedVersion: msg.expectedVersion,
-          sourceColumnId: msg.sourceColumnId,
-          sourceGroupId: msg.sourceGroupId,
-        })
-      );
-    case "reorder-groups":
-      return yield* runRoomResultEffect(room, participantId, () =>
-        room.reorderGroups(participantId, msg.groupIds, msg.expectedVersion)
-      );
-    case "move-item-to-group":
-      return yield* runRoomResultEffect(room, participantId, () =>
-        room.moveItemToGroup(participantId, msg.itemId, msg.groupId, msg.index, {
-          expectedVersion: msg.expectedVersion,
-          sourceGroupId: msg.sourceGroupId,
-          sourceIndex: msg.sourceIndex,
-        })
-      );
-    case "set-timer":
-      return yield* runRoomResultEffect(room, participantId, () => room.setTimer(participantId, msg.durationSeconds));
-    case "set-review-target":
-      return yield* runRoomResultEffect(room, participantId, () => room.setReviewTarget(participantId, msg.reviewTargetKey));
-    case "cast-vote": {
-      const target = yield* Effect.either(parseVoteTargetMessageEffect(msg));
-      return yield* runRoomResultEffect(room, participantId, () => target._tag === "Right"
-        ? room.castVote(participantId, target.right, msg.count)
-        : Promise.resolve({ success: false, error: target.left.message })
-      );
+    switch (msg.type) {
+      case "join": {
+        const result = yield* deps.join(room, participantId, msg.displayName);
+        yield* reportFailedResultEffect(room, participantId, result, deps);
+        return;
+      }
+      case "add-item":
+        return yield* runRoomResultEffect(
+          room,
+          participantId,
+          () => room.addItem(participantId, msg.text, msg.columnId ?? null),
+          deps,
+        );
+      case "edit-item":
+        return yield* runRoomResultEffect(
+          room,
+          participantId,
+          () => room.editItem(participantId, msg.itemId, msg.text),
+          deps,
+        );
+      case "delete-item":
+        return yield* runRoomResultEffect(
+          room,
+          participantId,
+          () => room.deleteItem(participantId, msg.itemId),
+          deps,
+        );
+      case "set-vote-budget":
+        return yield* runRoomResultEffect(
+          room,
+          participantId,
+          () => room.setVoteBudget(participantId, msg.budget),
+          deps,
+        );
+      case "set-ranking-method":
+        return yield* runRoomResultEffect(
+          room,
+          participantId,
+          () => room.setRankingMethod(participantId, msg.rankingMethod),
+          deps,
+        );
+      case "set-phase":
+        return yield* runRoomResultEffect(
+          room,
+          participantId,
+          () => room.setPhase(participantId, msg.phase),
+          deps,
+        );
+      case "create-group":
+        return yield* runRoomResultEffect(
+          room,
+          participantId,
+          () => room.createGroup(participantId, msg.name, msg.columnId),
+          deps,
+        );
+      case "edit-group":
+        return yield* runRoomResultEffect(
+          room,
+          participantId,
+          () => room.editGroup(participantId, msg.groupId, msg.name),
+          deps,
+        );
+      case "delete-group":
+        return yield* runRoomResultEffect(
+          room,
+          participantId,
+          () => room.deleteGroup(participantId, msg.groupId),
+          deps,
+        );
+      case "create-column":
+        return yield* runRoomResultEffect(
+          room,
+          participantId,
+          () => room.createColumn(participantId, msg.name),
+          deps,
+        );
+      case "edit-column":
+        return yield* runRoomResultEffect(
+          room,
+          participantId,
+          () => room.editColumn(participantId, msg.columnId, msg.name),
+          deps,
+        );
+      case "reorder-columns":
+        return yield* runRoomResultEffect(
+          room,
+          participantId,
+          () => room.reorderColumns(participantId, msg.columnIds),
+          deps,
+        );
+      case "delete-column":
+        return yield* runRoomResultEffect(
+          room,
+          participantId,
+          () => room.deleteColumn(participantId, msg.columnId),
+          deps,
+        );
+      case "reorder-items":
+        return yield* runRoomResultEffect(
+          room,
+          participantId,
+          () =>
+            room.reorderItems(participantId, msg.itemIds, {
+              expectedVersion: msg.expectedVersion,
+              sourceColumnId: msg.sourceColumnId,
+              sourceGroupId: msg.sourceGroupId,
+            }),
+          deps,
+        );
+      case "reorder-groups":
+        return yield* runRoomResultEffect(
+          room,
+          participantId,
+          () =>
+            room.reorderGroups(
+              participantId,
+              msg.groupIds,
+              msg.expectedVersion,
+            ),
+          deps,
+        );
+      case "move-item-to-group":
+        return yield* runRoomResultEffect(
+          room,
+          participantId,
+          () =>
+            room.moveItemToGroup(
+              participantId,
+              msg.itemId,
+              msg.groupId,
+              msg.index,
+              {
+                expectedVersion: msg.expectedVersion,
+                sourceGroupId: msg.sourceGroupId,
+                sourceIndex: msg.sourceIndex,
+              },
+            ),
+          deps,
+        );
+      case "set-timer":
+        return yield* runRoomResultEffect(
+          room,
+          participantId,
+          () => room.setTimer(participantId, msg.durationSeconds),
+          deps,
+        );
+      case "set-review-target":
+        return yield* runRoomResultEffect(
+          room,
+          participantId,
+          () => room.setReviewTarget(participantId, msg.reviewTargetKey),
+          deps,
+        );
+      case "cast-vote": {
+        const target = yield* Effect.either(parseVoteTargetMessageEffect(msg));
+        if (target._tag === "Left") {
+          return yield* reportFailedResultEffect(
+            room,
+            participantId,
+            { success: false, error: target.left.message },
+            deps,
+          );
+        }
+        return yield* runRoomResultEffect(
+          room,
+          participantId,
+          () => room.castVote(participantId, target.right, msg.count),
+          deps,
+        );
+      }
+      case "remove-vote": {
+        const target = yield* Effect.either(parseVoteTargetMessageEffect(msg));
+        if (target._tag === "Left") {
+          return yield* reportFailedResultEffect(
+            room,
+            participantId,
+            { success: false, error: target.left.message },
+            deps,
+          );
+        }
+        return yield* runRoomResultEffect(
+          room,
+          participantId,
+          () => room.removeVote(participantId, target.right),
+          deps,
+        );
+      }
+      case "choose-pairwise":
+        return yield* runRoomResultEffect(
+          room,
+          participantId,
+          () => room.choosePairwise(participantId, msg.winner, msg.loser),
+          deps,
+        );
+      case "toggle-reaction":
+        return yield* runRoomResultEffect(
+          room,
+          participantId,
+          () => room.toggleReaction(participantId, msg.target, msg.emoji),
+          deps,
+        );
+      case "create-action":
+        return yield* runRoomResultEffect(
+          room,
+          participantId,
+          () => room.createAction(participantId, msg.text),
+          deps,
+        );
+      case "edit-action":
+        return yield* runRoomResultEffect(
+          room,
+          participantId,
+          () => room.editAction(participantId, msg.actionId, msg.text),
+          deps,
+        );
+      case "delete-action":
+        return yield* runRoomResultEffect(
+          room,
+          participantId,
+          () => room.deleteAction(participantId, msg.actionId),
+          deps,
+        );
+      default:
+        return;
     }
-    case "remove-vote": {
-      const target = yield* Effect.either(parseVoteTargetMessageEffect(msg));
-      return yield* runRoomResultEffect(room, participantId, () => target._tag === "Right"
-        ? room.removeVote(participantId, target.right)
-        : Promise.resolve({ success: false, error: target.left.message })
-      );
-    }
-    case "choose-pairwise":
-      return yield* runRoomResultEffect(room, participantId, () => room.choosePairwise(participantId, msg.winner, msg.loser));
-    case "toggle-reaction":
-      return yield* runRoomResultEffect(room, participantId, () => room.toggleReaction(participantId, msg.target, msg.emoji));
-    case "create-action":
-      return yield* runRoomResultEffect(room, participantId, () => room.createAction(participantId, msg.text));
-    case "edit-action":
-      return yield* runRoomResultEffect(room, participantId, () => room.editAction(participantId, msg.actionId, msg.text));
-    case "delete-action":
-      return yield* runRoomResultEffect(room, participantId, () => room.deleteAction(participantId, msg.actionId));
-    default:
-      return;
-  }
   });
 }
