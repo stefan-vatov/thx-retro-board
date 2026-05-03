@@ -1,16 +1,13 @@
-import { Effect, Schema } from "effect";
+import { Effect } from "effect";
 import { generateRoomId as defaultGenerateRoomId } from "../src/domain";
 import {
   hasProductionAntiAbuseConfig,
   isLocalRequest,
   rateLimitRoomCreateEffect,
 } from "./anti-abuse";
-import { readJsonBodyEffect } from "./http-effect";
-import { CreateRoomRequestSchema } from "./room-request-schemas";
+import { readCreateRoomBodyEffect } from "./create-room-body";
 import { verifyTurnstileTokenEffect } from "./turnstile";
 import type { Env } from "./index";
-
-const MAX_JSON_BODY_BYTES = 32 * 1024;
 
 export interface CreateRoomRequestDeps {
   generateRoomId: () => string;
@@ -37,12 +34,7 @@ export function handleCreateRoomRequestEffect(
     const createLimit = yield* rateLimitRoomCreateEffect(env, request);
     if (createLimit) return createLimit;
 
-    const rawBody = yield* readJsonBodyEffect<unknown>(request, { maxBytes: MAX_JSON_BODY_BYTES });
-    const body = rawBody === null
-      ? {}
-      : yield* Schema.decodeUnknown(CreateRoomRequestSchema)(rawBody).pipe(
-          Effect.catchAll(() => Effect.succeed({})),
-        );
+    const body = yield* readCreateRoomBodyEffect(request);
     const clientIp = request.headers.get("CF-Connecting-IP");
     const turnstile = yield* verifyTurnstileTokenEffect(
       { secret: env.TURNSTILE_SECRET_KEY },
