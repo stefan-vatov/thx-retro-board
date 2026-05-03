@@ -8,11 +8,12 @@ import {
   sanitizeItemText,
   validateExistingColumnIdEffect,
 } from "../../src/domain";
-import { MAX_ITEMS_PER_ROOM } from "../room-types";
+import { MAX_ACTIONS_PER_ROOM, MAX_ITEMS_PER_ROOM } from "../room-types";
 import type { StoredState } from "../room-types";
 import { normalizeReviewTargetKey, RoomMutationValidationError } from "./shared";
 
 type ReviewActionValidationState = Pick<StoredState, "participants" | "phase">;
+type ReviewActionCreateValidationState = Pick<StoredState, "participants" | "phase" | "actions">;
 type ReviewActionEditValidationState = Pick<StoredState, "participants" | "phase" | "actions">;
 type ReviewActionDeleteValidationState = Pick<StoredState, "participants" | "phase" | "actions">;
 type WriteItemCreateValidationState = Pick<StoredState, "participants" | "phase" | "items" | "columns">;
@@ -37,6 +38,20 @@ export function validateReviewActionEffect(
       return yield* Effect.fail(new RoomMutationValidationError("Action text cannot be empty"));
     }
     return { text: sanitizeActionText(rawText) };
+  });
+}
+
+export function validateReviewActionCreateEffect(
+  state: ReviewActionCreateValidationState,
+  participantId: string,
+  rawText: string,
+): Effect.Effect<{ text: string; order: number }, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    const validation = yield* validateReviewActionEffect(state, participantId, rawText);
+    if ((state.actions ?? []).length >= MAX_ACTIONS_PER_ROOM) {
+      return yield* Effect.fail(new RoomMutationValidationError(`Rooms can have at most ${MAX_ACTIONS_PER_ROOM} actions`));
+    }
+    return { text: validation.text, order: (state.actions ?? []).length };
   });
 }
 

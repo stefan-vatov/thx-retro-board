@@ -14,6 +14,7 @@ import {
   validateReviewActionEffect,
   validateReviewActionDeleteEffect,
   validateReviewActionEditEffect,
+  validateReviewActionCreateEffect,
   validateTimerChangeEffect,
   validateRoomPurgeEffect,
 } from "./validation";
@@ -191,6 +192,11 @@ describe("RetroRoom validation: participant interactions", () => {
   
     await expect(Effect.runPromise(validateReviewActionEffect(state, "p1", "Follow up"))).resolves.toEqual({
       text: "Follow up",
+    });
+
+    await expect(Effect.runPromise(validateReviewActionCreateEffect(state, "p1", "Follow up"))).resolves.toEqual({
+      text: "Follow up",
+      order: 1,
     });
 
     await expect(Effect.runPromise(validateReviewActionEditEffect(state, "p1", "action-1", "  New text  "))).resolves.toEqual({

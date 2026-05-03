@@ -1,12 +1,11 @@
 import { Effect } from "effect";
 import type { ActionItem } from "../src/domain";
 import { createActionItem } from "../src/domain";
-import { MAX_ACTIONS_PER_ROOM } from "./room-types";
 import type { RoomCommandHost } from "./room-command-host";
 import {
+  validateReviewActionCreateEffect,
   validateReviewActionDeleteEffect,
   validateReviewActionEditEffect,
-  validateReviewActionEffect,
 } from "./validation";
 
 export async function createActionForRoom(
@@ -24,7 +23,7 @@ export function createActionForRoomEffect(
 ): Effect.Effect<{ success: boolean; error?: string; action?: ActionItem }> {
   return Effect.gen(function* () {
     const s = yield* Effect.promise(() => host.loadState());
-    const validation = yield* Effect.either(validateReviewActionEffect(s, participantId, rawText));
+    const validation = yield* Effect.either(validateReviewActionCreateEffect(s, participantId, rawText));
     if (validation._tag === "Left") {
       const message = validation.left.message;
       return {
@@ -32,11 +31,7 @@ export function createActionForRoomEffect(
         error: message === "Cannot change actions outside review phase" ? "Cannot add actions outside review phase" : message,
       };
     }
-    if ((s.actions ?? []).length >= MAX_ACTIONS_PER_ROOM) {
-      return { success: false, error: `Rooms can have at most ${MAX_ACTIONS_PER_ROOM} actions` };
-    }
-
-    const action = createActionItem(crypto.randomUUID(), validation.right.text, participantId, (s.actions ?? []).length);
+    const action = createActionItem(crypto.randomUUID(), validation.right.text, participantId, validation.right.order);
     s.actions = [...(s.actions ?? []), action];
     yield* Effect.promise(() => host.saveState());
 
