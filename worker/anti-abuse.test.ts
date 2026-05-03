@@ -2,7 +2,11 @@ import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   getRateLimitKey,
+  getRateLimitKeyEffect,
   hasProductionAntiAbuseConfig,
+  hasProductionAntiAbuseConfigEffect,
+  isLocalRequest,
+  isLocalRequestEffect,
   rateLimitRoomCreateEffect,
   rateLimitRoomAccessEffect,
 } from "./anti-abuse";
@@ -18,6 +22,15 @@ describe("anti-abuse worker helpers", () => {
     expect(hasProductionAntiAbuseConfig({ TURNSTILE_SITE_KEY: "site" })).toBe(false);
   });
 
+  it("detects production anti-abuse configuration through an Effect boundary", async () => {
+    await expect(Effect.runPromise(hasProductionAntiAbuseConfigEffect({
+      TURNSTILE_SITE_KEY: "site",
+      TURNSTILE_SECRET_KEY: "secret",
+      ROOM_CREATE_RATE_LIMITER: { limit: async () => ({ success: true }) },
+      ROOM_ACCESS_RATE_LIMITER: { limit: async () => ({ success: true }) },
+    }))).resolves.toBe(true);
+  });
+
   it("bypasses rate-limit keys locally and derives stable production keys from client IP", () => {
     const local = new Request("http://127.0.0.1/api/rooms", { headers: { "CF-Connecting-IP": "203.0.113.1" } });
     const production = new Request("https://retro.thethracian.com/api/rooms", { headers: { "CF-Connecting-IP": "203.0.113.2" } });
@@ -26,6 +39,15 @@ describe("anti-abuse worker helpers", () => {
     expect(getRateLimitKey(local, new URL(local.url), "room-create")).toBeNull();
     expect(getRateLimitKey(production, new URL(production.url), "room-create")).toBe("room-create:203.0.113.2");
     expect(getRateLimitKey(missingIp, new URL(missingIp.url), "room-create")).toBe("room-create:unknown");
+  });
+
+  it("derives local checks and rate-limit keys through Effect boundaries", async () => {
+    const localUrl = new URL("http://127.0.0.1/api/rooms");
+    const production = new Request("https://retro.thethracian.com/api/rooms", { headers: { "CF-Connecting-IP": "203.0.113.2" } });
+
+    await expect(Effect.runPromise(isLocalRequestEffect(localUrl))).resolves.toBe(isLocalRequest(localUrl));
+    await expect(Effect.runPromise(getRateLimitKeyEffect(production, new URL(production.url), "room-create")))
+      .resolves.toBe(getRateLimitKey(production, new URL(production.url), "room-create"));
   });
 
   it("returns a controlled 429 response when room access is rate limited", async () => {

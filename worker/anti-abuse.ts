@@ -15,14 +15,26 @@ export function isLocalRequest(url: URL): boolean {
   return url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1";
 }
 
+export function isLocalRequestEffect(url: URL): Effect.Effect<boolean> {
+  return Effect.sync(() => isLocalRequest(url));
+}
+
 export function hasProductionAntiAbuseConfig(env: AntiAbuseEnv): boolean {
   return Boolean(env.TURNSTILE_SITE_KEY && env.TURNSTILE_SECRET_KEY && env.ROOM_CREATE_RATE_LIMITER && env.ROOM_ACCESS_RATE_LIMITER);
+}
+
+export function hasProductionAntiAbuseConfigEffect(env: AntiAbuseEnv): Effect.Effect<boolean> {
+  return Effect.sync(() => hasProductionAntiAbuseConfig(env));
 }
 
 export function getRateLimitKey(request: Request, url: URL, prefix: string): string | null {
   if (isLocalRequest(url)) return null;
   const clientIp = request.headers.get("CF-Connecting-IP");
   return `${prefix}:${clientIp && clientIp.trim().length > 0 ? clientIp : "unknown"}`;
+}
+
+export function getRateLimitKeyEffect(request: Request, url: URL, prefix: string): Effect.Effect<string | null> {
+  return Effect.sync(() => getRateLimitKey(request, url, prefix));
 }
 
 export function rateLimitRoomAccessEffect(
