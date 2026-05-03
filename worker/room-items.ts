@@ -25,6 +25,16 @@ export const addItemForRoomDeps: AddItemForRoomDeps = {
   saveAndBroadcastState: saveAndBroadcastStateEffect,
 };
 
+export interface EditItemForRoomDeps {
+  loadState: (host: RoomCommandHost) => Effect.Effect<StoredState>;
+  saveAndBroadcastState: (host: RoomCommandHost, state: StoredState) => Effect.Effect<void>;
+}
+
+export const editItemForRoomDeps: EditItemForRoomDeps = {
+  loadState: (host) => Effect.promise(() => host.loadState()),
+  saveAndBroadcastState: saveAndBroadcastStateEffect,
+};
+
 export async function addItemForRoom(
   host: RoomCommandHost,
   participantId: string,
@@ -82,9 +92,10 @@ export function editItemForRoomEffect(
   participantId: string,
   itemId: string,
   rawText: string,
+  deps: EditItemForRoomDeps = editItemForRoomDeps,
 ): Effect.Effect<{ success: boolean; error?: string; item?: RetroItem }> {
   return Effect.gen(function* () {
-    const s = yield* Effect.promise(() => host.loadState());
+    const s = yield* deps.loadState(host);
     const validation = yield* Effect.either(validateWriteItemEditEffect(s, participantId, itemId, rawText));
     if (validation._tag === "Left") {
       return {
@@ -95,7 +106,7 @@ export function editItemForRoomEffect(
 
     const item = validation.right.item;
     s.items = s.items.map((candidate) => candidate.id === itemId ? item : candidate);
-    yield* saveAndBroadcastStateEffect(host, s);
+    yield* deps.saveAndBroadcastState(host, s);
     return { success: true, item };
   });
 }

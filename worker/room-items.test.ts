@@ -131,6 +131,35 @@ describe("room item commands", () => {
     expect(state.items[0]?.text).toBe("After");
   });
 
+  it("edits owned items through injected Effect dependencies", async () => {
+    const state = createInitialStoredState("room-a");
+    state.phase = "write";
+    state.participants = [{ id: "p1", displayName: "P1", isFacilitator: false }];
+    state.items = [{
+      id: "item-1",
+      text: "Before",
+      authorId: "p1",
+      columnId: "mad",
+      groupId: null,
+      order: 0,
+    }];
+    const calls: string[] = [];
+
+    const result = await Effect.runPromise(editItemForRoomEffect({} as never, "p1", "item-1", "  After  ", {
+      loadState: () => Effect.sync(() => {
+        calls.push("load");
+        return state;
+      }),
+      saveAndBroadcastState: (_host, savedState) => Effect.sync(() => {
+        calls.push(`save:${savedState.items[0]?.text}`);
+      }),
+    }));
+
+    expect(result).toEqual({ success: true, item: state.items[0] });
+    expect(state.items[0]?.text).toBe("After");
+    expect(calls).toEqual(["load", "save:After"]);
+  });
+
   it("deletes owned items and cleans dependent signals through the Effect API", async () => {
     const state = createInitialStoredState("room-a");
     state.phase = "write";
