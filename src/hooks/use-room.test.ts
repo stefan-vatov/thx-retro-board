@@ -5,6 +5,7 @@ import {
   openRealtimeWebSocketEffect,
   prepareRealtimeSendEffect,
   runRealtimeMessageDecode,
+  sendRealtimeMessageEffect,
 } from "./use-room";
 
 describe("realtime message decoding", () => {
@@ -89,6 +90,97 @@ describe("realtime outbound message encoding", () => {
     );
 
     expect(Exit.isFailure(exit)).toBe(true);
+  });
+});
+
+describe("realtime outbound sending", () => {
+  it("does not send while offline", async () => {
+    const sends: string[] = [];
+
+    await expect(
+      Effect.runPromise(
+        sendRealtimeMessageEffect({
+          message: { type: "set-phase", phase: "vote" },
+          online: false,
+          socket: {
+            readyState: WebSocket.OPEN,
+            send: (payload) => sends.push(payload),
+          },
+          openReadyState: WebSocket.OPEN,
+        }),
+      ),
+    ).resolves.toEqual({
+      sent: false,
+      error: "Reconnecting. Please try again once the room is connected.",
+    });
+    expect(sends).toEqual([]);
+  });
+
+  it("validates commands before sending", async () => {
+    const sends: string[] = [];
+
+    await expect(
+      Effect.runPromise(
+        sendRealtimeMessageEffect({
+          message: { type: "set-phase", phase: "done" },
+          online: true,
+          socket: {
+            readyState: WebSocket.OPEN,
+            send: (payload) => sends.push(payload),
+          },
+          openReadyState: WebSocket.OPEN,
+        }),
+      ),
+    ).resolves.toEqual({
+      sent: false,
+      error: "Invalid realtime command.",
+    });
+    expect(sends).toEqual([]);
+  });
+
+  it("sends valid commands through an open socket", async () => {
+    const sends: string[] = [];
+
+    await expect(
+      Effect.runPromise(
+        sendRealtimeMessageEffect({
+          message: { type: "set-phase", phase: "vote" },
+          online: true,
+          socket: {
+            readyState: WebSocket.OPEN,
+            send: (payload) => sends.push(payload),
+          },
+          openReadyState: WebSocket.OPEN,
+        }),
+      ),
+    ).resolves.toEqual({
+      sent: true,
+      error: null,
+    });
+    expect(sends).toEqual([
+      JSON.stringify({ type: "set-phase", phase: "vote" }),
+    ]);
+  });
+
+  it("reports reconnecting when the socket is not open", async () => {
+    await expect(
+      Effect.runPromise(
+        sendRealtimeMessageEffect({
+          message: { type: "set-phase", phase: "vote" },
+          online: true,
+          socket: {
+            readyState: WebSocket.CLOSED,
+            send: () => {
+              throw new Error("should not send");
+            },
+          },
+          openReadyState: WebSocket.OPEN,
+        }),
+      ),
+    ).resolves.toEqual({
+      sent: false,
+      error: "Reconnecting. Please try again once the room is connected.",
+    });
   });
 });
 

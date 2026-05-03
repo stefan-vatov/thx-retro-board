@@ -53,6 +53,52 @@ export function prepareRealtimeSendEffect(
   );
 }
 
+export type RealtimeSendSocket = {
+  readyState: number;
+  send: (payload: string) => void;
+};
+
+export type RealtimeSendInput = {
+  message: unknown;
+  online: boolean;
+  socket: RealtimeSendSocket | null;
+  openReadyState: number;
+};
+
+export type RealtimeSendResult = {
+  sent: boolean;
+  error: string | null;
+};
+
+export const REALTIME_RECONNECTING_MESSAGE =
+  "Reconnecting. Please try again once the room is connected.";
+
+export function sendRealtimeMessageEffect({
+  message,
+  online,
+  socket,
+  openReadyState,
+}: RealtimeSendInput): Effect.Effect<RealtimeSendResult> {
+  return Effect.gen(function* () {
+    if (!online) {
+      return { sent: false, error: REALTIME_RECONNECTING_MESSAGE };
+    }
+    if (!socket || socket.readyState !== openReadyState) {
+      return { sent: false, error: REALTIME_RECONNECTING_MESSAGE };
+    }
+
+    const encoded = yield* prepareRealtimeSendEffect(message).pipe(
+      Effect.catchAll(() => Effect.succeed(null)),
+    );
+    if (encoded === null) {
+      return { sent: false, error: "Invalid realtime command." };
+    }
+
+    socket.send(encoded);
+    return { sent: true, error: null };
+  });
+}
+
 export async function runRealtimeMessageDecode(
   raw: string,
 ): Promise<ServerToClientMessage | null> {
@@ -304,25 +350,19 @@ export function useRoom(
   }, [roomId, participantId, connectionToken]);
 
   const send = useCallback((message: unknown) => {
-    if (!navigator.onLine) {
+    const result = Effect.runSync(
+      sendRealtimeMessageEffect({
+        message,
+        online: navigator.onLine,
+        socket: wsRef.current,
+        openReadyState: WebSocket.OPEN,
+      }),
+    );
+    if (!result.sent && result.error === REALTIME_RECONNECTING_MESSAGE) {
       setConnected(false);
-      setLastError(
-        "Reconnecting. Please try again once the room is connected.",
-      );
-      return false;
     }
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      const encoded = Effect.runSyncExit(prepareRealtimeSendEffect(message));
-      if (Exit.isFailure(encoded)) {
-        setLastError("Invalid realtime command.");
-        return false;
-      }
-      setLastError(null);
-      wsRef.current.send(encoded.value);
-      return true;
-    }
-    setLastError("Reconnecting. Please try again once the room is connected.");
-    return false;
+    setLastError(result.error);
+    return result.sent;
   }, []);
 
   const clearError = useCallback(() => setLastError(null), []);
