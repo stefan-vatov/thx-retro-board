@@ -70,6 +70,28 @@ describe("room lifecycle effects", () => {
     ]);
   });
 
+  it("schedules empty-room purge through injected Effect dependencies", async () => {
+    const state = createState(1_000);
+    const calls: Array<[string, unknown?]> = [];
+
+    await Effect.runPromise(scheduleEmptyRoomPurgeEffect({} as never, 20_000, {
+      loadState: () => Effect.sync(() => state),
+      getSessionCount: () => Effect.succeed(0),
+      setAlarm: (_host, timestamp) => Effect.sync(() => {
+        calls.push(["setAlarm", timestamp]);
+      }),
+      saveState: () => Effect.sync(() => {
+        calls.push(["save"]);
+      }),
+    }));
+
+    expect(state.purgeScheduledAt).toBe(20_000 + EMPTY_ROOM_PURGE_DELAY_MS);
+    expect(calls).toEqual([
+      ["setAlarm", 20_000 + EMPTY_ROOM_PURGE_DELAY_MS],
+      ["save"],
+    ]);
+  });
+
   it("keeps active rooms alive until absolute expiry", async () => {
     const state = createState(1_000);
     const { host, calls } = createHost(state, 2);

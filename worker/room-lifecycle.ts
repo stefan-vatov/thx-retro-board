@@ -19,6 +19,20 @@ export interface RoomLifecycleHost {
   purgeRoom: (reason: string) => Promise<void>;
 }
 
+export interface ScheduleEmptyRoomPurgeDeps {
+  loadState: (host: RoomLifecycleHost) => Effect.Effect<StoredState>;
+  getSessionCount: (host: RoomLifecycleHost) => Effect.Effect<number>;
+  setAlarm: (host: RoomLifecycleHost, timestamp: number) => Effect.Effect<void>;
+  saveState: (host: RoomLifecycleHost) => Effect.Effect<void>;
+}
+
+export const scheduleEmptyRoomPurgeDeps: ScheduleEmptyRoomPurgeDeps = {
+  loadState: (host) => Effect.promise(() => host.loadState()),
+  getSessionCount: (host) => Effect.sync(() => host.getSessionCount()),
+  setAlarm: (host, timestamp) => Effect.promise(() => host.setAlarm(timestamp)),
+  saveState: (host) => Effect.promise(() => host.saveState()),
+};
+
 export function getAbsoluteRoomExpiresAt(
   state: Pick<StoredState, "startedAt">,
   now = Date.now(),
@@ -36,20 +50,21 @@ export function getAbsoluteRoomExpiresAtEffect(
 export function scheduleEmptyRoomPurgeEffect(
   host: RoomLifecycleHost,
   now = Date.now(),
+  deps: ScheduleEmptyRoomPurgeDeps = scheduleEmptyRoomPurgeDeps,
 ): Effect.Effect<void> {
   return Effect.gen(function* () {
-    const state = yield* Effect.promise(() => host.loadState());
-    if (host.getSessionCount() > 0) {
+    const state = yield* deps.loadState(host);
+    if ((yield* deps.getSessionCount(host)) > 0) {
       const expiresAt = yield* getAbsoluteRoomExpiresAtEffect(state, now);
-      yield* Effect.promise(() => host.setAlarm(expiresAt));
+      yield* deps.setAlarm(host, expiresAt);
       return;
     }
 
     const purgeScheduledAt = now + EMPTY_ROOM_PURGE_DELAY_MS;
     state.purgeScheduledAt = purgeScheduledAt;
     const expiresAt = yield* getAbsoluteRoomExpiresAtEffect(state, now);
-    yield* Effect.promise(() => host.setAlarm(Math.min(purgeScheduledAt, expiresAt)));
-    yield* Effect.promise(() => host.saveState());
+    yield* deps.setAlarm(host, Math.min(purgeScheduledAt, expiresAt));
+    yield* deps.saveState(host);
   });
 }
 
