@@ -35,6 +35,16 @@ export const editItemForRoomDeps: EditItemForRoomDeps = {
   saveAndBroadcastState: saveAndBroadcastStateEffect,
 };
 
+export interface DeleteItemForRoomDeps {
+  loadState: (host: RoomCommandHost) => Effect.Effect<StoredState>;
+  saveAndBroadcastState: (host: RoomCommandHost, state: StoredState) => Effect.Effect<void>;
+}
+
+export const deleteItemForRoomDeps: DeleteItemForRoomDeps = {
+  loadState: (host) => Effect.promise(() => host.loadState()),
+  saveAndBroadcastState: saveAndBroadcastStateEffect,
+};
+
 export async function addItemForRoom(
   host: RoomCommandHost,
   participantId: string,
@@ -123,9 +133,10 @@ export function deleteItemForRoomEffect(
   host: RoomCommandHost,
   participantId: string,
   itemId: string,
+  deps: DeleteItemForRoomDeps = deleteItemForRoomDeps,
 ): Effect.Effect<{ success: boolean; error?: string }> {
   return Effect.gen(function* () {
-    const s = yield* Effect.promise(() => host.loadState());
+    const s = yield* deps.loadState(host);
     const validation = yield* Effect.either(validateWriteItemDeleteEffect(s, participantId, itemId));
     if (validation._tag === "Left") {
       return {
@@ -158,7 +169,7 @@ export function deleteItemForRoomEffect(
     );
     s.reactions = (s.reactions ?? []).filter((reaction) => !sameVoteTarget(reaction.target, target));
 
-    yield* saveAndBroadcastStateEffect(host, s);
+    yield* deps.saveAndBroadcastState(host, s);
     return { success: true };
   });
 }

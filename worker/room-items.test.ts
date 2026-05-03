@@ -189,4 +189,29 @@ describe("room item commands", () => {
     expect(state.pairwiseChoices).toEqual([]);
     expect(state.reactions).toEqual([]);
   });
+
+  it("deletes owned items through injected Effect dependencies", async () => {
+    const state = createInitialStoredState("room-a");
+    state.phase = "write";
+    state.participants = [{ id: "p1", displayName: "P1", isFacilitator: false }];
+    state.items = [
+      { id: "item-1", text: "Delete", authorId: "p1", columnId: "mad", groupId: null, order: 0 },
+      { id: "item-2", text: "Keep", authorId: "p1", columnId: "mad", groupId: null, order: 1 },
+    ];
+    const calls: string[] = [];
+
+    const result = await Effect.runPromise(deleteItemForRoomEffect({} as never, "p1", "item-1", {
+      loadState: () => Effect.sync(() => {
+        calls.push("load");
+        return state;
+      }),
+      saveAndBroadcastState: (_host, savedState) => Effect.sync(() => {
+        calls.push(`save:${savedState.items.map((item) => item.id).join(",")}`);
+      }),
+    }));
+
+    expect(result).toEqual({ success: true });
+    expect(state.items).toEqual([{ id: "item-2", text: "Keep", authorId: "p1", columnId: "mad", groupId: null, order: 0 }]);
+    expect(calls).toEqual(["load", "save:item-2"]);
+  });
 });
