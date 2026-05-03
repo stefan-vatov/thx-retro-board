@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import type { Phase } from "../src/domain";
+import { saveAndBroadcastStateEffect } from "./room-command-effect";
 import { getDecisionTargetCount } from "./room-presenter";
 import type { RoomCommandHost } from "./room-command-host";
 import {
@@ -33,10 +34,9 @@ export function setPhaseForRoomEffect(
       s.votingParticipantIds = s.participants.map((participant) => participant.id);
     }
     s.timer = { startedAt: null, durationSeconds: null, expired: false };
-    yield* Effect.promise(() => host.saveState());
 
     host.broadcast({ type: "phase-changed", phase: validation.right.phase });
-    host.broadcastState(s);
+    yield* saveAndBroadcastStateEffect(host, s);
 
     return { success: true };
   });
@@ -69,10 +69,9 @@ export function setTimerForRoomEffect(
       durationSeconds: validation.right.durationSeconds,
       expired: false,
     };
-    yield* Effect.promise(() => host.saveState());
 
     host.broadcast({ type: "timer-updated", timer: s.timer });
-    host.broadcastState(s);
+    yield* saveAndBroadcastStateEffect(host, s);
 
     return { success: true };
   });
@@ -99,9 +98,8 @@ export function setReviewTargetForRoomEffect(
     }
 
     s.reviewTargetKey = validation.right.reviewTargetKey;
-    yield* Effect.promise(() => host.saveState());
     host.broadcast({ type: "review-target-changed", reviewTargetKey: validation.right.reviewTargetKey });
-    host.broadcastState(s);
+    yield* saveAndBroadcastStateEffect(host, s);
     return { success: true };
   });
 }
