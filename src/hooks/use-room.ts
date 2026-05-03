@@ -4,8 +4,10 @@ import {
   createWebSocketTicketEffect,
   runApiEffect,
 } from "../api";
-import { ClientToServerMessageSchema, pairwiseComparisonKey, ServerToClientMessageSchema } from "../domain";
+import { ClientToServerMessageSchema, ServerToClientMessageSchema } from "../domain";
 import type { RoomState, ServerToClientMessage } from "../domain";
+import { applyRealtimeMessageEffect } from "./room-realtime-state";
+import type { RealtimeMessageResult } from "./room-realtime-state";
 
 export const INITIAL_RECONNECT_DELAY_MS = 750;
 export const MAX_RECONNECT_DELAY_MS = 30_000;
@@ -155,65 +157,24 @@ export function useRoom(roomId: string, participantId: string, connectionToken?:
 
       async function handleRealtimeMessage(raw: string) {
         const msg = await runRealtimeMessageDecode(raw);
-          if (!msg || wsRef.current !== ws || disposed) return;
-          if (msg.type === "snapshot") {
-            setState(msg.state as RoomState);
-          } else if (msg.type === "participant-joined") {
-            setState((prev) => {
-              if (!prev) return prev;
-              const exists = prev.participants.some((p) => p.id === msg.participant.id);
-              if (exists) return prev;
-              return { ...prev, participants: [...prev.participants, msg.participant] };
-            });
-          } else if (msg.type === "participant-left") {
-            setState((prev) => prev ? {
-              ...prev,
-              participants: prev.participants.filter((p) => p.id !== msg.participantId),
-            } : prev);
-          } else if (msg.type === "phase-changed") {
-            setState((prev) => prev ? { ...prev, phase: msg.phase } : prev);
-          } else if (msg.type === "item-added") {
-            setState((prev) => {
-              if (!prev) return prev;
-              const exists = prev.items.some((i) => i.id === msg.item.id);
-              if (exists) return prev;
-              return { ...prev, items: [...prev.items, msg.item] };
-            });
-          } else if (msg.type === "items-reordered") {
-            setState((prev) => prev ? { ...prev, items: msg.items } : prev);
-          } else if (msg.type === "groups-changed") {
-            setState((prev) => prev ? { ...prev, groups: msg.groups } : prev);
-          } else if (msg.type === "actions-changed") {
-            setState((prev) => prev ? { ...prev, actions: msg.actions } : prev);
-          } else if (msg.type === "vote-changed") {
-            // Vote updates come via snapshot broadcast; this handler is a no-op
-            // since the snapshot will carry the full authoritative votes array.
-          } else if (msg.type === "pairwise-choice-changed") {
-            setState((prev) => {
-              if (!prev) return prev;
-              const choiceKey = `${msg.choice.participantId}:${pairwiseComparisonKey(msg.choice.winner, msg.choice.loser)}`;
-              const pairwiseChoices = [
-                ...(prev.pairwiseChoices ?? []).filter((choice) =>
-                  `${choice.participantId}:${pairwiseComparisonKey(choice.winner, choice.loser)}` !== choiceKey,
-                ),
-                msg.choice,
-              ];
-              return { ...prev, pairwiseChoices };
-            });
-          } else if (msg.type === "review-target-changed") {
-            setState((prev) => prev ? { ...prev, reviewTargetKey: msg.reviewTargetKey } : prev);
-          } else if (msg.type === "timer-updated") {
-            setState((prev) => prev ? { ...prev, timer: msg.timer } : prev);
-          } else if (msg.type === "room-purged") {
-            roomPurged = true;
-            setState(null);
-            setConnected(false);
-            setLastError(msg.reason);
-            setRoomPurgedState(true);
-            ws.close(1000, "Room data deleted");
-          } else if (msg.type === "error") {
-            setLastError(msg.message);
-          }
+        if (!msg || wsRef.current !== ws || disposed) return;
+        let result: RealtimeMessageResult | undefined;
+        setState((previous) => {
+          const exit = Effect.runSyncExit(applyRealtimeMessageEffect(previous, msg));
+          if (Exit.isFailure(exit)) return previous;
+          result = exit.value;
+          return result.state;
+        });
+        if (!result) return;
+        if (result.lastError !== undefined) setLastError(result.lastError);
+        if (result.roomPurged) {
+          roomPurged = true;
+          setConnected(false);
+          setRoomPurgedState(true);
+        }
+        if (result.shouldCloseSocket) {
+          ws.close(1000, "Room data deleted");
+        }
       }
 
       ws.addEventListener("close", () => {
