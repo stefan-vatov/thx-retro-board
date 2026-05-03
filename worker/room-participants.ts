@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 import type { Participant, RoomState, ServerToClientMessage } from "../src/domain";
 import { toRoomStateEffect } from "./room-presenter";
-import { generateToken } from "./room-tickets";
+import { generateTokenEffect } from "./room-tickets";
 import { validateParticipantJoinEffect } from "./validation";
 import type { RoomCommandHost } from "./room-command-host";
 
@@ -12,6 +12,14 @@ export interface RoomParticipantHost extends RoomCommandHost {
   scheduleEmptyRoomPurge(): Promise<void>;
   getSessionCount(): number;
 }
+
+export interface RoomParticipantDeps {
+  generateConnectionToken: () => Effect.Effect<string>;
+}
+
+export const roomParticipantDeps: RoomParticipantDeps = {
+  generateConnectionToken: generateTokenEffect,
+};
 
 export async function joinRoomParticipant(
   host: RoomParticipantHost,
@@ -29,6 +37,7 @@ export function joinRoomParticipantEffect(
   displayName: string,
   connectionToken?: string,
   facilitatorClaimToken?: unknown,
+  deps: RoomParticipantDeps = roomParticipantDeps,
 ): Effect.Effect<{ success: boolean; error?: string; state?: RoomState; connectionToken?: string }> {
   return Effect.gen(function* () {
     const s = yield* Effect.promise(() => host.loadState());
@@ -55,7 +64,7 @@ export function joinRoomParticipantEffect(
       yield* Effect.promise(() => host.cancelEmptyRoomPurge());
       host.closeParticipantSocket(participantId, "Participant reconnected");
       yield* Effect.promise(() => host.deleteOutstandingWebSocketTicket(participantId));
-      const token = generateToken();
+      const token = yield* deps.generateConnectionToken();
       s.connectionTokens[participantId] = token;
       yield* Effect.promise(() => host.saveState());
 
@@ -83,7 +92,7 @@ export function joinRoomParticipantEffect(
       s.facilitatorId = participantId;
       s.facilitatorClaimToken = null;
     }
-    const token = generateToken();
+    const token = yield* deps.generateConnectionToken();
     s.connectionTokens[participantId] = token;
     yield* Effect.promise(() => host.saveState());
 

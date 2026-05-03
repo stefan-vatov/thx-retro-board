@@ -59,4 +59,25 @@ describe("room participant commands", () => {
     expect(closedSocket).toBe(true);
     expect(deletedTicket).toBe(true);
   });
+
+  it("uses Effect token generation when joining participants", async () => {
+    const state = createInitialStoredState("room-a");
+
+    const result = await Effect.runPromise(joinRoomParticipantEffect({
+      loadState: async () => state,
+      saveState: async () => {},
+      broadcast: () => {},
+      broadcastState: () => {},
+      cancelEmptyRoomPurge: async () => {},
+      closeParticipantSocket: () => {},
+      deleteOutstandingWebSocketTicket: async () => {},
+      scheduleEmptyRoomPurge: async () => {},
+      getSessionCount: () => 1,
+    }, "p1", "Pat", undefined, undefined, {
+      generateConnectionToken: () => Effect.succeed("deterministic-token"),
+    }));
+
+    expect(result).toMatchObject({ success: true, connectionToken: "deterministic-token" });
+    expect(state.connectionTokens.p1).toBe("deterministic-token");
+  });
 });
