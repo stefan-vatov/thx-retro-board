@@ -139,4 +139,41 @@ describe("room websocket ticket commands", () => {
     expect(storage.has("ws-ticket:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")).toBe(false);
     expect(storage.has("ws-ticket-by-participant:p1")).toBe(false);
   });
+
+  it("consumes websocket tickets through injected Effect dependencies", async () => {
+    const calls: string[] = [];
+    const ticket = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    const result = await Effect.runPromise(consumeWebSocketTicketForRoomEffect(
+      {} as never,
+      ticket,
+      1000,
+      {
+        getTicket: (_host, key) => Effect.sync(() => {
+          calls.push(`get-ticket:${key}`);
+          return { participantId: "p1", expiresAt: 31_000 };
+        }),
+        delete: (_host, key) => Effect.sync(() => {
+          calls.push(`delete:${key}`);
+        }),
+        getParticipantTicket: (_host, key) => Effect.sync(() => {
+          calls.push(`get-participant-ticket:${key}`);
+          return ticket;
+        }),
+        hasParticipant: (_host, participantId) => Effect.sync(() => {
+          calls.push(`has-participant:${participantId}`);
+          return true;
+        }),
+      },
+    ));
+
+    expect(result).toEqual({ success: true, participantId: "p1" });
+    expect(calls).toEqual([
+      "get-ticket:ws-ticket:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "delete:ws-ticket:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "get-participant-ticket:ws-ticket-by-participant:p1",
+      "delete:ws-ticket-by-participant:p1",
+      "has-participant:p1",
+    ]);
+  });
 });

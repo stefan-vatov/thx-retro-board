@@ -34,6 +34,32 @@ export const createWebSocketTicketDeps: CreateWebSocketTicketDeps = {
   put: (host, key, value) => Effect.promise(() => host.put(key, value)),
 };
 
+export interface ConsumeWebSocketTicketDeps {
+  getTicket: (
+    host: WebSocketTicketHost & { hasParticipant(participantId: string): Promise<boolean> },
+    key: string,
+  ) => Effect.Effect<WebSocketTicket | undefined>;
+  getParticipantTicket: (
+    host: WebSocketTicketHost & { hasParticipant(participantId: string): Promise<boolean> },
+    key: string,
+  ) => Effect.Effect<string | undefined>;
+  delete: (
+    host: WebSocketTicketHost & { hasParticipant(participantId: string): Promise<boolean> },
+    key: string,
+  ) => Effect.Effect<unknown>;
+  hasParticipant: (
+    host: WebSocketTicketHost & { hasParticipant(participantId: string): Promise<boolean> },
+    participantId: string,
+  ) => Effect.Effect<boolean>;
+}
+
+export const consumeWebSocketTicketDeps: ConsumeWebSocketTicketDeps = {
+  getTicket: (host, key) => Effect.promise(() => host.get<WebSocketTicket>(key)),
+  getParticipantTicket: (host, key) => Effect.promise(() => host.get<string>(key)),
+  delete: (host, key) => Effect.promise(() => host.delete(key)),
+  hasParticipant: (host, participantId) => Effect.promise(() => host.hasParticipant(participantId)),
+};
+
 export function validateWebSocketTicketStringEffect(
   ticket: string | null,
 ): Effect.Effect<string, WebSocketTicketValidationError> {
@@ -113,6 +139,7 @@ export function consumeWebSocketTicketForRoomEffect(
   host: WebSocketTicketHost & { hasParticipant(participantId: string): Promise<boolean> },
   ticket: string | null,
   now = Date.now(),
+  deps: ConsumeWebSocketTicketDeps = consumeWebSocketTicketDeps,
 ): Effect.Effect<{ success: true; participantId: string } | { success: false; error: string }> {
   return Effect.gen(function* () {
     const validatedTicket = yield* Effect.either(validateWebSocketTicketStringEffect(ticket));
@@ -121,8 +148,8 @@ export function consumeWebSocketTicketForRoomEffect(
     }
 
     const key = `ws-ticket:${validatedTicket.right}`;
-    const record = yield* Effect.promise(() => host.get<WebSocketTicket>(key));
-    yield* Effect.promise(() => host.delete(key));
+    const record = yield* deps.getTicket(host, key);
+    yield* deps.delete(host, key);
     if (
       !record
       || typeof record.participantId !== "string"
@@ -131,15 +158,15 @@ export function consumeWebSocketTicketForRoomEffect(
       return { success: false, error: "Missing or invalid websocket ticket" };
     }
     const participantTicketKey = `ws-ticket-by-participant:${record.participantId}`;
-    const currentParticipantTicket = yield* Effect.promise(() => host.get<string>(participantTicketKey));
+    const currentParticipantTicket = yield* deps.getParticipantTicket(host, participantTicketKey);
     if (currentParticipantTicket === validatedTicket.right) {
-      yield* Effect.promise(() => host.delete(participantTicketKey));
+      yield* deps.delete(host, participantTicketKey);
     }
     if (record.expiresAt < now) {
       return { success: false, error: "Websocket ticket expired" };
     }
 
-    const hasParticipant = yield* Effect.promise(() => host.hasParticipant(record.participantId));
+    const hasParticipant = yield* deps.hasParticipant(host, record.participantId);
     if (!hasParticipant) {
       return { success: false, error: "Participant not found" };
     }
