@@ -153,6 +153,21 @@ describe("room lifecycle effects", () => {
     expect(calls).toEqual([["purgeRoom", "Room data was deleted after reaching the maximum room lifetime."]]);
   });
 
+  it("purges expired rooms through injected Effect dependencies", async () => {
+    const state = createState(1_000);
+    const calls: Array<[string, unknown?]> = [];
+
+    const purged = await Effect.runPromise(purgeIfExpiredEffect({} as never, null, 1_000 + MAX_ROOM_LIFETIME_MS, {
+      getStoredState: () => Effect.succeed(state),
+      purgeRoom: (_host, reason) => Effect.sync(() => {
+        calls.push(["purgeRoom", reason]);
+      }),
+    }));
+
+    expect(purged).toBe(true);
+    expect(calls).toEqual([["purgeRoom", "Room data was deleted after reaching the maximum room lifetime."]]);
+  });
+
   it("runs the empty-room alarm only once the scheduled purge time is due", async () => {
     const state = createState(1_000);
     state.purgeScheduledAt = 30_000;

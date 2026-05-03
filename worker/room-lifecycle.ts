@@ -47,6 +47,16 @@ export const cancelEmptyRoomPurgeDeps: CancelEmptyRoomPurgeDeps = {
   setAlarm: (host, timestamp) => Effect.promise(() => host.setAlarm(timestamp)),
 };
 
+export interface PurgeIfExpiredDeps {
+  getStoredState: (host: RoomLifecycleHost) => Effect.Effect<StoredState | undefined | null>;
+  purgeRoom: (host: RoomLifecycleHost, reason: string) => Effect.Effect<void>;
+}
+
+export const purgeIfExpiredDeps: PurgeIfExpiredDeps = {
+  getStoredState: (host) => Effect.promise(() => host.getStoredState()),
+  purgeRoom: (host, reason) => Effect.promise(() => host.purgeRoom(reason)),
+};
+
 export function getAbsoluteRoomExpiresAt(
   state: Pick<StoredState, "startedAt">,
   now = Date.now(),
@@ -104,13 +114,14 @@ export function purgeIfExpiredEffect(
   host: RoomLifecycleHost,
   stored?: StoredState | null,
   now = Date.now(),
+  deps: PurgeIfExpiredDeps = purgeIfExpiredDeps,
 ): Effect.Effect<boolean> {
   return Effect.gen(function* () {
-    const state = stored ?? (yield* Effect.promise(() => host.getStoredState()));
+    const state = stored ?? (yield* deps.getStoredState(host));
     if (!state) return false;
     const expiresAt = yield* getAbsoluteRoomExpiresAtEffect(state, now);
     if (now < expiresAt) return false;
-    yield* Effect.promise(() => host.purgeRoom(ABSOLUTE_EXPIRY_REASON));
+    yield* deps.purgeRoom(host, ABSOLUTE_EXPIRY_REASON);
     return true;
   });
 }
