@@ -8,6 +8,10 @@ import {
 } from "../api";
 import type { RetroItem, RoomState } from "../domain";
 import { isValidItemText, sanitizeItemText } from "../domain";
+import {
+  restoreFocusEffect,
+  scheduleFocusRestoreEffect,
+} from "./focus-restore";
 import { getSortedColumns } from "./room-columns";
 import { runWriteCardMutationEffect } from "./write-cards-effect";
 
@@ -42,20 +46,22 @@ export function useWriteCards({
 
   function restoreColumnInputFocus(columnId: string) {
     const focusInput = () => {
-      const target = columnInputRefs.current[columnId];
-      const active = document.activeElement;
-      const activeTag = active?.tagName.toLowerCase();
-      const activeIsEditable =
-        activeTag === "input" ||
-        activeTag === "textarea" ||
-        activeTag === "select" ||
-        active?.getAttribute("contenteditable") === "true";
-      if (!target || (activeIsEditable && active !== target)) return;
-      target.focus();
+      Effect.runSync(
+        restoreFocusEffect({
+          target: columnInputRefs.current[columnId],
+          activeElement: document.activeElement,
+        }),
+      );
     };
-    window.requestAnimationFrame(focusInput);
-    window.setTimeout(focusInput, 50);
-    window.setTimeout(focusInput, 150);
+    Effect.runSync(
+      scheduleFocusRestoreEffect({
+        restore: focusInput,
+        delays: [50, 150],
+        requestAnimationFrame: (callback) =>
+          window.requestAnimationFrame(callback),
+        setTimeout: (callback, delay) => window.setTimeout(callback, delay),
+      }),
+    );
   }
 
   function handleColumnInputChange(columnId: string, value: string) {
