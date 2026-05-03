@@ -88,4 +88,31 @@ describe("room HTTP authorization effects", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ success: true, participantId: "effect-p1" });
   });
+
+  it("runs authorized mutations through an injected Effect dependency", async () => {
+    const calls: string[] = [];
+    const response = await Effect.runPromise(runAuthorizedRoomMutationEffect(
+      createRoom(),
+      "p1",
+      "token",
+      async () => {
+        throw new Error("promise mutation should not be called directly");
+      },
+      {
+        authorizeParticipant: () => Effect.succeed({
+          success: true,
+          participantId: "effect-p1",
+          state: createInitialStoredState("room-a"),
+        }),
+        runMutation: (_mutation, participantId) => Effect.sync(() => {
+          calls.push(`mutation:${participantId}`);
+          return { success: true, participantId };
+        }),
+      },
+    ));
+
+    expect(calls).toEqual(["mutation:effect-p1"]);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ success: true, participantId: "effect-p1" });
+  });
 });

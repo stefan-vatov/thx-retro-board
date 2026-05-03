@@ -11,11 +11,16 @@ export interface RoomHttpAuthorizationDeps {
     participantId: string,
     connectionToken: unknown,
   ) => Effect.Effect<RoomAuthorizationResult>;
+  runMutation: <T extends object>(
+    mutation: (participantId: string) => Promise<RoomMutationResult<T>>,
+    participantId: string,
+  ) => Effect.Effect<RoomMutationResult<T>>;
 }
 
 export const roomHttpAuthorizationDeps: RoomHttpAuthorizationDeps = {
   authorizeParticipant: (room, participantId, connectionToken) =>
     Effect.promise(() => room.authorizeHttpParticipant(participantId, connectionToken)),
+  runMutation: (mutation, participantId) => Effect.promise(() => mutation(participantId)),
 };
 
 export function runAuthorizedRoomMutationEffect<T extends object>(
@@ -23,13 +28,14 @@ export function runAuthorizedRoomMutationEffect<T extends object>(
   participantId: string,
   connectionToken: unknown,
   mutation: (participantId: string) => Promise<RoomMutationResult<T>>,
-  deps: RoomHttpAuthorizationDeps = roomHttpAuthorizationDeps,
+  deps: Partial<RoomHttpAuthorizationDeps> = {},
 ): Effect.Effect<Response> {
   return Effect.gen(function* () {
-    const auth = yield* deps.authorizeParticipant(room, participantId, connectionToken);
+    const d = { ...roomHttpAuthorizationDeps, ...deps };
+    const auth = yield* d.authorizeParticipant(room, participantId, connectionToken);
     if (!auth.success) return Response.json(auth, { status: 403 });
 
-    const result = yield* Effect.promise(() => mutation(auth.participantId));
+    const result = yield* d.runMutation(mutation, auth.participantId);
     return Response.json(result);
   });
 }

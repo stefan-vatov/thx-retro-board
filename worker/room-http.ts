@@ -46,6 +46,13 @@ export interface RoomHttpController {
 }
 
 export interface RoomHttpDeps {
+  join: (
+    room: RoomHttpController,
+    participantId: string,
+    displayName: string,
+    connectionToken?: string,
+    facilitatorClaimToken?: unknown,
+  ) => Effect.Effect<Awaited<ReturnType<RoomHttpController["join"]>>>;
   getRoomStateForParticipant: (
     room: RoomHttpController,
     participantId: string,
@@ -59,6 +66,8 @@ export interface RoomHttpDeps {
 }
 
 export const roomHttpDeps: RoomHttpDeps = {
+  join: (room, participantId, displayName, connectionToken, facilitatorClaimToken) =>
+    Effect.promise(() => room.join(participantId, displayName, connectionToken, facilitatorClaimToken)),
   getRoomStateForParticipant: (room, participantId, connectionToken) =>
     Effect.promise(() => room.getRoomStateForParticipant(participantId, connectionToken)),
   createWebSocketTicket: (room, participantId, connectionToken) =>
@@ -87,8 +96,12 @@ export function handleRoomHttpRequestEffect(
   if (url.pathname === "/join" && request.method === "POST") {
     const body = yield* readBodyEffect(request, JoinRoomRequestSchema);
     if (body instanceof Response) return body;
-    return Response.json(yield* Effect.promise(() =>
-      room.join(body.participantId, body.displayName, body.connectionToken, body.facilitatorClaimToken)
+    return Response.json(yield* deps.join(
+      room,
+      body.participantId,
+      body.displayName,
+      body.connectionToken,
+      body.facilitatorClaimToken,
     ));
   }
 

@@ -47,6 +47,30 @@ describe("room HTTP routing", () => {
     expect(await response?.json()).toEqual({ success: true, connectionToken: "p1:Pat" });
   });
 
+  it("routes join requests through injected Effect dependencies", async () => {
+    const room = createRoom({
+      join: async () => {
+        throw new Error("join route should use injected dependency");
+      },
+    });
+
+    const response = await Effect.runPromise(handleRoomHttpRequestEffect(
+      room,
+      jsonRequest("/join", { participantId: "p1", displayName: "Pat" }),
+      {
+        join: (_room, participantId, displayName) => Effect.succeed({
+          success: true,
+          connectionToken: `${participantId}:${displayName}:effect`,
+        }),
+        getRoomStateForParticipant: () => Effect.die("unused"),
+        createWebSocketTicket: () => Effect.die("unused"),
+      },
+    ));
+
+    expect(response?.status).toBe(200);
+    expect(await response?.json()).toEqual({ success: true, connectionToken: "p1:Pat:effect" });
+  });
+
   it("blocks authenticated mutations when participant credentials fail", async () => {
     const response = await Effect.runPromise(handleRoomHttpRequestEffect(createRoom({
       authorizeHttpParticipant: async () => ({ success: false, error: "Invalid participant credentials" }),
