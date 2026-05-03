@@ -1,9 +1,9 @@
 import { Effect, Schema } from "effect";
 import { generateRoomId as defaultGenerateRoomId } from "../src/domain";
 import {
-  getRateLimitKey,
   hasProductionAntiAbuseConfig,
   isLocalRequest,
+  rateLimitRoomCreateEffect,
 } from "./anti-abuse";
 import { readJsonBodyEffect } from "./http-effect";
 import { CreateRoomRequestSchema } from "./room-request-schemas";
@@ -34,16 +34,8 @@ export function handleCreateRoomRequestEffect(
       return Response.json({ error: "Room creation is temporarily unavailable." }, { status: 503 });
     }
 
-    const createLimitKey = getRateLimitKey(request, url, "room-create");
-    if (env.ROOM_CREATE_RATE_LIMITER && createLimitKey) {
-      const { success } = yield* Effect.promise(() => env.ROOM_CREATE_RATE_LIMITER!.limit({ key: createLimitKey }));
-      if (!success) {
-        return Response.json(
-          { error: "Too many rooms created from this network. Please wait a minute and try again." },
-          { status: 429 },
-        );
-      }
-    }
+    const createLimit = yield* rateLimitRoomCreateEffect(env, request);
+    if (createLimit) return createLimit;
 
     const rawBody = yield* readJsonBodyEffect<unknown>(request, { maxBytes: MAX_JSON_BODY_BYTES });
     const body = rawBody === null

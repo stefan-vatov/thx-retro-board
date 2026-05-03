@@ -44,3 +44,22 @@ export function rateLimitRoomAccessEffect(
 export function rateLimitRoomAccess(env: AntiAbuseEnv, request: Request): Promise<Response | null> {
   return Effect.runPromise(rateLimitRoomAccessEffect(env, request));
 }
+
+export function rateLimitRoomCreateEffect(
+  env: AntiAbuseEnv,
+  request: Request,
+): Effect.Effect<Response | null> {
+  const url = new URL(request.url);
+  const key = getRateLimitKey(request, url, "room-create");
+  if (!env.ROOM_CREATE_RATE_LIMITER || !key) return Effect.succeed(null);
+
+  return Effect.promise(async () => {
+    const { success } = await env.ROOM_CREATE_RATE_LIMITER!.limit({ key });
+    return success
+      ? null
+      : Response.json(
+          { error: "Too many rooms created from this network. Please wait a minute and try again." },
+          { status: 429 },
+        );
+  });
+}

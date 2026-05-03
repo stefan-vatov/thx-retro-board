@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   getRateLimitKey,
   hasProductionAntiAbuseConfig,
+  rateLimitRoomCreateEffect,
   rateLimitRoomAccessEffect,
 } from "./anti-abuse";
 
@@ -38,6 +39,21 @@ describe("anti-abuse worker helpers", () => {
     expect((response as Response).status).toBe(429);
     await expect((response as Response).json()).resolves.toEqual({
       error: "Too many room attempts from this network. Please wait a minute and try again.",
+    });
+  });
+
+  it("returns a controlled 429 response when room creation is rate limited", async () => {
+    const response = await Effect.runPromise(rateLimitRoomCreateEffect({
+      ROOM_CREATE_RATE_LIMITER: { limit: async () => ({ success: false }) },
+    }, new Request("https://retro.thethracian.com/api/rooms", {
+      method: "POST",
+      headers: { "CF-Connecting-IP": "203.0.113.9" },
+    })));
+
+    expect(response).toBeInstanceOf(Response);
+    expect((response as Response).status).toBe(429);
+    await expect((response as Response).json()).resolves.toEqual({
+      error: "Too many rooms created from this network. Please wait a minute and try again.",
     });
   });
 
