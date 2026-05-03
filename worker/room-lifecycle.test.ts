@@ -180,6 +180,24 @@ describe("room lifecycle effects", () => {
     expect(calls).toEqual([["purgeRoom", "Room data was deleted after one hour without active participants."]]);
   });
 
+  it("runs the empty-room alarm through injected Effect dependencies", async () => {
+    const state = createState(1_000);
+    state.purgeScheduledAt = 30_000;
+    const calls: Array<[string, unknown?]> = [];
+
+    await Effect.runPromise(runRoomAlarmEffect({} as never, 30_000, {
+      getStoredState: () => Effect.succeed(state),
+      purgeIfExpired: () => Effect.succeed(false),
+      getSessionCount: () => Effect.succeed(0),
+      cancelEmptyRoomPurge: () => Effect.void,
+      purgeRoom: (_host, reason) => Effect.sync(() => {
+        calls.push(["purgeRoom", reason]);
+      }),
+    }));
+
+    expect(calls).toEqual([["purgeRoom", "Room data was deleted after one hour without active participants."]]);
+  });
+
   it("cancels stale empty-room alarms when participants are active", async () => {
     const state = createState(1_000);
     state.purgeScheduledAt = 30_000;

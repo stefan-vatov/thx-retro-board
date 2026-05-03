@@ -57,6 +57,22 @@ export const purgeIfExpiredDeps: PurgeIfExpiredDeps = {
   purgeRoom: (host, reason) => Effect.promise(() => host.purgeRoom(reason)),
 };
 
+export interface RunRoomAlarmDeps {
+  getStoredState: (host: RoomLifecycleHost) => Effect.Effect<StoredState | undefined | null>;
+  purgeIfExpired: (host: RoomLifecycleHost, stored: StoredState, now: number) => Effect.Effect<boolean>;
+  getSessionCount: (host: RoomLifecycleHost) => Effect.Effect<number>;
+  cancelEmptyRoomPurge: (host: RoomLifecycleHost, now: number) => Effect.Effect<void>;
+  purgeRoom: (host: RoomLifecycleHost, reason: string) => Effect.Effect<void>;
+}
+
+export const runRoomAlarmDeps: RunRoomAlarmDeps = {
+  getStoredState: (host) => Effect.promise(() => host.getStoredState()),
+  purgeIfExpired: (host, stored, now) => purgeIfExpiredEffect(host, stored, now),
+  getSessionCount: (host) => Effect.sync(() => host.getSessionCount()),
+  cancelEmptyRoomPurge: (host, now) => cancelEmptyRoomPurgeEffect(host, now),
+  purgeRoom: (host, reason) => Effect.promise(() => host.purgeRoom(reason)),
+};
+
 export function getAbsoluteRoomExpiresAt(
   state: Pick<StoredState, "startedAt">,
   now = Date.now(),
@@ -129,23 +145,24 @@ export function purgeIfExpiredEffect(
 export function runRoomAlarmEffect(
   host: RoomLifecycleHost,
   now = Date.now(),
+  deps: RunRoomAlarmDeps = runRoomAlarmDeps,
 ): Effect.Effect<void> {
   return Effect.gen(function* () {
-    const stored = yield* Effect.promise(() => host.getStoredState());
+    const stored = yield* deps.getStoredState(host);
     if (!stored) return;
-    if (yield* purgeIfExpiredEffect(host, stored, now)) return;
+    if (yield* deps.purgeIfExpired(host, stored, now)) return;
 
     const purgeScheduledAt = typeof stored.purgeScheduledAt === "number" && Number.isFinite(stored.purgeScheduledAt)
       ? stored.purgeScheduledAt
       : null;
     if (purgeScheduledAt === null || now < purgeScheduledAt) return;
 
-    if (host.getSessionCount() > 0) {
-      yield* cancelEmptyRoomPurgeEffect(host, now);
+    if ((yield* deps.getSessionCount(host)) > 0) {
+      yield* deps.cancelEmptyRoomPurge(host, now);
       return;
     }
 
-    yield* Effect.promise(() => host.purgeRoom(EMPTY_ROOM_PURGE_REASON));
+    yield* deps.purgeRoom(host, EMPTY_ROOM_PURGE_REASON);
   });
 }
 
