@@ -15,6 +15,7 @@ import { RoomPageLoadedView } from "./RoomPageLoadedView";
 import {
   planInitialRoomLoadEffect,
   resolveInitialJoinResultEffect,
+  shouldRestoreRoomFocusEffect,
 } from "./room-page-effect";
 import { useWriteCards } from "./use-write-cards";
 import {
@@ -115,15 +116,23 @@ export function RoomPage() {
     };
     if (!previous) return;
 
-    const changed =
-      previous.phase !== roomState.phase ||
-      previous.version !== roomState.version;
     const activeElement = document.activeElement;
     const focusLostToBody =
       activeElement === document.body ||
       activeElement === document.documentElement ||
       activeElement === null;
-    if (changed && focusLostToBody) {
+    const shouldRestoreFocus = Effect.runSync(
+      shouldRestoreRoomFocusEffect({
+        pageState,
+        previous,
+        current: {
+          phase: roomState.phase,
+          version: roomState.version,
+        },
+        focusLocation: focusLostToBody ? "document" : "interactive",
+      }),
+    );
+    if (shouldRestoreFocus) {
       window.setTimeout(() => phaseStatusRef.current?.focus(), 0);
     }
   }, [pageState, roomState?.phase, roomState?.version, roomState]);

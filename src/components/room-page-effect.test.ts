@@ -4,6 +4,7 @@ import type { RoomState } from "../domain";
 import {
   planInitialRoomLoadEffect,
   resolveInitialJoinResultEffect,
+  shouldRestoreRoomFocusEffect,
 } from "./room-page-effect";
 
 const state = {
@@ -87,5 +88,55 @@ describe("room page load effects", () => {
       state,
       connectionToken: "fresh-token",
     });
+  });
+});
+
+describe("room page focus effects", () => {
+  it("restores focus only when a shown room changes and focus is on page chrome", async () => {
+    await expect(
+      Effect.runPromise(
+        shouldRestoreRoomFocusEffect({
+          pageState: "room",
+          previous: { phase: "write", version: 1 },
+          current: { phase: "vote", version: 2 },
+          focusLocation: "document",
+        }),
+      ),
+    ).resolves.toBe(true);
+  });
+
+  it("does not restore focus for first render, unchanged rooms, or active inputs", async () => {
+    await expect(
+      Effect.runPromise(
+        shouldRestoreRoomFocusEffect({
+          pageState: "room",
+          previous: null,
+          current: { phase: "write", version: 1 },
+          focusLocation: "document",
+        }),
+      ),
+    ).resolves.toBe(false);
+
+    await expect(
+      Effect.runPromise(
+        shouldRestoreRoomFocusEffect({
+          pageState: "room",
+          previous: { phase: "write", version: 1 },
+          current: { phase: "write", version: 1 },
+          focusLocation: "document",
+        }),
+      ),
+    ).resolves.toBe(false);
+
+    await expect(
+      Effect.runPromise(
+        shouldRestoreRoomFocusEffect({
+          pageState: "room",
+          previous: { phase: "write", version: 1 },
+          current: { phase: "write", version: 2 },
+          focusLocation: "interactive",
+        }),
+      ),
+    ).resolves.toBe(false);
   });
 });

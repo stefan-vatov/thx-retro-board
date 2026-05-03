@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import type { RoomState } from "../domain";
+import type { Phase, RoomState } from "../domain";
 
 export type InitialRoomLoadInput = {
   roomId: string | undefined;
@@ -30,6 +30,13 @@ export type InitialJoinResolution =
       connectionToken: string | undefined;
     };
 
+export type RoomUpdateMarker = {
+  phase: Phase;
+  version: number;
+};
+
+export type FocusLocation = "document" | "interactive";
+
 export function planInitialRoomLoadEffect({
   roomId,
   displayName,
@@ -57,5 +64,25 @@ export function resolveInitialJoinResultEffect(
       state: result.state ?? null,
       connectionToken: result.connectionToken,
     };
+  });
+}
+
+export function shouldRestoreRoomFocusEffect({
+  pageState,
+  previous,
+  current,
+  focusLocation,
+}: {
+  pageState: string;
+  previous: RoomUpdateMarker | null;
+  current: RoomUpdateMarker;
+  focusLocation: FocusLocation;
+}): Effect.Effect<boolean> {
+  return Effect.sync(() => {
+    if (pageState !== "room") return false;
+    if (!previous) return false;
+    const changed =
+      previous.phase !== current.phase || previous.version !== current.version;
+    return changed && focusLocation === "document";
   });
 }
