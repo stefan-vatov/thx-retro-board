@@ -204,4 +204,30 @@ describe("room group commands", () => {
     expect(result).toEqual({ success: true });
     expect(state.groups).toEqual([]);
   });
+
+  it("deletes groups through injected Effect dependencies", async () => {
+    const state = createInitialStoredState("room-a");
+    state.phase = "organise";
+    state.participants = [{ id: "p1", displayName: "P1", isFacilitator: false }];
+    state.groups = [{ id: "group-a", name: "Theme", columnId: "mad", order: 0 }];
+    state.votes = [{ participantId: "p1", target: groupVoteTarget("group-a"), count: 1 }];
+    state.reactions = [{ participantId: "p1", target: groupVoteTarget("group-a"), emoji: "👍" }];
+    const calls: string[] = [];
+
+    const result = await Effect.runPromise(deleteGroupForRoomEffect({} as never, "p1", "group-a", {
+      loadState: () => Effect.sync(() => {
+        calls.push("load");
+        return state;
+      }),
+      saveAndBroadcastState: (_host, savedState) => Effect.sync(() => {
+        calls.push(`save:${savedState.groups.length}:${savedState.votes.length}:${savedState.reactions.length}`);
+      }),
+    }));
+
+    expect(result).toEqual({ success: true });
+    expect(state.groups).toEqual([]);
+    expect(state.votes).toEqual([]);
+    expect(state.reactions).toEqual([]);
+    expect(calls).toEqual(["load", "save:0:0:0"]);
+  });
 });

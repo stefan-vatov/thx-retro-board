@@ -36,6 +36,16 @@ export const editGroupForRoomDeps: EditGroupForRoomDeps = {
   saveAndBroadcastState: saveAndBroadcastStateEffect,
 };
 
+export interface DeleteGroupForRoomDeps {
+  loadState: (host: RoomCommandHost) => Effect.Effect<StoredState>;
+  saveAndBroadcastState: (host: RoomCommandHost, state: StoredState) => Effect.Effect<void>;
+}
+
+export const deleteGroupForRoomDeps: DeleteGroupForRoomDeps = {
+  loadState: (host) => Effect.promise(() => host.loadState()),
+  saveAndBroadcastState: saveAndBroadcastStateEffect,
+};
+
 export async function createGroupForRoom(
   host: RoomCommandHost,
   participantId: string,
@@ -113,9 +123,10 @@ export function deleteGroupForRoomEffect(
   host: RoomCommandHost,
   participantId: string,
   groupId: string,
+  deps: DeleteGroupForRoomDeps = deleteGroupForRoomDeps,
 ): Effect.Effect<{ success: boolean; error?: string }> {
   return Effect.gen(function* () {
-    const s = yield* Effect.promise(() => host.loadState());
+    const s = yield* deps.loadState(host);
     const validation = yield* Effect.either(validateGroupDeleteEffect(s, participantId, groupId));
     if (validation._tag === "Left") {
       return { success: false, error: validation.left.message };
@@ -126,7 +137,7 @@ export function deleteGroupForRoomEffect(
     s.votes = validation.right.votes;
     s.pairwiseChoices = normalizePairwiseChoices(s.pairwiseChoices, s.participants, s.groups, s.items);
     s.reactions = (s.reactions ?? []).filter((reaction) => !sameVoteTarget(reaction.target, groupVoteTarget(groupId)));
-    yield* saveAndBroadcastStateEffect(host, s);
+    yield* deps.saveAndBroadcastState(host, s);
     return { success: true };
   });
 }
