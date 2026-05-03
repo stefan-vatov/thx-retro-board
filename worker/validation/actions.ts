@@ -6,7 +6,7 @@ import {
   itemVoteTarget,
   sanitizeActionText,
   sanitizeItemText,
-  validateExistingColumnId,
+  validateExistingColumnIdEffect,
 } from "../../src/domain";
 import { MAX_ITEMS_PER_ROOM } from "../room-types";
 import type { StoredState } from "../room-types";
@@ -57,13 +57,12 @@ export function validateWriteItemCreateEffect(
     if (state.items.length >= MAX_ITEMS_PER_ROOM) {
       return yield* Effect.fail(new RoomMutationValidationError(`Rooms can have at most ${MAX_ITEMS_PER_ROOM} cards`));
     }
-    const columnValidation = validateExistingColumnId(state.columns ?? [], columnId);
-    if (!columnValidation.valid) {
-      return yield* Effect.fail(new RoomMutationValidationError(columnValidation.error));
-    }
+    const validatedColumnId = yield* validateExistingColumnIdEffect(state.columns ?? [], columnId).pipe(
+      Effect.mapError((error) => new RoomMutationValidationError(error.message)),
+    );
     return {
       text: sanitizeItemText(rawText),
-      columnId: columnValidation.columnId,
+      columnId: validatedColumnId,
       order: state.items.length,
     };
   });

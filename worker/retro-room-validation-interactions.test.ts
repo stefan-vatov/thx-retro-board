@@ -216,6 +216,9 @@ describe("RetroRoom validation: participant interactions", () => {
   
     const wrongPhase = await Effect.runPromiseExit(validateWriteItemCreateEffect({ ...state, phase: "organise" }, "p1", "New card", "col-1"));
     expect(Exit.isFailure(wrongPhase)).toBe(true);
+
+    const missingColumn = await Effect.runPromiseExit(validateWriteItemCreateEffect(state, "p1", "New card", "missing"));
+    expect(Exit.isFailure(missingColumn)).toBe(true);
   });
   
   it("validates write item edits through Effect before state changes", async () => {
