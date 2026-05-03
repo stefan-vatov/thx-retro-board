@@ -1,13 +1,14 @@
 import { useMemo, useState } from "react";
+import { Effect } from "effect";
 import type { RoomState } from "../domain";
 import {
-  buildAnonymousRetroExport,
-  formatActionsCsv,
-  formatActionsJson,
-  formatActionsMarkdown,
-  formatRetroExportJson,
-  formatRetroExportMarkdown,
-  getAnonymousActions,
+  buildAnonymousRetroExportEffect,
+  formatActionsCsvEffect,
+  formatActionsJsonEffect,
+  formatActionsMarkdownEffect,
+  formatRetroExportJsonEffect,
+  formatRetroExportMarkdownEffect,
+  getAnonymousActionsEffect,
 } from "../domain";
 import { writeClipboardText } from "./clipboard-effect";
 
@@ -22,8 +23,8 @@ interface ExportCard {
 
 export function FinalBoard({ roomState }: { roomState: RoomState }) {
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const exportData = useMemo(() => buildAnonymousRetroExport(roomState), [roomState]);
-  const actionExports = useMemo(() => getAnonymousActions(roomState.actions), [roomState.actions]);
+  const exportData = useMemo(() => Effect.runSync(buildAnonymousRetroExportEffect(roomState)), [roomState]);
+  const actionExports = useMemo(() => Effect.runSync(getAnonymousActionsEffect(roomState.actions)), [roomState.actions]);
   const cards = useMemo<ExportCard[]>(() => [
     {
       id: "retro-json",
@@ -31,7 +32,7 @@ export function FinalBoard({ roomState }: { roomState: RoomState }) {
       description: "Anonymous structured export for later analysis.",
       filename: `retro-${roomState.roomId}.json`,
       mimeType: "application/json",
-      content: formatRetroExportJson(exportData),
+      content: Effect.runSync(formatRetroExportJsonEffect(exportData)),
     },
     {
       id: "retro-markdown",
@@ -39,7 +40,7 @@ export function FinalBoard({ roomState }: { roomState: RoomState }) {
       description: "Readable summary with columns, groups, votes, and actions.",
       filename: `retro-${roomState.roomId}.md`,
       mimeType: "text/markdown",
-      content: formatRetroExportMarkdown(exportData),
+      content: Effect.runSync(formatRetroExportMarkdownEffect(exportData)),
     },
     {
       id: "actions-json",
@@ -47,7 +48,7 @@ export function FinalBoard({ roomState }: { roomState: RoomState }) {
       description: "Action-only structured export.",
       filename: `retro-${roomState.roomId}-actions.json`,
       mimeType: "application/json",
-      content: formatActionsJson(actionExports),
+      content: Effect.runSync(formatActionsJsonEffect(actionExports)),
     },
     {
       id: "actions-markdown",
@@ -55,7 +56,7 @@ export function FinalBoard({ roomState }: { roomState: RoomState }) {
       description: "Action checklist for docs or issue trackers.",
       filename: `retro-${roomState.roomId}-actions.md`,
       mimeType: "text/markdown",
-      content: formatActionsMarkdown(actionExports),
+      content: Effect.runSync(formatActionsMarkdownEffect(actionExports)),
     },
     {
       id: "actions-csv",
@@ -63,7 +64,7 @@ export function FinalBoard({ roomState }: { roomState: RoomState }) {
       description: "Spreadsheet-ready action list for Excel.",
       filename: `retro-${roomState.roomId}-actions.csv`,
       mimeType: "text/csv",
-      content: formatActionsCsv(actionExports),
+      content: Effect.runSync(formatActionsCsvEffect(actionExports)),
     },
   ], [actionExports, exportData, roomState.roomId]);
 
@@ -120,7 +121,7 @@ export function FinalBoard({ roomState }: { roomState: RoomState }) {
           <p className="review-slide__eyebrow">Actions preview</p>
           <span className="review-section-count">{actionExports.length}</span>
         </div>
-        <pre>{formatActionsMarkdown(actionExports)}</pre>
+        <pre>{Effect.runSync(formatActionsMarkdownEffect(actionExports))}</pre>
       </div>
     </section>
   );

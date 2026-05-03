@@ -26,6 +26,7 @@ export {
   formatRetroExportMarkdown,
   formatRetroExportMarkdownEffect,
   getAnonymousActions,
+  getAnonymousActionsEffect,
   formatActionsJson,
   formatActionsJsonEffect,
   formatActionsMarkdown,

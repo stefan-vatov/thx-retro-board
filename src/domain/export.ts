@@ -49,6 +49,10 @@ export function getAnonymousActions(actions: ActionItem[]): AnonymousRetroExport
     .map(({ id, text, order }) => ({ id, text, order }));
 }
 
+export function getAnonymousActionsEffect(actions: ActionItem[]): Effect.Effect<AnonymousRetroExport["actions"]> {
+  return Effect.sync(() => getAnonymousActions(actions));
+}
+
 export function formatRetroExportJson(exportData: AnonymousRetroExport): string {
   return `${JSON.stringify(exportData, null, 2)}\n`;
 }

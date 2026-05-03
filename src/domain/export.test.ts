@@ -10,6 +10,7 @@ import {
   formatActionsMarkdown,
   formatRetroExportMarkdown,
   formatRetroExportMarkdownEffect,
+  getAnonymousActionsEffect,
   groupVoteTarget,
   itemVoteTarget,
 } from ".";
@@ -81,6 +82,13 @@ describe("anonymous retro exports", () => {
       { target: { type: "group", id: "group-1" }, totalVotes: 3 },
       { target: { type: "item", id: "item-2" }, totalVotes: 1 },
     ]);
+  });
+
+  it("exports anonymous actions through Effect without participant identities", async () => {
+    const actions = await Effect.runPromise(getAnonymousActionsEffect(makeExportState().actions));
+
+    expect(actions).toEqual([{ id: "action-1", text: "Alice to create launch checklist", order: 0 }]);
+    expect(actions[0]).not.toHaveProperty("authorId");
   });
 
   it("formats full markdown and action-only markdown/json/csv", () => {
