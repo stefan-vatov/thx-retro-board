@@ -46,3 +46,34 @@ export function copyExportCardEffect(
     Effect.catchAll(() => Effect.succeed({ copiedId: null })),
   );
 }
+
+export type InviteCopyResult = {
+  copied: boolean;
+  copyFailed: boolean;
+  manualUrl: string | null;
+};
+
+export function copyInviteLinkEffect(
+  inviteUrl: string,
+  copySupported: boolean,
+  clipboard: ClipboardWriter | null | undefined,
+): Effect.Effect<InviteCopyResult> {
+  if (!copySupported) {
+    return Effect.succeed({
+      copied: false,
+      copyFailed: true,
+      manualUrl: inviteUrl,
+    });
+  }
+
+  return writeClipboardTextEffect(inviteUrl, clipboard).pipe(
+    Effect.as({ copied: true, copyFailed: false, manualUrl: null }),
+    Effect.catchAll(() =>
+      Effect.succeed({
+        copied: false,
+        copyFailed: true,
+        manualUrl: inviteUrl,
+      }),
+    ),
+  );
+}
