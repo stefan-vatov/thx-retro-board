@@ -127,4 +127,37 @@ describe("room action commands", () => {
     expect(state.actions).toEqual([{ id: "action-b", text: "Second action", authorId: "participant-a", order: 0 }]);
     expect(saveCount).toBe(2);
   });
+
+  it("edits actions through injected Effect dependencies", async () => {
+    const state = createInitialStoredState("room-effect-edit-injected");
+    state.phase = "review";
+    state.participants = [{ id: "participant-a", displayName: "A", isFacilitator: false }];
+    state.actions = [{ id: "action-a", text: "Old action", authorId: "participant-a", order: 0 }];
+    const calls: string[] = [];
+
+    const result = await Effect.runPromise(editActionForRoomEffect(
+      {} as never,
+      "participant-a",
+      "action-a",
+      "  New action  ",
+      {
+        loadState: () => Effect.sync(() => {
+          calls.push("load");
+          return state;
+        }),
+        broadcast: (_host, message) => Effect.sync(() => {
+          calls.push(`broadcast:${message.type}`);
+        }),
+        saveAndBroadcastState: (_host, savedState) => Effect.sync(() => {
+          calls.push(`save:${savedState.actions[0]?.text}`);
+        }),
+      },
+    ));
+
+    expect(result).toEqual({
+      success: true,
+      action: { id: "action-a", text: "New action", authorId: "participant-a", order: 0 },
+    });
+    expect(calls).toEqual(["load", "broadcast:actions-changed", "save:New action"]);
+  });
 });

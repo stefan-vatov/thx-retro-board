@@ -24,6 +24,18 @@ export const createActionForRoomDeps: CreateActionForRoomDeps = {
   saveAndBroadcastState: saveAndBroadcastStateEffect,
 };
 
+export interface EditActionForRoomDeps {
+  loadState: (host: RoomCommandHost) => Effect.Effect<StoredState>;
+  broadcast: (host: RoomCommandHost, message: ServerToClientMessage) => Effect.Effect<void>;
+  saveAndBroadcastState: (host: RoomCommandHost, state: StoredState) => Effect.Effect<void>;
+}
+
+export const editActionForRoomDeps: EditActionForRoomDeps = {
+  loadState: (host) => Effect.promise(() => host.loadState()),
+  broadcast: (host, message) => Effect.sync(() => host.broadcast(message)),
+  saveAndBroadcastState: saveAndBroadcastStateEffect,
+};
+
 export async function createActionForRoom(
   host: RoomCommandHost,
   participantId: string,
@@ -71,9 +83,10 @@ export function editActionForRoomEffect(
   participantId: string,
   actionId: string,
   rawText: string,
+  deps: EditActionForRoomDeps = editActionForRoomDeps,
 ): Effect.Effect<{ success: boolean; error?: string; action?: ActionItem }> {
   return Effect.gen(function* () {
-    const s = yield* Effect.promise(() => host.loadState());
+    const s = yield* deps.loadState(host);
     const validation = yield* Effect.either(validateReviewActionEditEffect(s, participantId, actionId, rawText));
     if (validation._tag === "Left") {
       const message = validation.left.message;
@@ -86,8 +99,8 @@ export function editActionForRoomEffect(
     const actionIndex = (s.actions ?? []).findIndex((action) => action.id === validation.right.action.id);
     s.actions = [...(s.actions ?? [])];
     s.actions[actionIndex] = validation.right.action;
-    host.broadcast({ type: "actions-changed", actions: s.actions });
-    yield* saveAndBroadcastStateEffect(host, s);
+    yield* deps.broadcast(host, { type: "actions-changed", actions: s.actions });
+    yield* deps.saveAndBroadcastState(host, s);
 
     return { success: true, action: s.actions[actionIndex] };
   });
