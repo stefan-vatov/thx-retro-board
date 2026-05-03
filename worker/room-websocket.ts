@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import type { ServerToClientMessage } from "../src/domain";
+import type { RoomState, ServerToClientMessage } from "../src/domain";
 import { toRoomState } from "./room-presenter";
 import type { StoredState } from "./room-types";
 import { getWebSocketTicketEffect } from "./room-tickets";
@@ -22,6 +22,16 @@ export interface RoomWebSocketDeps {
   ) => Effect.Effect<{ success: true; participantId: string } | { success: false; error: string }>;
   loadState: (host: RoomWebSocketHost) => Effect.Effect<StoredState>;
   cancelEmptyRoomPurge: (host: RoomWebSocketHost) => Effect.Effect<void>;
+  closeParticipantSocket: (host: RoomWebSocketHost, participantId: string, reason: string) => Effect.Effect<void>;
+  setSession: (host: RoomWebSocketHost, participantId: string, socket: WebSocket) => Effect.Effect<void>;
+  serializeAttachment: (socket: WebSocket, attachment: { participantId: string }) => Effect.Effect<void>;
+  acceptWebSocket: (host: RoomWebSocketHost, socket: WebSocket) => Effect.Effect<void>;
+  broadcast: (
+    host: RoomWebSocketHost,
+    message: ServerToClientMessage,
+    excludeId?: string,
+  ) => Effect.Effect<void>;
+  sendSnapshot: (socket: WebSocket, snapshot: { type: "snapshot"; state: RoomState }) => Effect.Effect<void>;
 }
 
 export const roomWebSocketDeps: RoomWebSocketDeps = {
@@ -29,6 +39,24 @@ export const roomWebSocketDeps: RoomWebSocketDeps = {
   consumeWebSocketTicket: (host, ticket) => Effect.promise(() => host.consumeWebSocketTicket(ticket)),
   loadState: (host) => Effect.promise(() => host.loadState()),
   cancelEmptyRoomPurge: (host) => Effect.promise(() => host.cancelEmptyRoomPurge()),
+  closeParticipantSocket: (host, participantId, reason) => Effect.sync(() => {
+    host.closeParticipantSocket(participantId, reason);
+  }),
+  setSession: (host, participantId, socket) => Effect.sync(() => {
+    host.setSession(participantId, socket);
+  }),
+  serializeAttachment: (socket, attachment) => Effect.sync(() => {
+    socket.serializeAttachment(attachment);
+  }),
+  acceptWebSocket: (host, socket) => Effect.sync(() => {
+    host.acceptWebSocket(socket);
+  }),
+  broadcast: (host, message, excludeId) => Effect.sync(() => {
+    host.broadcast(message, excludeId);
+  }),
+  sendSnapshot: (socket, snapshot) => Effect.sync(() => {
+    socket.send(JSON.stringify(snapshot));
+  }),
 };
 
 export async function handleRoomWebSocketRequest(host: RoomWebSocketHost, request: Request): Promise<Response | null> {
@@ -58,17 +86,17 @@ export function handleRoomWebSocketRequestEffect(
   const participantId = ticket.participantId;
   const s = yield* deps.loadState(host);
   yield* deps.cancelEmptyRoomPurge(host);
-  host.closeParticipantSocket(participantId, "Participant opened a new connection");
-  host.setSession(participantId, server);
-  server.serializeAttachment({ participantId });
-  host.acceptWebSocket(server);
+  yield* deps.closeParticipantSocket(host, participantId, "Participant opened a new connection");
+  yield* deps.setSession(host, participantId, server);
+  yield* deps.serializeAttachment(server, { participantId });
+  yield* deps.acceptWebSocket(host, server);
 
   const participant = s.participants.find((p) => p.id === participantId);
   if (participant) {
-    host.broadcast({ type: "participant-joined", participant }, participantId);
+    yield* deps.broadcast(host, { type: "participant-joined", participant }, participantId);
   }
 
-  server.send(JSON.stringify({ type: "snapshot", state: toRoomState(s, participantId) }));
+  yield* deps.sendSnapshot(server, { type: "snapshot", state: toRoomState(s, participantId) });
 
   return new Response(null, {
     status: 101,
