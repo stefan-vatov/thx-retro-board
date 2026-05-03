@@ -1,7 +1,31 @@
-import { describe, expect, it } from "vitest";
-import { classifyRoomLoadError, formatElapsedTime, mergeRoomState } from "./room-session";
+import { Effect } from "effect";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  classifyRoomLoadError,
+  clearStoredIdentityEffect,
+  formatElapsedTime,
+  getFacilitatorClaimTokenEffect,
+  getStoredIdentityEffect,
+  mergeRoomState,
+} from "./room-session";
 import { ApiError } from "../api";
 import type { RoomState } from "../domain";
+
+function createStorage() {
+  const values = new Map<string, string>();
+  return {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      values.set(key, value);
+    },
+    removeItem: (key: string) => {
+      values.delete(key);
+    },
+    clear: () => {
+      values.clear();
+    },
+  } as Storage;
+}
 
 function roomState(version: number): RoomState {
   return {
@@ -28,6 +52,16 @@ function roomState(version: number): RoomState {
 }
 
 describe("room session helpers", () => {
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", createStorage());
+    vi.stubGlobal("sessionStorage", createStorage());
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
   it("keeps the newest room snapshot", () => {
     expect(mergeRoomState(null, roomState(1))?.version).toBe(1);
     expect(mergeRoomState(roomState(2), null)?.version).toBe(2);
@@ -46,5 +80,39 @@ describe("room session helpers", () => {
 
     expect(error.title).toBe("Room temporarily unavailable");
     expect(error.detail).not.toMatch(/token|credential/i);
+  });
+
+  it("reads and initializes stored identity through Effect", async () => {
+    vi.spyOn(crypto, "randomUUID").mockReturnValue("generated-id");
+
+    await expect(Effect.runPromise(getStoredIdentityEffect("room-1"))).resolves.toEqual({
+      participantId: "generated-id",
+      displayName: "",
+      connectionToken: undefined,
+    });
+    expect(localStorage.getItem("retro-participant-room-1")).toBe("generated-id");
+
+    localStorage.setItem("retro-name-room-1", "Alex");
+    localStorage.setItem("retro-token-room-1", "token");
+    await expect(Effect.runPromise(getStoredIdentityEffect("room-1"))).resolves.toEqual({
+      participantId: "generated-id",
+      displayName: "Alex",
+      connectionToken: "token",
+    });
+  });
+
+  it("reads facilitator claims and clears identity storage through Effect", async () => {
+    localStorage.setItem("retro-participant-room-1", "p1");
+    localStorage.setItem("retro-name-room-1", "Alex");
+    localStorage.setItem("retro-token-room-1", "token");
+    sessionStorage.setItem("retro-facilitator-claim-room-1", "claim");
+
+    await expect(Effect.runPromise(getFacilitatorClaimTokenEffect("room-1"))).resolves.toBe("claim");
+    await Effect.runPromise(clearStoredIdentityEffect("room-1"));
+
+    expect(localStorage.getItem("retro-participant-room-1")).toBeNull();
+    expect(localStorage.getItem("retro-name-room-1")).toBeNull();
+    expect(localStorage.getItem("retro-token-room-1")).toBeNull();
+    expect(sessionStorage.getItem("retro-facilitator-claim-room-1")).toBeNull();
   });
 });

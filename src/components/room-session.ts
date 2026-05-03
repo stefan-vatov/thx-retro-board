@@ -35,8 +35,8 @@ export function formatElapsedTime(milliseconds: number): string {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
-export function getStoredIdentity(roomId: string): StoredIdentity {
-  return Effect.runSync(Effect.sync(() => {
+export function getStoredIdentityEffect(roomId: string): Effect.Effect<StoredIdentity> {
+  return Effect.sync(() => {
     const pidKey = `retro-participant-${roomId}`;
     const nameKey = `retro-name-${roomId}`;
     const tokenKey = `retro-token-${roomId}`;
@@ -47,20 +47,32 @@ export function getStoredIdentity(roomId: string): StoredIdentity {
       localStorage.setItem(pidKey, participantId);
     }
     return { participantId, displayName, connectionToken };
-  }));
+  });
+}
+
+export function getStoredIdentity(roomId: string): StoredIdentity {
+  return Effect.runSync(getStoredIdentityEffect(roomId));
+}
+
+export function getFacilitatorClaimTokenEffect(roomId: string): Effect.Effect<string | undefined> {
+  return Effect.sync(() => sessionStorage.getItem(`retro-facilitator-claim-${roomId}`) ?? undefined);
 }
 
 export function getFacilitatorClaimToken(roomId: string): string | undefined {
-  return Effect.runSync(Effect.sync(() => sessionStorage.getItem(`retro-facilitator-claim-${roomId}`) ?? undefined));
+  return Effect.runSync(getFacilitatorClaimTokenEffect(roomId));
 }
 
-export function clearStoredIdentity(roomId: string): void {
-  Effect.runSync(Effect.sync(() => {
+export function clearStoredIdentityEffect(roomId: string): Effect.Effect<void> {
+  return Effect.sync(() => {
     localStorage.removeItem(`retro-participant-${roomId}`);
     localStorage.removeItem(`retro-name-${roomId}`);
     localStorage.removeItem(`retro-token-${roomId}`);
     sessionStorage.removeItem(`retro-facilitator-claim-${roomId}`);
-  }));
+  });
+}
+
+export function clearStoredIdentity(roomId: string): void {
+  Effect.runSync(clearStoredIdentityEffect(roomId));
 }
 
 export function classifyRoomLoadError(error: unknown): RoomLoadError {
