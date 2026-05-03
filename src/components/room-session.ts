@@ -2,7 +2,12 @@ import { Effect } from "effect";
 import { ApiError } from "../api";
 import type { RoomState } from "../domain";
 
-export type PageState = "loading" | "join" | "room" | "not-found" | "load-error";
+export type PageState =
+  | "loading"
+  | "join"
+  | "room"
+  | "not-found"
+  | "load-error";
 
 export type RoomLoadError = {
   title: string;
@@ -16,7 +21,19 @@ export type StoredIdentity = {
   connectionToken?: string;
 };
 
-export function mergeRoomState(local: RoomState | null, ws: RoomState | null): RoomState | null {
+export type RoomMutationResult = {
+  success: boolean;
+  error?: string;
+};
+
+export type RoomMutationWithRefreshResult = RoomMutationResult & {
+  state: RoomState | null;
+};
+
+export function mergeRoomState(
+  local: RoomState | null,
+  ws: RoomState | null,
+): RoomState | null {
   if (!local && !ws) return null;
   if (!local) return ws;
   if (!ws) return local;
@@ -24,7 +41,10 @@ export function mergeRoomState(local: RoomState | null, ws: RoomState | null): R
   return local;
 }
 
-export function mergeRoomStateEffect(local: RoomState | null, ws: RoomState | null): Effect.Effect<RoomState | null> {
+export function mergeRoomStateEffect(
+  local: RoomState | null,
+  ws: RoomState | null,
+): Effect.Effect<RoomState | null> {
   return Effect.sync(() => mergeRoomState(local, ws));
 }
 
@@ -39,11 +59,15 @@ export function formatElapsedTime(milliseconds: number): string {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
-export function formatElapsedTimeEffect(milliseconds: number): Effect.Effect<string> {
+export function formatElapsedTimeEffect(
+  milliseconds: number,
+): Effect.Effect<string> {
   return Effect.sync(() => formatElapsedTime(milliseconds));
 }
 
-export function getStoredIdentityEffect(roomId: string): Effect.Effect<StoredIdentity> {
+export function getStoredIdentityEffect(
+  roomId: string,
+): Effect.Effect<StoredIdentity> {
   return Effect.sync(() => {
     const pidKey = `retro-participant-${roomId}`;
     const nameKey = `retro-name-${roomId}`;
@@ -62,8 +86,13 @@ export function getStoredIdentity(roomId: string): StoredIdentity {
   return Effect.runSync(getStoredIdentityEffect(roomId));
 }
 
-export function getFacilitatorClaimTokenEffect(roomId: string): Effect.Effect<string | undefined> {
-  return Effect.sync(() => sessionStorage.getItem(`retro-facilitator-claim-${roomId}`) ?? undefined);
+export function getFacilitatorClaimTokenEffect(
+  roomId: string,
+): Effect.Effect<string | undefined> {
+  return Effect.sync(
+    () =>
+      sessionStorage.getItem(`retro-facilitator-claim-${roomId}`) ?? undefined,
+  );
 }
 
 export function getFacilitatorClaimToken(roomId: string): string | undefined {
@@ -87,26 +116,49 @@ export function classifyRoomLoadError(error: unknown): RoomLoadError {
   if (error instanceof ApiError && error.status && error.status >= 500) {
     return {
       title: "Room temporarily unavailable",
-      description: "The room service returned an error while checking this invite.",
-      detail: "Retry in a moment. If the problem continues, return home and create a fresh room.",
+      description:
+        "The room service returned an error while checking this invite.",
+      detail:
+        "Retry in a moment. If the problem continues, return home and create a fresh room.",
     };
   }
 
   if (typeof navigator !== "undefined" && !navigator.onLine) {
     return {
       title: "You appear to be offline",
-      description: "We could not check this room because your browser is offline.",
+      description:
+        "We could not check this room because your browser is offline.",
       detail: "Reconnect to the internet, then retry loading the room.",
     };
   }
 
   return {
     title: "Could not load room",
-    description: "We could not check this invite because the network request failed.",
-    detail: "Check your connection and retry. Your participant credentials are not included in the room link.",
+    description:
+      "We could not check this invite because the network request failed.",
+    detail:
+      "Check your connection and retry. Your participant credentials are not included in the room link.",
   };
 }
 
-export function classifyRoomLoadErrorEffect(error: unknown): Effect.Effect<RoomLoadError> {
+export function classifyRoomLoadErrorEffect(
+  error: unknown,
+): Effect.Effect<RoomLoadError> {
   return Effect.sync(() => classifyRoomLoadError(error));
+}
+
+export function runRoomMutationWithRefreshEffect(
+  mutation: Effect.Effect<RoomMutationResult, unknown>,
+  refresh: Effect.Effect<RoomState, unknown>,
+): Effect.Effect<RoomMutationWithRefreshResult, unknown> {
+  return Effect.gen(function* () {
+    const result = yield* mutation;
+    if (!result.success) return { ...result, state: null };
+
+    const refreshed = yield* refresh.pipe(
+      Effect.map((state): RoomState | null => state),
+      Effect.catchAll(() => Effect.succeed(null)),
+    );
+    return { ...result, state: refreshed };
+  });
 }

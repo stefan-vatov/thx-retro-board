@@ -10,6 +10,7 @@ import {
   getStoredIdentityEffect,
   mergeRoomState,
   mergeRoomStateEffect,
+  runRoomMutationWithRefreshEffect,
 } from "./room-session";
 import { ApiError } from "../api";
 import type { RoomState } from "../domain";
@@ -73,7 +74,9 @@ describe("room session helpers", () => {
   });
 
   it("keeps the newest room snapshot through Effect", async () => {
-    await expect(Effect.runPromise(mergeRoomStateEffect(roomState(1), roomState(2)))).resolves.toMatchObject({
+    await expect(
+      Effect.runPromise(mergeRoomStateEffect(roomState(1), roomState(2))),
+    ).resolves.toMatchObject({
       version: 2,
     });
   });
@@ -85,7 +88,9 @@ describe("room session helpers", () => {
   });
 
   it("formats elapsed retro time through Effect", async () => {
-    await expect(Effect.runPromise(formatElapsedTimeEffect(3_665_000))).resolves.toBe("1:01:05");
+    await expect(
+      Effect.runPromise(formatElapsedTimeEffect(3_665_000)),
+    ).resolves.toBe("1:01:05");
   });
 
   it("classifies unavailable rooms without leaking credentials", () => {
@@ -96,7 +101,9 @@ describe("room session helpers", () => {
   });
 
   it("classifies unavailable rooms through Effect", async () => {
-    const error = await Effect.runPromise(classifyRoomLoadErrorEffect(new ApiError("boom", 500)));
+    const error = await Effect.runPromise(
+      classifyRoomLoadErrorEffect(new ApiError("boom", 500)),
+    );
 
     expect(error.title).toBe("Room temporarily unavailable");
     expect(error.detail).not.toMatch(/token|credential/i);
@@ -105,16 +112,22 @@ describe("room session helpers", () => {
   it("reads and initializes stored identity through Effect", async () => {
     vi.spyOn(crypto, "randomUUID").mockReturnValue("generated-id");
 
-    await expect(Effect.runPromise(getStoredIdentityEffect("room-1"))).resolves.toEqual({
+    await expect(
+      Effect.runPromise(getStoredIdentityEffect("room-1")),
+    ).resolves.toEqual({
       participantId: "generated-id",
       displayName: "",
       connectionToken: undefined,
     });
-    expect(localStorage.getItem("retro-participant-room-1")).toBe("generated-id");
+    expect(localStorage.getItem("retro-participant-room-1")).toBe(
+      "generated-id",
+    );
 
     localStorage.setItem("retro-name-room-1", "Alex");
     localStorage.setItem("retro-token-room-1", "token");
-    await expect(Effect.runPromise(getStoredIdentityEffect("room-1"))).resolves.toEqual({
+    await expect(
+      Effect.runPromise(getStoredIdentityEffect("room-1")),
+    ).resolves.toEqual({
       participantId: "generated-id",
       displayName: "Alex",
       connectionToken: "token",
@@ -127,12 +140,53 @@ describe("room session helpers", () => {
     localStorage.setItem("retro-token-room-1", "token");
     sessionStorage.setItem("retro-facilitator-claim-room-1", "claim");
 
-    await expect(Effect.runPromise(getFacilitatorClaimTokenEffect("room-1"))).resolves.toBe("claim");
+    await expect(
+      Effect.runPromise(getFacilitatorClaimTokenEffect("room-1")),
+    ).resolves.toBe("claim");
     await Effect.runPromise(clearStoredIdentityEffect("room-1"));
 
     expect(localStorage.getItem("retro-participant-room-1")).toBeNull();
     expect(localStorage.getItem("retro-name-room-1")).toBeNull();
     expect(localStorage.getItem("retro-token-room-1")).toBeNull();
     expect(sessionStorage.getItem("retro-facilitator-claim-room-1")).toBeNull();
+  });
+
+  it("runs successful room mutations and returns refreshed state through Effect", async () => {
+    const result = await Effect.runPromise(
+      runRoomMutationWithRefreshEffect(
+        Effect.succeed({ success: true }),
+        Effect.succeed(roomState(2)),
+      ),
+    );
+
+    expect(result).toEqual({ success: true, state: roomState(2) });
+  });
+
+  it("keeps successful mutations successful when refresh fails", async () => {
+    const result = await Effect.runPromise(
+      runRoomMutationWithRefreshEffect(
+        Effect.succeed({ success: true }),
+        Effect.fail(new Error("offline")),
+      ),
+    );
+
+    expect(result).toEqual({ success: true, state: null });
+  });
+
+  it("does not refresh failed room mutations", async () => {
+    const result = await Effect.runPromise(
+      runRoomMutationWithRefreshEffect(
+        Effect.succeed({ success: false, error: "No permission" }),
+        Effect.sync(() => {
+          throw new Error("refresh should not run");
+        }),
+      ),
+    );
+
+    expect(result).toEqual({
+      success: false,
+      error: "No permission",
+      state: null,
+    });
   });
 });

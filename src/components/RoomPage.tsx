@@ -1,25 +1,17 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams } from "react-router-dom";
 import { Effect } from "effect";
-import {
-  ApiError,
-  getRoomStateEffect,
-  joinRoomEffect,
-  purgeRoomEffect,
-  runApiEffect,
-  setPhaseEffect,
-  setRankingMethodEffect,
-  setTimerEffect,
-  setVoteBudgetEffect,
-} from "../api";
+import { ApiError, joinRoomEffect, runApiEffect } from "../api";
 import { useRoom } from "../hooks";
-import type { RoomState, Phase, RankingMethod } from "../domain";
-import { PHASE_ORDER } from "../domain";
-import { FacilitatorControls } from "./FacilitatorControls";
-import { RoomBoardArea } from "./RoomBoardArea";
+import type { RoomState, Phase } from "../domain";
 import { getSortedColumnsEffect } from "./room-columns";
-import { RoomShellHeader, RoomStatus } from "./RoomShell";
-import { JoinRoomScreen, LoadingRoomScreen, RoomLoadErrorScreen, RoomNotFoundScreen } from "./RoomStateScreens";
+import {
+  JoinRoomScreen,
+  LoadingRoomScreen,
+  RoomLoadErrorScreen,
+  RoomNotFoundScreen,
+} from "./RoomStateScreens";
+import { RoomPageLoadedView } from "./RoomPageLoadedView";
 import { useWriteCards } from "./use-write-cards";
 import {
   classifyRoomLoadErrorEffect,
@@ -30,41 +22,47 @@ import {
   type PageState,
   type RoomLoadError,
 } from "./room-session";
+import { useFacilitatorRoomControls } from "./use-facilitator-room-controls";
 
 export function RoomPage() {
   const { roomId } = useParams<{ roomId: string }>();
   const [pageState, setPageState] = useState<PageState>("loading");
   const [identity] = useState(() => getStoredIdentity(roomId!));
-  const [participantId, setParticipantId] = useState(() => identity.participantId);
+  const [participantId, setParticipantId] = useState(
+    () => identity.participantId,
+  );
   const [displayName, setDisplayName] = useState(() => identity.displayName);
   const [joinError, setJoinError] = useState<string | null>(null);
   const [joinLoading, setJoinLoading] = useState(false);
-  const [roomLoadError, setRoomLoadError] = useState<RoomLoadError | null>(null);
+  const [roomLoadError, setRoomLoadError] = useState<RoomLoadError | null>(
+    null,
+  );
   const [localRoomState, setLocalRoomState] = useState<RoomState | null>(null);
-  const [connectionToken, setConnectionToken] = useState<string | undefined>(() => identity.connectionToken);
-  const [voteBudgetInput, setVoteBudgetInput] = useState("5");
-  const [voteBudgetDirty, setVoteBudgetDirty] = useState(false);
-  const [budgetMsg, setBudgetMsg] = useState<string | null>(null);
-  const [timerMinutesInput, setTimerMinutesInput] = useState("5");
-  const [timerMsg, setTimerMsg] = useState<string | null>(null);
-  const [timerInputError, setTimerInputError] = useState<string | null>(null);
-  const [phaseMsg, setPhaseMsg] = useState<string | null>(null);
-  const [rankingMsg, setRankingMsg] = useState<string | null>(null);
-  const [budgetPending, setBudgetPending] = useState(false);
-  const [rankingPending, setRankingPending] = useState(false);
-  const [phasePending, setPhasePending] = useState(false);
-  const [timerPending, setTimerPending] = useState(false);
-  const [purgePending, setPurgePending] = useState(false);
-  const [purgeMsg, setPurgeMsg] = useState<string | null>(null);
+  const [connectionToken, setConnectionToken] = useState<string | undefined>(
+    () => identity.connectionToken,
+  );
   const phaseStatusRef = useRef<HTMLDivElement>(null);
-  const previousRoomUpdateRef = useRef<{ phase: Phase; version: number } | null>(null);
+  const previousRoomUpdateRef = useRef<{
+    phase: Phase;
+    version: number;
+  } | null>(null);
   const initialLoadStartedRef = useRef(false);
-  const lastAuthoritativeVoteBudgetRef = useRef<number | null>(null);
 
-  const { state: wsState, connected, lastError, roomPurged, clearError, send } = useRoom(roomId ?? "", participantId, connectionToken);
+  const {
+    state: wsState,
+    connected,
+    lastError,
+    roomPurged,
+    clearError,
+    send,
+  } = useRoom(roomId ?? "", participantId, connectionToken);
 
-  const roomState = Effect.runSync(mergeRoomStateEffect(localRoomState, wsState));
-  const sortedRoomColumns = roomState ? Effect.runSync(getSortedColumnsEffect(roomState)) : [];
+  const roomState = Effect.runSync(
+    mergeRoomStateEffect(localRoomState, wsState),
+  );
+  const sortedRoomColumns = roomState
+    ? Effect.runSync(getSortedColumnsEffect(roomState))
+    : [];
   const writeCards = useWriteCards({
     roomId,
     roomState,
@@ -72,8 +70,17 @@ export function RoomPage() {
     connectionToken,
     setLocalRoomState,
   });
-  const currentPhaseIndex = roomState ? PHASE_ORDER.indexOf(roomState.phase) : -1;
-  const nextPhase = currentPhaseIndex >= 0 ? PHASE_ORDER[currentPhaseIndex + 1] : undefined;
+  const { nextPhase, facilitatorControls, ranking } =
+    useFacilitatorRoomControls({
+      roomId,
+      roomState,
+      participantId,
+      connectionToken,
+      phaseStatusRef,
+      clearError,
+      setLocalRoomState,
+      setPageState,
+    });
 
   const resetStoredIdentity = useCallback(() => {
     if (!roomId) return;
@@ -95,44 +102,22 @@ export function RoomPage() {
   }, [roomId, roomPurged]);
 
   useEffect(() => {
-    const timeout = window.setTimeout(() => setTimerPending(false), 0);
-    return () => window.clearTimeout(timeout);
-  }, [roomState?.timer.startedAt, roomState?.timer.durationSeconds]);
-
-  useEffect(() => {
-    const timeout = window.setTimeout(() => {
-      setPhaseMsg(null);
-    }, 0);
-    return () => window.clearTimeout(timeout);
-  }, [roomState?.phase]);
-
-  useEffect(() => {
-    if (!roomState) return undefined;
-    const nextBudget = roomState.voteBudget;
-    const previousBudget = lastAuthoritativeVoteBudgetRef.current;
-    if (previousBudget === nextBudget) return undefined;
-
-    lastAuthoritativeVoteBudgetRef.current = nextBudget;
-    const nextBudgetInput = String(nextBudget);
-    if (!voteBudgetDirty || voteBudgetInput === nextBudgetInput || budgetPending) {
-      const timeout = window.setTimeout(() => {
-        setVoteBudgetInput(nextBudgetInput);
-        setVoteBudgetDirty(false);
-      }, 0);
-      return () => window.clearTimeout(timeout);
-    }
-    return undefined;
-  }, [budgetPending, roomState, roomState?.voteBudget, voteBudgetDirty, voteBudgetInput]);
-
-  useEffect(() => {
     if (pageState !== "room" || !roomState) return;
     const previous = previousRoomUpdateRef.current;
-    previousRoomUpdateRef.current = { phase: roomState.phase, version: roomState.version };
+    previousRoomUpdateRef.current = {
+      phase: roomState.phase,
+      version: roomState.version,
+    };
     if (!previous) return;
 
-    const changed = previous.phase !== roomState.phase || previous.version !== roomState.version;
+    const changed =
+      previous.phase !== roomState.phase ||
+      previous.version !== roomState.version;
     const activeElement = document.activeElement;
-    const focusLostToBody = activeElement === document.body || activeElement === document.documentElement || activeElement === null;
+    const focusLostToBody =
+      activeElement === document.body ||
+      activeElement === document.documentElement ||
+      activeElement === null;
     if (changed && focusLostToBody) {
       window.setTimeout(() => phaseStatusRef.current?.focus(), 0);
     }
@@ -147,7 +132,15 @@ export function RoomPage() {
       return;
     }
     try {
-      const result = await runApiEffect(joinRoomEffect(roomId, participantId, identity.displayName, identity.connectionToken, getFacilitatorClaimToken(roomId)));
+      const result = await runApiEffect(
+        joinRoomEffect(
+          roomId,
+          participantId,
+          identity.displayName,
+          identity.connectionToken,
+          getFacilitatorClaimToken(roomId),
+        ),
+      );
       if (!result.success) {
         resetStoredIdentity();
         setPageState("join");
@@ -169,7 +162,13 @@ export function RoomPage() {
       setRoomLoadError(Effect.runSync(classifyRoomLoadErrorEffect(error)));
       setPageState("load-error");
     }
-  }, [roomId, participantId, identity.displayName, identity.connectionToken, resetStoredIdentity]);
+  }, [
+    roomId,
+    participantId,
+    identity.displayName,
+    identity.connectionToken,
+    resetStoredIdentity,
+  ]);
 
   useEffect(() => {
     if (initialLoadStartedRef.current) return undefined;
@@ -194,7 +193,15 @@ export function RoomPage() {
 
     setJoinLoading(true);
     try {
-      const result = await runApiEffect(joinRoomEffect(roomId, participantId, trimmed, connectionToken, getFacilitatorClaimToken(roomId)));
+      const result = await runApiEffect(
+        joinRoomEffect(
+          roomId,
+          participantId,
+          trimmed,
+          connectionToken,
+          getFacilitatorClaimToken(roomId),
+        ),
+      );
       if (!result.success) {
         setJoinError(result.error ?? "Failed to join room. Please try again.");
         return;
@@ -208,154 +215,11 @@ export function RoomPage() {
       sessionStorage.removeItem(`retro-facilitator-claim-${roomId}`);
       setPageState("room");
     } catch {
-      setJoinError("Failed to join room. Please check your connection and try again.");
+      setJoinError(
+        "Failed to join room. Please check your connection and try again.",
+      );
     } finally {
       setJoinLoading(false);
-    }
-  }
-
-  async function handleSetBudget() {
-    if (!roomId || budgetPending) return;
-    setBudgetMsg(null);
-    const rawBudget = voteBudgetInput.trim();
-    const budget = Number(rawBudget);
-    if (!/^\d+$/.test(rawBudget) || !Number.isInteger(budget) || budget < 1 || budget > 100) {
-      setBudgetMsg("Vote budget must be an integer between 1 and 100.");
-      return;
-    }
-    setBudgetPending(true);
-    try {
-      const result = await runApiEffect(setVoteBudgetEffect(roomId, participantId, connectionToken, budget));
-      if (result.success) {
-        setBudgetMsg("Vote budget updated.");
-        setVoteBudgetInput(String(budget));
-        setVoteBudgetDirty(false);
-        // Refetch authoritative state to handle any missed WebSocket broadcasts during reconnect
-        try {
-          const state = await runApiEffect(getRoomStateEffect(roomId, participantId, connectionToken));
-          setLocalRoomState(state);
-        } catch {
-          // Refetch failed; local optimistic update stands and WebSocket will reconcile
-        }
-      } else {
-        setBudgetMsg(result.error ?? "Failed to update budget.");
-      }
-    } finally {
-      setBudgetPending(false);
-    }
-  }
-
-  async function handleSetRankingMethod(rankingMethod: RankingMethod) {
-    if (!roomId || !roomState || rankingPending || roomState.rankingMethod === rankingMethod) return;
-    setRankingMsg(null);
-    clearError();
-    setRankingPending(true);
-    try {
-      const result = await runApiEffect(setRankingMethodEffect(roomId, participantId, connectionToken, rankingMethod));
-      if (result.success) {
-        setRankingMsg(rankingMethod === "pairwise" ? "Pairwise ranking selected." : "Score voting selected.");
-        try {
-          const state = await runApiEffect(getRoomStateEffect(roomId, participantId, connectionToken));
-          setLocalRoomState(state);
-        } catch {
-          // WebSocket snapshot will reconcile if the refetch misses.
-        }
-      } else {
-        setRankingMsg(result.error ?? "Failed to update ranking method.");
-      }
-    } finally {
-      setRankingPending(false);
-    }
-  }
-
-  async function handleAdvancePhase() {
-    if (!roomId || !roomState || phasePending) return;
-    setPhaseMsg(null);
-    const currentIdx = PHASE_ORDER.indexOf(roomState.phase);
-    const nextPhase = PHASE_ORDER[currentIdx + 1] as Phase | undefined;
-    if (!nextPhase) return;
-    setPhasePending(true);
-    try {
-      const result = await runApiEffect(setPhaseEffect(roomId, participantId, connectionToken, nextPhase));
-      if (result.success) {
-        setPhaseMsg(`Advanced to ${nextPhase}.`);
-        window.setTimeout(() => phaseStatusRef.current?.focus(), 0);
-        // Refetch authoritative state so the UI updates even if the WebSocket broadcast
-        // was missed during a post-reload reconnect window
-        try {
-          const state = await runApiEffect(getRoomStateEffect(roomId, participantId, connectionToken));
-          setLocalRoomState(state);
-        } catch {
-          // Refetch failed; local optimistic update stands and WebSocket will reconcile
-        }
-      } else {
-        setPhaseMsg(result.error ?? "Failed to change phase.");
-      }
-    } finally {
-      setPhasePending(false);
-    }
-  }
-
-  async function handleSetTimer() {
-    if (!roomId || !roomState || timerPending) return;
-    setTimerMsg(null);
-    setTimerInputError(null);
-    const raw = timerMinutesInput.trim();
-    if (!raw) {
-      setTimerInputError("Timer cannot be blank.");
-      return;
-    }
-    const minutes = parseInt(raw, 10);
-    if (isNaN(minutes) || minutes < 1) {
-      setTimerInputError("Timer must be at least 1 minute.");
-      return;
-    }
-    if (minutes > 60) {
-      setTimerInputError("Timer cannot exceed 60 minutes.");
-      return;
-    }
-    const durationSeconds = minutes * 60;
-    setTimerPending(true);
-    try {
-      const result = await runApiEffect(setTimerEffect(roomId, participantId, connectionToken, durationSeconds));
-      if (!result.success) {
-        setTimerInputError(result.error ?? "Failed to start timer.");
-        return;
-      }
-      setTimerMsg("Timer started.");
-      try {
-        const state = await runApiEffect(getRoomStateEffect(roomId, participantId, connectionToken));
-        setLocalRoomState(state);
-      } catch {
-        // WebSocket snapshot will reconcile if refetch misses.
-      }
-    } catch {
-      setTimerInputError("Failed to start timer. Check the room connection and try again.");
-    } finally {
-      setTimerPending(false);
-    }
-  }
-
-  async function handlePurgeRoom() {
-    if (!roomId || purgePending) return;
-    const confirmed = window.confirm("Delete this room and scrub all retro data now? This cannot be undone.");
-    if (!confirmed) return;
-
-    setPurgeMsg(null);
-    setPurgePending(true);
-    try {
-      const result = await runApiEffect(purgeRoomEffect(roomId, participantId, connectionToken));
-      if (!result.success) {
-        setPurgeMsg(result.error ?? "Failed to delete room data.");
-        return;
-      }
-      clearStoredIdentity(roomId);
-      setLocalRoomState(null);
-      setPageState("not-found");
-    } catch {
-      setPurgeMsg("Failed to delete room data. Check the room connection and try again.");
-    } finally {
-      setPurgePending(false);
     }
   }
 
@@ -370,7 +234,9 @@ export function RoomPage() {
   if (pageState === "load-error") {
     return (
       <RoomLoadErrorScreen
-        error={roomLoadError ?? Effect.runSync(classifyRoomLoadErrorEffect(null))}
+        error={
+          roomLoadError ?? Effect.runSync(classifyRoomLoadErrorEffect(null))
+        }
         onRetry={() => void loadInitialRoom()}
       />
     );
@@ -391,75 +257,19 @@ export function RoomPage() {
     );
   }
 
-  const currentParticipant = roomState?.participants.find((p) => p.id === participantId);
-  const isFacilitator = currentParticipant?.isFacilitator === true;
-
   return (
-    <div className="content-shell">
-      {/* Room Header */}
-      <RoomShellHeader roomId={roomId!} connected={connected} />
-
-      <RoomStatus
-        roomState={roomState}
-        columnCount={sortedRoomColumns.length}
-        participantId={participantId}
-        phaseStatusRef={phaseStatusRef}
-      />
-
-      {/* Facilitator Controls */}
-      {isFacilitator && (
-        <FacilitatorControls
-          roomState={roomState}
-          nextPhase={nextPhase}
-          voteBudgetInput={voteBudgetInput}
-          budgetMsg={budgetMsg}
-          budgetPending={budgetPending}
-          phaseMsg={phaseMsg}
-          phasePending={phasePending}
-          timerMinutesInput={timerMinutesInput}
-          timerMsg={timerMsg}
-          timerInputError={timerInputError}
-          timerPending={timerPending}
-          purgeMsg={purgeMsg}
-          purgePending={purgePending}
-          onVoteBudgetChange={(value) => {
-            setVoteBudgetInput(value);
-            setVoteBudgetDirty(true);
-            if (budgetMsg) setBudgetMsg(null);
-          }}
-          onSetBudget={handleSetBudget}
-          onAdvancePhase={handleAdvancePhase}
-          onTimerMinutesChange={(value) => {
-            setTimerMinutesInput(value);
-            if (timerInputError) setTimerInputError(null);
-          }}
-          onSetTimer={handleSetTimer}
-          onPurgeRoom={handlePurgeRoom}
-        />
-      )}
-
-      {/* Board Area */}
-      <RoomBoardArea
-        roomState={roomState}
-        isFacilitator={isFacilitator}
-        participantId={participantId}
-        connected={connected}
-        send={send}
-        serverError={lastError}
-        clearServerError={clearError}
-        onRankingMethodChange={handleSetRankingMethod}
-        rankingPending={rankingPending}
-        rankingMsg={rankingMsg}
-        writeCards={writeCards}
-      />
-
-      {/* Room Footer — safe room code only, no tokens */}
-      <footer className="room-footer" role="contentinfo">
-        <span className="room-footer__label">Room</span>
-        <span className="room-footer__code truncate" aria-label="Room code">
-          {roomId}
-        </span>
-      </footer>
-    </div>
+    <RoomPageLoadedView
+      roomId={roomId!}
+      roomState={roomState}
+      connected={connected}
+      participantId={participantId}
+      columnCount={sortedRoomColumns.length}
+      nextPhase={nextPhase}
+      phaseStatusRef={phaseStatusRef}
+      realtime={{ lastError, clearError, send }}
+      facilitatorControls={facilitatorControls}
+      ranking={ranking}
+      writeCards={writeCards}
+    />
   );
 }
