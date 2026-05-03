@@ -17,7 +17,7 @@ import type { RoomState, Phase, RankingMethod } from "../domain";
 import { PHASE_ORDER } from "../domain";
 import { FacilitatorControls } from "./FacilitatorControls";
 import { RoomBoardArea } from "./RoomBoardArea";
-import { getSortedColumns } from "./room-columns";
+import { getSortedColumnsEffect } from "./room-columns";
 import { RoomShellHeader, RoomStatus } from "./RoomShell";
 import { JoinRoomScreen, LoadingRoomScreen, RoomLoadErrorScreen, RoomNotFoundScreen } from "./RoomStateScreens";
 import { useWriteCards } from "./use-write-cards";
@@ -64,7 +64,7 @@ export function RoomPage() {
   const { state: wsState, connected, lastError, roomPurged, clearError, send } = useRoom(roomId ?? "", participantId, connectionToken);
 
   const roomState = Effect.runSync(mergeRoomStateEffect(localRoomState, wsState));
-  const sortedRoomColumns = roomState ? getSortedColumns(roomState) : [];
+  const sortedRoomColumns = roomState ? Effect.runSync(getSortedColumnsEffect(roomState)) : [];
   const writeCards = useWriteCards({
     roomId,
     roomState,
