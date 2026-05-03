@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Effect } from "effect";
 import {
   addItemEffect,
   deleteItemEffect,
@@ -9,6 +10,7 @@ import {
 import type { RetroItem, RoomState } from "../domain";
 import { isValidItemText, sanitizeItemText } from "../domain";
 import { getSortedColumns } from "./room-columns";
+import { refreshRoomStateAfterMutationEffect } from "./write-cards-effect";
 
 type UseWriteCardsArgs = {
   roomId: string | undefined;
@@ -26,10 +28,14 @@ export function useWriteCards({
   setLocalRoomState,
 }: UseWriteCardsArgs) {
   const [columnInputs, setColumnInputs] = useState<Record<string, string>>({});
-  const [columnErrors, setColumnErrors] = useState<Record<string, string | undefined>>({});
+  const [columnErrors, setColumnErrors] = useState<
+    Record<string, string | undefined>
+  >({});
   const [pendingColumnId, setPendingColumnId] = useState<string | null>(null);
   const [pendingItemId, setPendingItemId] = useState<string | null>(null);
-  const columnInputRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
+  const columnInputRefs = useRef<Record<string, HTMLTextAreaElement | null>>(
+    {},
+  );
   const restoreColumnFocusRef = useRef<string | null>(null);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [editingItemText, setEditingItemText] = useState("");
@@ -40,7 +46,11 @@ export function useWriteCards({
       const target = columnInputRefs.current[columnId];
       const active = document.activeElement;
       const activeTag = active?.tagName.toLowerCase();
-      const activeIsEditable = activeTag === "input" || activeTag === "textarea" || activeTag === "select" || active?.getAttribute("contenteditable") === "true";
+      const activeIsEditable =
+        activeTag === "input" ||
+        activeTag === "textarea" ||
+        activeTag === "select" ||
+        active?.getAttribute("contenteditable") === "true";
       if (!target || (activeIsEditable && active !== target)) return;
       target.focus();
     };
@@ -60,33 +70,63 @@ export function useWriteCards({
     const rawText = columnInputs[columnId] ?? "";
     setColumnErrors((current) => ({ ...current, [columnId]: undefined }));
     if (!isValidItemText(rawText)) {
-      setColumnErrors((current) => ({ ...current, [columnId]: "Card text cannot be blank." }));
+      setColumnErrors((current) => ({
+        ...current,
+        [columnId]: "Card text cannot be blank.",
+      }));
       return;
     }
     if (!sortedRoomColumns.some((column) => column.id === columnId)) {
-      setColumnErrors((current) => ({ ...current, [columnId]: "Column not found." }));
+      setColumnErrors((current) => ({
+        ...current,
+        [columnId]: "Column not found.",
+      }));
       return;
     }
     const nextText = sanitizeItemText(rawText);
     setPendingColumnId(columnId);
     try {
-      const result = await runApiEffect(addItemEffect(roomId, participantId, connectionToken, nextText, columnId));
+      const result = await runApiEffect(
+        addItemEffect(
+          roomId,
+          participantId,
+          connectionToken,
+          nextText,
+          columnId,
+        ),
+      );
       if (!result.success) {
-        setColumnErrors((current) => ({ ...current, [columnId]: result.error ?? "Failed to add card." }));
+        setColumnErrors((current) => ({
+          ...current,
+          [columnId]: result.error ?? "Failed to add card.",
+        }));
         return;
       }
       setColumnInputs((current) => ({ ...current, [columnId]: "" }));
       restoreColumnFocusRef.current = columnId;
       setPendingColumnId(null);
-      try {
-        setLocalRoomState(await runApiEffect(getRoomStateEffect(roomId, participantId, connectionToken)));
-      } catch {
-        if (result.item && roomState) {
-          setLocalRoomState({ ...roomState, items: [...roomState.items, result.item], version: roomState.version + 1 });
-        }
-      }
+      setLocalRoomState(
+        await Effect.runPromise(
+          refreshRoomStateAfterMutationEffect(
+            roomState,
+            getRoomStateEffect(roomId, participantId, connectionToken),
+            (current) =>
+              result.item
+                ? {
+                    ...current,
+                    items: [...current.items, result.item],
+                    version: current.version + 1,
+                  }
+                : current,
+          ),
+        ),
+      );
     } catch {
-      setColumnErrors((current) => ({ ...current, [columnId]: "Failed to add card. Check the room connection and try again." }));
+      setColumnErrors((current) => ({
+        ...current,
+        [columnId]:
+          "Failed to add card. Check the room connection and try again.",
+      }));
     } finally {
       setPendingColumnId(null);
     }
@@ -118,26 +158,45 @@ export function useWriteCards({
     const nextText = sanitizeItemText(editingItemText);
     setPendingItemId(itemId);
     try {
-      const result = await runApiEffect(editItemEffect(roomId, participantId, connectionToken, itemId, nextText));
+      const result = await runApiEffect(
+        editItemEffect(
+          roomId,
+          participantId,
+          connectionToken,
+          itemId,
+          nextText,
+        ),
+      );
       if (!result.success) {
-        setColumnErrors((current) => ({ ...current, __global: result.error ?? "Failed to edit card." }));
+        setColumnErrors((current) => ({
+          ...current,
+          __global: result.error ?? "Failed to edit card.",
+        }));
         return;
       }
       setEditingItemId(null);
       setEditingItemText("");
-      try {
-        setLocalRoomState(await runApiEffect(getRoomStateEffect(roomId, participantId, connectionToken)));
-      } catch {
-        if (roomState) {
-          setLocalRoomState({
-            ...roomState,
-            items: roomState.items.map((item) => item.id === itemId ? { ...item, text: nextText } : item),
-            version: roomState.version + 1,
-          });
-        }
-      }
+      setLocalRoomState(
+        await Effect.runPromise(
+          refreshRoomStateAfterMutationEffect(
+            roomState,
+            getRoomStateEffect(roomId, participantId, connectionToken),
+            (current) => ({
+              ...current,
+              items: current.items.map((item) =>
+                item.id === itemId ? { ...item, text: nextText } : item,
+              ),
+              version: current.version + 1,
+            }),
+          ),
+        ),
+      );
     } catch {
-      setColumnErrors((current) => ({ ...current, __global: "Failed to edit card. Check the room connection and try again." }));
+      setColumnErrors((current) => ({
+        ...current,
+        __global:
+          "Failed to edit card. Check the room connection and try again.",
+      }));
     } finally {
       setPendingItemId(null);
     }
@@ -148,25 +207,36 @@ export function useWriteCards({
     setColumnErrors((current) => ({ ...current, __global: undefined }));
     setPendingItemId(itemId);
     try {
-      const result = await runApiEffect(deleteItemEffect(roomId, participantId, connectionToken, itemId));
+      const result = await runApiEffect(
+        deleteItemEffect(roomId, participantId, connectionToken, itemId),
+      );
       if (!result.success) {
-        setColumnErrors((current) => ({ ...current, __global: result.error ?? "Failed to delete card." }));
+        setColumnErrors((current) => ({
+          ...current,
+          __global: result.error ?? "Failed to delete card.",
+        }));
         return;
       }
       if (editingItemId === itemId) handleCancelEditItem();
-      try {
-        setLocalRoomState(await runApiEffect(getRoomStateEffect(roomId, participantId, connectionToken)));
-      } catch {
-        if (roomState) {
-          setLocalRoomState({
-            ...roomState,
-            items: roomState.items.filter((item) => item.id !== itemId),
-            version: roomState.version + 1,
-          });
-        }
-      }
+      setLocalRoomState(
+        await Effect.runPromise(
+          refreshRoomStateAfterMutationEffect(
+            roomState,
+            getRoomStateEffect(roomId, participantId, connectionToken),
+            (current) => ({
+              ...current,
+              items: current.items.filter((item) => item.id !== itemId),
+              version: current.version + 1,
+            }),
+          ),
+        ),
+      );
     } catch {
-      setColumnErrors((current) => ({ ...current, __global: "Failed to delete card. Check the room connection and try again." }));
+      setColumnErrors((current) => ({
+        ...current,
+        __global:
+          "Failed to delete card. Check the room connection and try again.",
+      }));
     } finally {
       setPendingItemId(null);
     }
