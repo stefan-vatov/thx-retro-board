@@ -16,9 +16,9 @@ import { MAX_GROUPS_PER_ROOM } from "../room-types";
 import type { ItemReorderPreconditions, MoveItemPreconditions, StoredState } from "../room-types";
 import {
   RoomMutationValidationError,
-  validateExpectedVersion,
-  validateItemReorderPreconditions,
-  validateMoveItemPreconditions,
+  validateExpectedVersionEffect,
+  validateItemReorderPreconditionsEffect,
+  validateMoveItemPreconditionsEffect,
 } from "./shared";
 
 type GroupCreateValidationState = Pick<StoredState, "participants" | "phase" | "columns" | "groups">;
@@ -134,11 +134,8 @@ export function validateGroupReorderEffect(
     if (!state.participants.some((participant) => participant.id === participantId)) {
       return yield* Effect.fail(new RoomMutationValidationError("Participant not found"));
     }
-    const validatedVersion = validateExpectedVersion(expectedVersion);
-    if (!validatedVersion.success) {
-      return yield* Effect.fail(new RoomMutationValidationError(validatedVersion.error));
-    }
-    if (validatedVersion.expectedVersion !== state.version) {
+    const validatedVersion = yield* validateExpectedVersionEffect(expectedVersion);
+    if (validatedVersion !== state.version) {
       return yield* Effect.fail(new RoomMutationValidationError("Stale group reorder rejected: room version changed"));
     }
     const ids = yield* validateGroupReorderPayloadEffect(state.groups, orderedIds).pipe(
@@ -161,11 +158,8 @@ export function validateItemReorderEffect(
     if (!state.participants.some((participant) => participant.id === participantId)) {
       return yield* Effect.fail(new RoomMutationValidationError("Participant not found"));
     }
-    const validatedPreconditions = validateItemReorderPreconditions(preconditions);
-    if (!validatedPreconditions.success) {
-      return yield* Effect.fail(new RoomMutationValidationError(validatedPreconditions.error));
-    }
-    if (validatedPreconditions.preconditions.expectedVersion !== state.version) {
+    const validatedPreconditions = yield* validateItemReorderPreconditionsEffect(preconditions);
+    if (validatedPreconditions.expectedVersion !== state.version) {
       return yield* Effect.fail(new RoomMutationValidationError("Stale item reorder rejected: room version changed"));
     }
     const ids = yield* validateItemReorderPayloadEffect(state.items, orderedIds).pipe(
@@ -174,8 +168,8 @@ export function validateItemReorderEffect(
     const firstItem = state.items.find((item) => item.id === ids[0]);
     if (
       !firstItem
-      || firstItem.columnId !== validatedPreconditions.preconditions.sourceColumnId
-      || firstItem.groupId !== validatedPreconditions.preconditions.sourceGroupId
+      || firstItem.columnId !== validatedPreconditions.sourceColumnId
+      || firstItem.groupId !== validatedPreconditions.sourceGroupId
     ) {
       return yield* Effect.fail(new RoomMutationValidationError("Stale item reorder rejected: source list changed"));
     }
@@ -198,21 +192,18 @@ export function validateItemMoveEffect(
     if (!state.participants.some((participant) => participant.id === participantId)) {
       return yield* Effect.fail(new RoomMutationValidationError("Participant not found"));
     }
-    const validatedPreconditions = validateMoveItemPreconditions(preconditions);
-    if (!validatedPreconditions.success) {
-      return yield* Effect.fail(new RoomMutationValidationError(validatedPreconditions.error));
-    }
+    const validatedPreconditions = yield* validateMoveItemPreconditionsEffect(preconditions);
     const item = state.items.find((candidate) => candidate.id === itemId);
     if (!item) {
       return yield* Effect.fail(new RoomMutationValidationError("Item not found"));
     }
-    if (validatedPreconditions.preconditions.expectedVersion !== state.version) {
+    if (validatedPreconditions.expectedVersion !== state.version) {
       return yield* Effect.fail(new RoomMutationValidationError("Stale item move rejected: room version changed"));
     }
-    if (validatedPreconditions.preconditions.sourceGroupId !== item.groupId) {
+    if (validatedPreconditions.sourceGroupId !== item.groupId) {
       return yield* Effect.fail(new RoomMutationValidationError("Stale item move rejected: source column changed"));
     }
-    if (validatedPreconditions.preconditions.sourceIndex !== item.order) {
+    if (validatedPreconditions.sourceIndex !== item.order) {
       return yield* Effect.fail(new RoomMutationValidationError("Stale item move rejected: source order changed"));
     }
     const targetGroup = targetGroupId === null ? null : state.groups.find((group) => group.id === targetGroupId);

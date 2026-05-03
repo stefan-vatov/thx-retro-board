@@ -101,6 +101,18 @@ export function validateMoveItemPreconditions(
   };
 }
 
+export function validateMoveItemPreconditionsEffect(
+  preconditions: Partial<MoveItemPreconditions> | undefined,
+): Effect.Effect<MoveItemPreconditions, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    const result = validateMoveItemPreconditions(preconditions);
+    if (!result.success) {
+      return yield* Effect.fail(new RoomMutationValidationError(result.error));
+    }
+    return result.preconditions;
+  });
+}
+
 export function validateItemReorderPreconditions(
   preconditions: Partial<ItemReorderPreconditions> | undefined,
 ): { success: true; preconditions: ItemReorderPreconditions } | { success: false; error: string } {
@@ -129,6 +141,18 @@ export function validateItemReorderPreconditions(
   return { success: true, preconditions: { expectedVersion, sourceColumnId, sourceGroupId } };
 }
 
+export function validateItemReorderPreconditionsEffect(
+  preconditions: Partial<ItemReorderPreconditions> | undefined,
+): Effect.Effect<ItemReorderPreconditions, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    const result = validateItemReorderPreconditions(preconditions);
+    if (!result.success) {
+      return yield* Effect.fail(new RoomMutationValidationError(result.error));
+    }
+    return result.preconditions;
+  });
+}
+
 export function validateExpectedVersion(
   expectedVersion: unknown,
 ): { success: true; expectedVersion: number } | { success: false; error: string } {
@@ -136,6 +160,18 @@ export function validateExpectedVersion(
     return { success: false, error: "Expected version must be a finite integer" };
   }
   return { success: true, expectedVersion };
+}
+
+export function validateExpectedVersionEffect(
+  expectedVersion: unknown,
+): Effect.Effect<number, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    const result = validateExpectedVersion(expectedVersion);
+    if (!result.success) {
+      return yield* Effect.fail(new RoomMutationValidationError(result.error));
+    }
+    return result.expectedVersion;
+  });
 }
 
 export function resolveVoteTargetForState(
