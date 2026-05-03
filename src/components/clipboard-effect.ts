@@ -31,3 +31,18 @@ export function writeClipboardText(
 ): Promise<void> {
   return Effect.runPromise(writeClipboardTextEffect(text, clipboard));
 }
+
+export type CopyableExportCard = {
+  id: string;
+  content: string;
+};
+
+export function copyExportCardEffect(
+  card: CopyableExportCard,
+  clipboard: ClipboardWriter | null | undefined,
+): Effect.Effect<{ copiedId: string | null }> {
+  return writeClipboardTextEffect(card.content, clipboard).pipe(
+    Effect.as({ copiedId: card.id }),
+    Effect.catchAll(() => Effect.succeed({ copiedId: null })),
+  );
+}
