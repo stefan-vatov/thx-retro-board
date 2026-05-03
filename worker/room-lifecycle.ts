@@ -26,6 +26,13 @@ export function getAbsoluteRoomExpiresAt(
   return (state.startedAt ?? now) + MAX_ROOM_LIFETIME_MS;
 }
 
+export function getAbsoluteRoomExpiresAtEffect(
+  state: Pick<StoredState, "startedAt">,
+  now = Date.now(),
+): Effect.Effect<number> {
+  return Effect.sync(() => getAbsoluteRoomExpiresAt(state, now));
+}
+
 export function scheduleEmptyRoomPurgeEffect(
   host: RoomLifecycleHost,
   now = Date.now(),
@@ -33,13 +40,15 @@ export function scheduleEmptyRoomPurgeEffect(
   return Effect.gen(function* () {
     const state = yield* Effect.promise(() => host.loadState());
     if (host.getSessionCount() > 0) {
-      yield* Effect.promise(() => host.setAlarm(getAbsoluteRoomExpiresAt(state, now)));
+      const expiresAt = yield* getAbsoluteRoomExpiresAtEffect(state, now);
+      yield* Effect.promise(() => host.setAlarm(expiresAt));
       return;
     }
 
     const purgeScheduledAt = now + EMPTY_ROOM_PURGE_DELAY_MS;
     state.purgeScheduledAt = purgeScheduledAt;
-    yield* Effect.promise(() => host.setAlarm(Math.min(purgeScheduledAt, getAbsoluteRoomExpiresAt(state, now))));
+    const expiresAt = yield* getAbsoluteRoomExpiresAtEffect(state, now);
+    yield* Effect.promise(() => host.setAlarm(Math.min(purgeScheduledAt, expiresAt)));
     yield* Effect.promise(() => host.saveState());
   });
 }
@@ -56,7 +65,8 @@ export function cancelEmptyRoomPurgeEffect(
       state.purgeScheduledAt = null;
       yield* Effect.promise(() => host.saveState());
     }
-    yield* Effect.promise(() => host.setAlarm(getAbsoluteRoomExpiresAt(state, now)));
+    const expiresAt = yield* getAbsoluteRoomExpiresAtEffect(state, now);
+    yield* Effect.promise(() => host.setAlarm(expiresAt));
   });
 }
 
@@ -67,7 +77,9 @@ export function purgeIfExpiredEffect(
 ): Effect.Effect<boolean> {
   return Effect.gen(function* () {
     const state = stored ?? (yield* Effect.promise(() => host.getStoredState()));
-    if (!state || now < getAbsoluteRoomExpiresAt(state, now)) return false;
+    if (!state) return false;
+    const expiresAt = yield* getAbsoluteRoomExpiresAtEffect(state, now);
+    if (now < expiresAt) return false;
     yield* Effect.promise(() => host.purgeRoom(ABSOLUTE_EXPIRY_REASON));
     return true;
   });

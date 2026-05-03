@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   cancelEmptyRoomPurgeEffect,
   getAbsoluteRoomExpiresAt,
+  getAbsoluteRoomExpiresAtEffect,
   purgeIfExpiredEffect,
   runRoomAlarmEffect,
   scheduleEmptyRoomPurgeEffect,
@@ -49,6 +50,11 @@ describe("room lifecycle effects", () => {
   it("calculates absolute expiry from room start", () => {
     expect(getAbsoluteRoomExpiresAt({ startedAt: 5_000 }, 10_000)).toBe(5_000 + MAX_ROOM_LIFETIME_MS);
     expect(getAbsoluteRoomExpiresAt({}, 10_000)).toBe(10_000 + MAX_ROOM_LIFETIME_MS);
+  });
+
+  it("calculates absolute expiry through an Effect boundary", async () => {
+    await expect(Effect.runPromise(getAbsoluteRoomExpiresAtEffect({ startedAt: 5_000 }, 10_000)))
+      .resolves.toBe(getAbsoluteRoomExpiresAt({ startedAt: 5_000 }, 10_000));
   });
 
   it("schedules empty-room purge and saves the purge timestamp", async () => {
