@@ -5,10 +5,6 @@ import {
   rateLimitRoomAccessEffect,
 } from "./anti-abuse";
 import {
-  readJsonBodyEffect,
-  validJsonBodyError,
-} from "./http-effect";
-import {
   AddItemRequestSchema,
   EditItemRequestSchema,
   JoinRoomRequestSchema,
@@ -19,10 +15,9 @@ import {
   TimerRequestSchema,
   VoteBudgetRequestSchema,
 } from "./room-request-schemas";
+import { forwardValidatedRoomMutationEffect } from "./room-mutation-forwarder";
 import type { RetroRoom } from "./retro-room";
 import type { Env } from "./index";
-
-const MAX_JSON_BODY_BYTES = 32 * 1024;
 
 interface ParsedRoomPath {
   roomId: string;
@@ -140,17 +135,11 @@ function validateAndForwardEffect(
   schema: Schema.Schema.AnyNoContext,
   durableObjectPath: string,
 ): Effect.Effect<Response> {
-  return Effect.gen(function* () {
-    const body = yield* readJsonBodyEffect<unknown>(request, { maxBytes: MAX_JSON_BODY_BYTES });
-    if (body === null) return Response.json(validJsonBodyError, { status: 400 });
-
-    const decoded = yield* Schema.decodeUnknown(schema)(body).pipe(
-      Effect.catchAll(() => Effect.succeed<unknown>(Response.json(validJsonBodyError, { status: 400 }))),
-    );
-    if (decoded instanceof Response) return decoded;
-
-    return yield* Effect.promise(() => forwardToDO(stub, durableObjectPath, request, decoded));
-  });
+  return forwardValidatedRoomMutationEffect(
+    request,
+    schema,
+    (body) => forwardToDO(stub, durableObjectPath, request, body),
+  );
 }
 
 function getRoomStub(env: Env, roomId: string): DurableObjectStub<RetroRoom> {
