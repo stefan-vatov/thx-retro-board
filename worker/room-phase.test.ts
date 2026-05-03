@@ -138,4 +138,29 @@ describe("room phase commands", () => {
     expect(state.timer).toEqual({ startedAt: 1000, durationSeconds: 120, expired: false });
     expect(calls).toEqual(["load", "broadcast:timer-updated", "save:1000"]);
   });
+
+  it("syncs review target changes through injected Effect dependencies", async () => {
+    const state = createInitialStoredState("room-effect-injected-review-target");
+    state.phase = "review";
+    state.participants = [{ id: "fac", displayName: "Fac", isFacilitator: true }];
+    state.facilitatorId = "fac";
+    const calls: string[] = [];
+
+    const result = await Effect.runPromise(setReviewTargetForRoomEffect({} as never, "fac", null, {
+      loadState: () => Effect.sync(() => {
+        calls.push("load");
+        return state;
+      }),
+      broadcast: (_host, message) => Effect.sync(() => {
+        calls.push(`broadcast:${message.type}`);
+      }),
+      saveAndBroadcastState: (_host, savedState) => Effect.sync(() => {
+        calls.push(`save:${savedState.reviewTargetKey}`);
+      }),
+    }));
+
+    expect(result).toEqual({ success: true });
+    expect(state.reviewTargetKey).toBeNull();
+    expect(calls).toEqual(["load", "broadcast:review-target-changed", "save:null"]);
+  });
 });

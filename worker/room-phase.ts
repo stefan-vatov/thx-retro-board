@@ -34,6 +34,18 @@ export const setTimerForRoomDeps: SetTimerForRoomDeps = {
   saveAndBroadcastState: saveAndBroadcastStateEffect,
 };
 
+export interface SetReviewTargetForRoomDeps {
+  loadState: (host: RoomCommandHost) => Effect.Effect<StoredState>;
+  broadcast: (host: RoomCommandHost, message: ServerToClientMessage) => Effect.Effect<void>;
+  saveAndBroadcastState: (host: RoomCommandHost, state: StoredState) => Effect.Effect<void>;
+}
+
+export const setReviewTargetForRoomDeps: SetReviewTargetForRoomDeps = {
+  loadState: (host) => Effect.promise(() => host.loadState()),
+  broadcast: (host, message) => Effect.sync(() => host.broadcast(message)),
+  saveAndBroadcastState: saveAndBroadcastStateEffect,
+};
+
 export async function setPhaseForRoom(
   host: RoomCommandHost,
   participantId: string,
@@ -117,17 +129,18 @@ export function setReviewTargetForRoomEffect(
   host: RoomCommandHost,
   participantId: string,
   reviewTargetKey: string | null,
+  deps: SetReviewTargetForRoomDeps = setReviewTargetForRoomDeps,
 ): Effect.Effect<{ success: boolean; error?: string }> {
   return Effect.gen(function* () {
-    const s = yield* Effect.promise(() => host.loadState());
+    const s = yield* deps.loadState(host);
     const validation = yield* Effect.either(validateReviewTargetChangeEffect(s, participantId, reviewTargetKey));
     if (validation._tag === "Left") {
       return { success: false, error: validation.left.message };
     }
 
     s.reviewTargetKey = validation.right.reviewTargetKey;
-    host.broadcast({ type: "review-target-changed", reviewTargetKey: validation.right.reviewTargetKey });
-    yield* saveAndBroadcastStateEffect(host, s);
+    yield* deps.broadcast(host, { type: "review-target-changed", reviewTargetKey: validation.right.reviewTargetKey });
+    yield* deps.saveAndBroadcastState(host, s);
     return { success: true };
   });
 }
