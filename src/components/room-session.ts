@@ -24,6 +24,10 @@ export function mergeRoomState(local: RoomState | null, ws: RoomState | null): R
   return local;
 }
 
+export function mergeRoomStateEffect(local: RoomState | null, ws: RoomState | null): Effect.Effect<RoomState | null> {
+  return Effect.sync(() => mergeRoomState(local, ws));
+}
+
 export function formatElapsedTime(milliseconds: number): string {
   const totalSeconds = Math.floor(milliseconds / 1000);
   const hours = Math.floor(totalSeconds / 3600);
@@ -33,6 +37,10 @@ export function formatElapsedTime(milliseconds: number): string {
     return `${hours}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
   }
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+export function formatElapsedTimeEffect(milliseconds: number): Effect.Effect<string> {
+  return Effect.sync(() => formatElapsedTime(milliseconds));
 }
 
 export function getStoredIdentityEffect(roomId: string): Effect.Effect<StoredIdentity> {
@@ -97,4 +105,8 @@ export function classifyRoomLoadError(error: unknown): RoomLoadError {
     description: "We could not check this invite because the network request failed.",
     detail: "Check your connection and retry. Your participant credentials are not included in the room link.",
   };
+}
+
+export function classifyRoomLoadErrorEffect(error: unknown): Effect.Effect<RoomLoadError> {
+  return Effect.sync(() => classifyRoomLoadError(error));
 }

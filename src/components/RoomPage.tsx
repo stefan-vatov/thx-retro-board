@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams } from "react-router-dom";
+import { Effect } from "effect";
 import {
   ApiError,
   getRoomStateEffect,
@@ -21,11 +22,11 @@ import { RoomShellHeader, RoomStatus } from "./RoomShell";
 import { JoinRoomScreen, LoadingRoomScreen, RoomLoadErrorScreen, RoomNotFoundScreen } from "./RoomStateScreens";
 import { useWriteCards } from "./use-write-cards";
 import {
-  classifyRoomLoadError,
+  classifyRoomLoadErrorEffect,
   clearStoredIdentity,
   getFacilitatorClaimToken,
   getStoredIdentity,
-  mergeRoomState,
+  mergeRoomStateEffect,
   type PageState,
   type RoomLoadError,
 } from "./room-session";
@@ -62,7 +63,7 @@ export function RoomPage() {
 
   const { state: wsState, connected, lastError, roomPurged, clearError, send } = useRoom(roomId ?? "", participantId, connectionToken);
 
-  const roomState = mergeRoomState(localRoomState, wsState);
+  const roomState = Effect.runSync(mergeRoomStateEffect(localRoomState, wsState));
   const sortedRoomColumns = roomState ? getSortedColumns(roomState) : [];
   const writeCards = useWriteCards({
     roomId,
@@ -165,7 +166,7 @@ export function RoomPage() {
         setPageState("not-found");
         return;
       }
-      setRoomLoadError(classifyRoomLoadError(error));
+      setRoomLoadError(Effect.runSync(classifyRoomLoadErrorEffect(error)));
       setPageState("load-error");
     }
   }, [roomId, participantId, identity.displayName, identity.connectionToken, resetStoredIdentity]);
@@ -369,7 +370,7 @@ export function RoomPage() {
   if (pageState === "load-error") {
     return (
       <RoomLoadErrorScreen
-        error={roomLoadError ?? classifyRoomLoadError(null)}
+        error={roomLoadError ?? Effect.runSync(classifyRoomLoadErrorEffect(null))}
         onRetry={() => void loadInitialRoom()}
       />
     );

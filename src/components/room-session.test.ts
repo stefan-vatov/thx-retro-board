@@ -2,11 +2,14 @@ import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   classifyRoomLoadError,
+  classifyRoomLoadErrorEffect,
   clearStoredIdentityEffect,
   formatElapsedTime,
+  formatElapsedTimeEffect,
   getFacilitatorClaimTokenEffect,
   getStoredIdentityEffect,
   mergeRoomState,
+  mergeRoomStateEffect,
 } from "./room-session";
 import { ApiError } from "../api";
 import type { RoomState } from "../domain";
@@ -69,14 +72,31 @@ describe("room session helpers", () => {
     expect(mergeRoomState(roomState(1), roomState(2))?.version).toBe(2);
   });
 
+  it("keeps the newest room snapshot through Effect", async () => {
+    await expect(Effect.runPromise(mergeRoomStateEffect(roomState(1), roomState(2)))).resolves.toMatchObject({
+      version: 2,
+    });
+  });
+
   it("formats elapsed retro time", () => {
     expect(formatElapsedTime(0)).toBe("0:00");
     expect(formatElapsedTime(65_000)).toBe("1:05");
     expect(formatElapsedTime(3_665_000)).toBe("1:01:05");
   });
 
+  it("formats elapsed retro time through Effect", async () => {
+    await expect(Effect.runPromise(formatElapsedTimeEffect(3_665_000))).resolves.toBe("1:01:05");
+  });
+
   it("classifies unavailable rooms without leaking credentials", () => {
     const error = classifyRoomLoadError(new ApiError("boom", 500));
+
+    expect(error.title).toBe("Room temporarily unavailable");
+    expect(error.detail).not.toMatch(/token|credential/i);
+  });
+
+  it("classifies unavailable rooms through Effect", async () => {
+    const error = await Effect.runPromise(classifyRoomLoadErrorEffect(new ApiError("boom", 500)));
 
     expect(error.title).toBe("Room temporarily unavailable");
     expect(error.detail).not.toMatch(/token|credential/i);

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Effect } from "effect";
 import {
   AlertTriangle,
   ClipboardCheck,
@@ -8,7 +9,7 @@ import {
 import type { Phase, RoomState } from "../domain";
 import { PHASE_ORDER } from "../domain";
 import { PHASE_LABELS } from "./room-labels";
-import { formatElapsedTime } from "./room-session";
+import { formatElapsedTimeEffect } from "./room-session";
 import { Alert, AlertDescription } from "./ui/alert";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -50,7 +51,7 @@ function ElapsedRetroClock({ startedAt }: { startedAt: number }) {
     return () => window.clearInterval(interval);
   }, []);
 
-  return <span className="elapsed-clock">{formatElapsedTime(Math.max(0, now - startedAt))}</span>;
+  return <span className="elapsed-clock">{Effect.runSync(formatElapsedTimeEffect(Math.max(0, now - startedAt)))}</span>;
 }
 
 export function PhaseProgress({ phase, startedAt }: { phase: Phase; startedAt: number }) {
