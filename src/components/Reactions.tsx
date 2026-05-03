@@ -1,8 +1,21 @@
-import { useEffect, useEffectEvent, useRef, useState, type CSSProperties } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { createPortal } from "react-dom";
+import { Effect } from "effect";
 import type { ReactionTarget, RoomState } from "../domain";
-import { getReactionCount, getReactionsForTarget, hasParticipantReaction, voteTargetKey } from "../domain";
+import {
+  getReactionCount,
+  getReactionsForTarget,
+  hasParticipantReaction,
+  voteTargetKey,
+} from "../domain";
 import { loadEmojiPicker } from "./emoji-picker-effect";
+import { getReactionMenuPositionEffect } from "./reaction-menu-position";
 
 interface ReactionBarProps {
   roomState: Pick<RoomState, "reactions">;
@@ -19,14 +32,31 @@ const PICKER_HEIGHT = 384;
 const PICKER_GUTTER = 12;
 const PICKER_OFFSET = 8;
 
-export function ReactionBar({ roomState, target, participantId, send, label, compact = false, stopPropagation = false }: ReactionBarProps) {
+export function ReactionBar({
+  roomState,
+  target,
+  participantId,
+  send,
+  label,
+  compact = false,
+  stopPropagation = false,
+}: ReactionBarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuStyle, setMenuStyle] = useState<CSSProperties | null>(null);
-  const [pickerReady, setPickerReady] = useState(typeof window !== "undefined" && customElements.get("emoji-picker") !== undefined);
+  const [pickerReady, setPickerReady] = useState(
+    typeof window !== "undefined" &&
+      customElements.get("emoji-picker") !== undefined,
+  );
   const addButtonRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const pickerRef = useRef<HTMLElement | null>(null);
-  const activeEmojis = Array.from(new Set(getReactionsForTarget(roomState.reactions, target).map((reaction) => reaction.emoji)));
+  const activeEmojis = Array.from(
+    new Set(
+      getReactionsForTarget(roomState.reactions, target).map(
+        (reaction) => reaction.emoji,
+      ),
+    ),
+  );
 
   useEffect(() => {
     if (pickerReady) return;
@@ -64,9 +94,12 @@ export function ReactionBar({ roomState, target, participantId, send, label, com
     async function handleEmojiClick(event: Event) {
       if (handledSelection) return;
       handledSelection = true;
-      const rawDetail = (event as CustomEvent<
-        { unicode?: string; emoji?: { unicode?: string } } | Promise<{ unicode?: string; emoji?: { unicode?: string } }>
-      >).detail;
+      const rawDetail = (
+        event as CustomEvent<
+          | { unicode?: string; emoji?: { unicode?: string } }
+          | Promise<{ unicode?: string; emoji?: { unicode?: string } }>
+        >
+      ).detail;
       const detail = await rawDetail;
       const unicode = detail.unicode ?? detail.emoji?.unicode;
       if (unicode) handlePickedEmoji(unicode);
@@ -88,19 +121,27 @@ export function ReactionBar({ roomState, target, participantId, send, label, com
       if (!button) return;
 
       const rect = button.getBoundingClientRect();
-      const width = Math.min(PICKER_WIDTH, window.innerWidth - PICKER_GUTTER * 2);
-      const height = Math.min(PICKER_HEIGHT, window.innerHeight - PICKER_GUTTER * 2);
-      const spaceAbove = rect.top - PICKER_GUTTER;
-      const spaceBelow = window.innerHeight - rect.bottom - PICKER_GUTTER;
-      const shouldOpenAbove = spaceAbove >= height || spaceAbove > spaceBelow;
-      const rawTop = shouldOpenAbove
-        ? rect.top - height - PICKER_OFFSET
-        : rect.bottom + PICKER_OFFSET;
-      const top = Math.max(PICKER_GUTTER, Math.min(rawTop, window.innerHeight - height - PICKER_GUTTER));
-      const rawLeft = rect.right - width + PICKER_OFFSET;
-      const left = Math.max(PICKER_GUTTER, Math.min(rawLeft, window.innerWidth - width - PICKER_GUTTER));
-
-      setMenuStyle({ top, left, width, height });
+      setMenuStyle(
+        Effect.runSync(
+          getReactionMenuPositionEffect({
+            anchorRect: {
+              top: rect.top,
+              right: rect.right,
+              bottom: rect.bottom,
+            },
+            viewport: {
+              width: window.innerWidth,
+              height: window.innerHeight,
+            },
+            picker: {
+              width: PICKER_WIDTH,
+              height: PICKER_HEIGHT,
+              gutter: PICKER_GUTTER,
+              offset: PICKER_OFFSET,
+            },
+          }),
+        ),
+      );
     }
 
     updateMenuPosition();
@@ -120,7 +161,11 @@ export function ReactionBar({ roomState, target, participantId, send, label, com
     function handlePointerDown(event: PointerEvent) {
       const targetNode = event.target instanceof Node ? event.target : null;
       if (!targetNode) return;
-      if (menuRef.current?.contains(targetNode) || addButtonRef.current?.contains(targetNode)) return;
+      if (
+        menuRef.current?.contains(targetNode) ||
+        addButtonRef.current?.contains(targetNode)
+      )
+        return;
       setMenuOpen(false);
     }
 
@@ -139,34 +184,49 @@ export function ReactionBar({ roomState, target, participantId, send, label, com
     };
   }, [menuOpen]);
 
-  const reactionMenu = menuOpen && menuStyle && typeof document !== "undefined"
-    ? createPortal(
-      <div
-        ref={menuRef}
-        className="reaction-menu reaction-menu--portal"
-        style={menuStyle}
-        onClick={(event) => {
-          if (stopPropagation) event.stopPropagation();
-        }}
-        onKeyDown={(event) => {
-          if (stopPropagation) event.stopPropagation();
-        }}
-      >
-        {pickerReady ? (
-          <emoji-picker ref={pickerRef} className="reaction-picker" />
-        ) : (
-          <div className="reaction-picker reaction-picker--loading" role="status">Loading emojis…</div>
-        )}
-      </div>,
-      document.body,
-    )
-    : null;
+  const reactionMenu =
+    menuOpen && menuStyle && typeof document !== "undefined"
+      ? createPortal(
+          <div
+            ref={menuRef}
+            className="reaction-menu reaction-menu--portal"
+            style={menuStyle}
+            onClick={(event) => {
+              if (stopPropagation) event.stopPropagation();
+            }}
+            onKeyDown={(event) => {
+              if (stopPropagation) event.stopPropagation();
+            }}
+          >
+            {pickerReady ? (
+              <emoji-picker ref={pickerRef} className="reaction-picker" />
+            ) : (
+              <div
+                className="reaction-picker reaction-picker--loading"
+                role="status"
+              >
+                Loading emojis…
+              </div>
+            )}
+          </div>,
+          document.body,
+        )
+      : null;
 
   return (
-    <div className={`reaction-bar${compact ? " reaction-bar--compact" : ""}`} aria-label={`Reactions for ${label}`} data-reaction-target={voteTargetKey(target)}>
+    <div
+      className={`reaction-bar${compact ? " reaction-bar--compact" : ""}`}
+      aria-label={`Reactions for ${label}`}
+      data-reaction-target={voteTargetKey(target)}
+    >
       {activeEmojis.map((emoji) => {
         const count = getReactionCount(roomState.reactions, target, emoji);
-        const selected = hasParticipantReaction(roomState.reactions, participantId, target, emoji);
+        const selected = hasParticipantReaction(
+          roomState.reactions,
+          participantId,
+          target,
+          emoji,
+        );
         return (
           <button
             key={emoji}
@@ -179,7 +239,9 @@ export function ReactionBar({ roomState, target, participantId, send, label, com
             aria-pressed={selected}
             aria-label={`${selected ? "Remove" : "Add"} ${emoji} reaction ${count > 0 ? `(${count})` : ""} for ${label}`}
           >
-            <span className="reaction-pill__emoji" aria-hidden="true">{emoji}</span>
+            <span className="reaction-pill__emoji" aria-hidden="true">
+              {emoji}
+            </span>
             {count > 0 && <span className="reaction-pill__count">{count}</span>}
           </button>
         );
