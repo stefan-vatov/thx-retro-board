@@ -17,8 +17,12 @@ describe("room websocket request handling", () => {
   });
 
   it("rejects invalid websocket tickets through the Effect API", async () => {
+    let consumedTicket: string | null | undefined;
     const response = await Effect.runPromise(handleRoomWebSocketRequestEffect({
-      consumeWebSocketTicket: async () => ({ success: false, error: "Missing or invalid websocket ticket" }),
+      consumeWebSocketTicket: async (ticket) => {
+        consumedTicket = ticket;
+        return { success: false, error: "Missing or invalid websocket ticket" };
+      },
       loadState: async () => {
         throw new Error("should not load state");
       },
@@ -27,8 +31,11 @@ describe("room websocket request handling", () => {
       setSession: () => {},
       acceptWebSocket: () => {},
       broadcast: () => {},
-    }, new Request("https://example.test/ws", { headers: { Upgrade: "websocket" } })));
+    }, new Request("https://example.test/ws", { headers: { Upgrade: "websocket" } }), {
+      getWebSocketTicket: () => Effect.succeed("deterministic-ticket"),
+    }));
 
+    expect(consumedTicket).toBe("deterministic-ticket");
     expect(response?.status).toBe(403);
     expect(await response?.json()).toEqual({ error: "Missing or invalid websocket ticket" });
   });

@@ -14,6 +14,14 @@ export interface RoomWebSocketHost {
   broadcast(message: ServerToClientMessage, excludeId?: string): void;
 }
 
+export interface RoomWebSocketDeps {
+  getWebSocketTicket: (request: Request) => Effect.Effect<string | null>;
+}
+
+export const roomWebSocketDeps: RoomWebSocketDeps = {
+  getWebSocketTicket: getWebSocketTicketEffect,
+};
+
 export async function handleRoomWebSocketRequest(host: RoomWebSocketHost, request: Request): Promise<Response | null> {
   return Effect.runPromise(handleRoomWebSocketRequestEffect(host, request));
 }
@@ -21,6 +29,7 @@ export async function handleRoomWebSocketRequest(host: RoomWebSocketHost, reques
 export function handleRoomWebSocketRequestEffect(
   host: RoomWebSocketHost,
   request: Request,
+  deps: RoomWebSocketDeps = roomWebSocketDeps,
 ): Effect.Effect<Response | null> {
   return Effect.gen(function* () {
   const url = new URL(request.url);
@@ -31,7 +40,7 @@ export function handleRoomWebSocketRequestEffect(
   const pair = new WebSocketPair();
   const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
 
-  const ticketValue = yield* getWebSocketTicketEffect(request);
+  const ticketValue = yield* deps.getWebSocketTicket(request);
   const ticket = yield* Effect.promise(() => host.consumeWebSocketTicket(ticketValue));
   if (!ticket.success) {
     return new Response(JSON.stringify({ error: ticket.error }), { status: 403 });
