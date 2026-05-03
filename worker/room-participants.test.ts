@@ -80,4 +80,46 @@ describe("room participant commands", () => {
     expect(result).toMatchObject({ success: true, connectionToken: "deterministic-token" });
     expect(state.connectionTokens.p1).toBe("deterministic-token");
   });
+
+  it("joins participants through injected Effect dependencies", async () => {
+    const state = createInitialStoredState("room-a");
+    const calls: string[] = [];
+
+    const result = await Effect.runPromise(joinRoomParticipantEffect({} as never, "p1", "Pat", undefined, undefined, {
+      loadState: () => Effect.sync(() => {
+        calls.push("load");
+        return state;
+      }),
+      cancelEmptyRoomPurge: () => Effect.sync(() => {
+        calls.push("cancel-purge");
+      }),
+      generateConnectionToken: () => Effect.succeed("deterministic-token"),
+      saveState: () => Effect.sync(() => {
+        calls.push("save");
+      }),
+      broadcast: (_host, message, exceptParticipantId) => Effect.sync(() => {
+        calls.push(`broadcast:${message.type}:${exceptParticipantId ?? "all"}`);
+      }),
+      broadcastState: (_host, _state, exceptParticipantId) => Effect.sync(() => {
+        calls.push(`state:${exceptParticipantId ?? "all"}`);
+      }),
+      getSessionCount: () => Effect.succeed(0),
+      scheduleEmptyRoomPurge: () => Effect.sync(() => {
+        calls.push("schedule-purge");
+      }),
+      closeParticipantSocket: () => Effect.void,
+      deleteOutstandingWebSocketTicket: () => Effect.void,
+    }));
+
+    expect(result).toMatchObject({ success: true, connectionToken: "deterministic-token" });
+    expect(state.participants).toEqual([{ id: "p1", displayName: "Pat", isFacilitator: true }]);
+    expect(calls).toEqual([
+      "load",
+      "cancel-purge",
+      "save",
+      "broadcast:participant-joined:p1",
+      "state:p1",
+      "schedule-purge",
+    ]);
+  });
 });

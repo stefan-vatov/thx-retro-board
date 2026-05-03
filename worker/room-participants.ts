@@ -4,6 +4,7 @@ import { toRoomStateEffect } from "./room-presenter";
 import { generateTokenEffect } from "./room-tickets";
 import { validateParticipantJoinEffect } from "./validation";
 import type { RoomCommandHost } from "./room-command-host";
+import type { StoredState } from "./room-types";
 
 export interface RoomParticipantHost extends RoomCommandHost {
   cancelEmptyRoomPurge(): Promise<void>;
@@ -14,11 +15,44 @@ export interface RoomParticipantHost extends RoomCommandHost {
 }
 
 export interface RoomParticipantDeps {
+  loadState: (host: RoomParticipantHost) => Effect.Effect<StoredState>;
+  cancelEmptyRoomPurge: (host: RoomParticipantHost) => Effect.Effect<void>;
+  closeParticipantSocket: (host: RoomParticipantHost, participantId: string, reason: string) => Effect.Effect<void>;
+  deleteOutstandingWebSocketTicket: (host: RoomParticipantHost, participantId: string) => Effect.Effect<void>;
   generateConnectionToken: () => Effect.Effect<string>;
+  saveState: (host: RoomParticipantHost) => Effect.Effect<void>;
+  broadcast: (
+    host: RoomParticipantHost,
+    message: ServerToClientMessage,
+    exceptParticipantId?: string,
+  ) => Effect.Effect<void>;
+  broadcastState: (
+    host: RoomParticipantHost,
+    state: StoredState,
+    exceptParticipantId?: string,
+  ) => Effect.Effect<void>;
+  getSessionCount: (host: RoomParticipantHost) => Effect.Effect<number>;
+  scheduleEmptyRoomPurge: (host: RoomParticipantHost) => Effect.Effect<void>;
 }
 
 export const roomParticipantDeps: RoomParticipantDeps = {
+  loadState: (host) => Effect.promise(() => host.loadState()),
+  cancelEmptyRoomPurge: (host) => Effect.promise(() => host.cancelEmptyRoomPurge()),
+  closeParticipantSocket: (host, participantId, reason) => Effect.sync(() => {
+    host.closeParticipantSocket(participantId, reason);
+  }),
+  deleteOutstandingWebSocketTicket: (host, participantId) =>
+    Effect.promise(() => host.deleteOutstandingWebSocketTicket(participantId)),
   generateConnectionToken: generateTokenEffect,
+  saveState: (host) => Effect.promise(() => host.saveState()),
+  broadcast: (host, message, exceptParticipantId) => Effect.sync(() => {
+    host.broadcast(message, exceptParticipantId);
+  }),
+  broadcastState: (host, state, exceptParticipantId) => Effect.sync(() => {
+    host.broadcastState(state, exceptParticipantId);
+  }),
+  getSessionCount: (host) => Effect.sync(() => host.getSessionCount()),
+  scheduleEmptyRoomPurge: (host) => Effect.promise(() => host.scheduleEmptyRoomPurge()),
 };
 
 export async function joinRoomParticipant(
@@ -37,10 +71,11 @@ export function joinRoomParticipantEffect(
   displayName: string,
   connectionToken?: string,
   facilitatorClaimToken?: unknown,
-  deps: RoomParticipantDeps = roomParticipantDeps,
+  deps: Partial<RoomParticipantDeps> = {},
 ): Effect.Effect<{ success: boolean; error?: string; state?: RoomState; connectionToken?: string }> {
   return Effect.gen(function* () {
-    const s = yield* Effect.promise(() => host.loadState());
+    const d = { ...roomParticipantDeps, ...deps };
+    const s = yield* d.loadState(host);
     const validation = yield* Effect.either(validateParticipantJoinEffect(
       s,
       participantId,
@@ -61,27 +96,27 @@ export function joinRoomParticipantEffect(
           participant.id === participantId ? { ...participant, isFacilitator: true } : participant,
         );
       }
-      yield* Effect.promise(() => host.cancelEmptyRoomPurge());
-      host.closeParticipantSocket(participantId, "Participant reconnected");
-      yield* Effect.promise(() => host.deleteOutstandingWebSocketTicket(participantId));
-      const token = yield* deps.generateConnectionToken();
+      yield* d.cancelEmptyRoomPurge(host);
+      yield* d.closeParticipantSocket(host, participantId, "Participant reconnected");
+      yield* d.deleteOutstandingWebSocketTicket(host, participantId);
+      const token = yield* d.generateConnectionToken();
       s.connectionTokens[participantId] = token;
-      yield* Effect.promise(() => host.saveState());
+      yield* d.saveState(host);
 
-      host.broadcast({
+      yield* d.broadcast(host, {
         type: "participant-joined",
         participant: validated.existing,
       }, participantId);
 
-      if (host.getSessionCount() === 0) {
-        yield* Effect.promise(() => host.scheduleEmptyRoomPurge());
+      if ((yield* d.getSessionCount(host)) === 0) {
+        yield* d.scheduleEmptyRoomPurge(host);
       }
 
       const state = yield* toRoomStateEffect(s, participantId);
       return { success: true, state, connectionToken: token };
     }
 
-    yield* Effect.promise(() => host.cancelEmptyRoomPurge());
+    yield* d.cancelEmptyRoomPurge(host);
     const participant: Participant = {
       id: participantId,
       displayName: validated.displayName,
@@ -92,19 +127,19 @@ export function joinRoomParticipantEffect(
       s.facilitatorId = participantId;
       s.facilitatorClaimToken = null;
     }
-    const token = yield* deps.generateConnectionToken();
+    const token = yield* d.generateConnectionToken();
     s.connectionTokens[participantId] = token;
-    yield* Effect.promise(() => host.saveState());
+    yield* d.saveState(host);
 
     const broadcast: ServerToClientMessage = {
       type: "participant-joined",
       participant,
     };
-    host.broadcast(broadcast, participantId);
-    host.broadcastState(s, participantId);
+    yield* d.broadcast(host, broadcast, participantId);
+    yield* d.broadcastState(host, s, participantId);
 
-    if (host.getSessionCount() === 0) {
-      yield* Effect.promise(() => host.scheduleEmptyRoomPurge());
+    if ((yield* d.getSessionCount(host)) === 0) {
+      yield* d.scheduleEmptyRoomPurge(host);
     }
 
     const state = yield* toRoomStateEffect(s, participantId);
