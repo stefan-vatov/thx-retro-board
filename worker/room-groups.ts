@@ -4,7 +4,7 @@ import { groupVoteTarget, sameVoteTarget } from "../src/domain";
 import { saveAndBroadcastStateEffect } from "./room-command-effect";
 import type { RoomCommandHost } from "./room-command-host";
 import { normalizePairwiseChoices } from "./room-normalize";
-import type { ItemReorderPreconditions, MoveItemPreconditions } from "./room-types";
+import type { ItemReorderPreconditions, MoveItemPreconditions, StoredState } from "./room-types";
 import {
   validateGroupCreateEffect,
   validateGroupDeleteEffect,
@@ -13,6 +13,18 @@ import {
   validateItemMoveEffect,
   validateItemReorderEffect,
 } from "./validation";
+
+export interface CreateGroupForRoomDeps {
+  loadState: (host: RoomCommandHost) => Effect.Effect<StoredState>;
+  generateGroupId: () => Effect.Effect<string>;
+  saveAndBroadcastState: (host: RoomCommandHost, state: StoredState) => Effect.Effect<void>;
+}
+
+export const createGroupForRoomDeps: CreateGroupForRoomDeps = {
+  loadState: (host) => Effect.promise(() => host.loadState()),
+  generateGroupId: () => Effect.sync(() => crypto.randomUUID()),
+  saveAndBroadcastState: saveAndBroadcastStateEffect,
+};
 
 export async function createGroupForRoom(
   host: RoomCommandHost,
@@ -28,22 +40,23 @@ export function createGroupForRoomEffect(
   participantId: string,
   rawName: string,
   columnId?: string,
+  deps: CreateGroupForRoomDeps = createGroupForRoomDeps,
 ): Effect.Effect<{ success: boolean; error?: string; group?: Group }> {
   return Effect.gen(function* () {
-    const s = yield* Effect.promise(() => host.loadState());
+    const s = yield* deps.loadState(host);
     const validation = yield* Effect.either(validateGroupCreateEffect(s, participantId, rawName, columnId));
     if (validation._tag === "Left") {
       return { success: false, error: validation.left.message };
     }
 
     const group: Group = {
-      id: crypto.randomUUID(),
+      id: yield* deps.generateGroupId(),
       name: validation.right.name,
       columnId: validation.right.columnId,
       order: validation.right.order,
     };
     s.groups.push(group);
-    yield* saveAndBroadcastStateEffect(host, s);
+    yield* deps.saveAndBroadcastState(host, s);
 
     return { success: true, group };
   });

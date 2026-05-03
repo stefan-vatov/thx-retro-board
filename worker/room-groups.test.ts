@@ -68,6 +68,30 @@ describe("room group commands", () => {
     expect(result).toMatchObject({ success: true, group: { name: "Focus", columnId: "glad" } });
   });
 
+  it("creates groups through injected Effect dependencies", async () => {
+    const state = createInitialStoredState("room-a");
+    state.phase = "organise";
+    state.participants = [{ id: "p1", displayName: "P1", isFacilitator: false }];
+    const calls: string[] = [];
+
+    const result = await Effect.runPromise(createGroupForRoomEffect({} as never, "p1", "Focus", "glad", {
+      loadState: () => Effect.sync(() => {
+        calls.push("load");
+        return state;
+      }),
+      generateGroupId: () => Effect.succeed("group-injected"),
+      saveAndBroadcastState: (_host, savedState) => Effect.sync(() => {
+        calls.push(`save:${savedState.groups.at(-1)?.id}`);
+      }),
+    }));
+
+    expect(result).toEqual({
+      success: true,
+      group: { id: "group-injected", name: "Focus", columnId: "glad", order: 0 },
+    });
+    expect(calls).toEqual(["load", "save:group-injected"]);
+  });
+
   it("edits groups through the Effect API", async () => {
     const state = createInitialStoredState("room-a");
     state.phase = "organise";
