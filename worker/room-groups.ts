@@ -70,6 +70,16 @@ export const reorderItemsForRoomDeps: ReorderItemsForRoomDeps = {
   saveAndBroadcastState: saveAndBroadcastStateEffect,
 };
 
+export interface MoveItemToGroupForRoomDeps {
+  loadState: (host: RoomCommandHost) => Effect.Effect<StoredState>;
+  saveAndBroadcastState: (host: RoomCommandHost, state: StoredState) => Effect.Effect<void>;
+}
+
+export const moveItemToGroupForRoomDeps: MoveItemToGroupForRoomDeps = {
+  loadState: (host) => Effect.promise(() => host.loadState()),
+  saveAndBroadcastState: saveAndBroadcastStateEffect,
+};
+
 export async function createGroupForRoom(
   host: RoomCommandHost,
   participantId: string,
@@ -252,9 +262,10 @@ export function moveItemToGroupForRoomEffect(
   targetGroupId: string | null,
   targetIndex: number,
   preconditions?: Partial<MoveItemPreconditions>,
+  deps: MoveItemToGroupForRoomDeps = moveItemToGroupForRoomDeps,
 ): Effect.Effect<{ success: boolean; error?: string }> {
   return Effect.gen(function* () {
-    const s = yield* Effect.promise(() => host.loadState());
+    const s = yield* deps.loadState(host);
     const validation = yield* Effect.either(validateItemMoveEffect(
       s,
       participantId,
@@ -268,7 +279,7 @@ export function moveItemToGroupForRoomEffect(
     }
 
     s.items = validation.right.items;
-    yield* saveAndBroadcastStateEffect(host, s);
+    yield* deps.saveAndBroadcastState(host, s);
 
     return { success: true };
   });

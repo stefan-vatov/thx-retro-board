@@ -255,6 +255,36 @@ describe("room group commands", () => {
     ]);
   });
 
+  it("moves items through injected Effect dependencies", async () => {
+    const state = createInitialStoredState("room-a");
+    state.phase = "organise";
+    state.participants = [{ id: "p1", displayName: "P1", isFacilitator: false }];
+    state.groups = [{ id: "group-a", name: "A", columnId: "mad", order: 0 }];
+    state.items = [
+      { id: "item-a", text: "A", authorId: "p1", columnId: "mad", groupId: null, order: 0 },
+      { id: "item-b", text: "B", authorId: "p1", columnId: "mad", groupId: null, order: 1 },
+    ];
+    const calls: string[] = [];
+
+    const result = await Effect.runPromise(moveItemToGroupForRoomEffect({} as never, "p1", "item-b", "group-a", 0, {
+      expectedVersion: state.version,
+      sourceGroupId: null,
+      sourceIndex: 1,
+    }, {
+      loadState: () => Effect.sync(() => {
+        calls.push("load");
+        return state;
+      }),
+      saveAndBroadcastState: (_host, savedState) => Effect.sync(() => {
+        calls.push(`save:${savedState.items.map((item) => `${item.id}:${item.groupId ?? "none"}:${item.order}`).join(",")}`);
+      }),
+    }));
+
+    expect(result).toEqual({ success: true });
+    expect(state.items.find((item) => item.id === "item-b")).toMatchObject({ groupId: "group-a", order: 0 });
+    expect(calls).toEqual(["load", "save:item-a:none:0,item-b:group-a:0"]);
+  });
+
   it("deletes groups through the Effect API", async () => {
     const state = createInitialStoredState("room-a");
     state.phase = "organise";
