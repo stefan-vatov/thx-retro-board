@@ -7,9 +7,19 @@ import {
   createWebSocketTicketForRoom,
   createWebSocketTicketForRoomEffect,
   deleteOutstandingWebSocketTicketForRoomEffect,
+  validateWebSocketTicketStringEffect,
 } from "./room-websocket-tickets";
 
 describe("room websocket ticket commands", () => {
+  it("validates websocket ticket strings through Effect", async () => {
+    await expect(Effect.runPromise(validateWebSocketTicketStringEffect(
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ))).resolves.toBe("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+
+    const exit = await Effect.runPromiseExit(validateWebSocketTicketStringEffect("not-a-ticket"));
+    expect(exit._tag).toBe("Failure");
+  });
+
   it("creates one outstanding websocket ticket per participant", async () => {
     const state = createInitialStoredState("room-a");
     state.participants = [{ id: "p1", displayName: "P1", isFacilitator: true }];

@@ -13,6 +13,24 @@ export interface WebSocketTicketHost extends WebSocketTicketStorage {
   loadState(): Promise<StoredState>;
 }
 
+export class WebSocketTicketValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WebSocketTicketValidationError";
+  }
+}
+
+export function validateWebSocketTicketStringEffect(
+  ticket: string | null,
+): Effect.Effect<string, WebSocketTicketValidationError> {
+  return Effect.gen(function* () {
+    if (typeof ticket !== "string" || ticket.length !== 64 || !/^[a-f0-9]+$/.test(ticket)) {
+      return yield* Effect.fail(new WebSocketTicketValidationError("Missing or invalid websocket ticket"));
+    }
+    return ticket;
+  });
+}
+
 export async function deleteOutstandingWebSocketTicketForRoom(
   storage: WebSocketTicketStorage,
   participantId: string,
@@ -82,11 +100,12 @@ export function consumeWebSocketTicketForRoomEffect(
   now = Date.now(),
 ): Effect.Effect<{ success: true; participantId: string } | { success: false; error: string }> {
   return Effect.gen(function* () {
-    if (typeof ticket !== "string" || ticket.length !== 64 || !/^[a-f0-9]+$/.test(ticket)) {
-      return { success: false, error: "Missing or invalid websocket ticket" };
+    const validatedTicket = yield* Effect.either(validateWebSocketTicketStringEffect(ticket));
+    if (validatedTicket._tag === "Left") {
+      return { success: false, error: validatedTicket.left.message };
     }
 
-    const key = `ws-ticket:${ticket}`;
+    const key = `ws-ticket:${validatedTicket.right}`;
     const record = yield* Effect.promise(() => host.get<WebSocketTicket>(key));
     yield* Effect.promise(() => host.delete(key));
     if (
@@ -98,7 +117,7 @@ export function consumeWebSocketTicketForRoomEffect(
     }
     const participantTicketKey = `ws-ticket-by-participant:${record.participantId}`;
     const currentParticipantTicket = yield* Effect.promise(() => host.get<string>(participantTicketKey));
-    if (currentParticipantTicket === ticket) {
+    if (currentParticipantTicket === validatedTicket.right) {
       yield* Effect.promise(() => host.delete(participantTicketKey));
     }
     if (record.expiresAt < now) {
