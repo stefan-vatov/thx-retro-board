@@ -13,6 +13,28 @@ export interface RoomWebSocketEventHost {
   scheduleEmptyRoomPurge(): Promise<void>;
 }
 
+export interface RoomWebSocketCloseDeps {
+  getSession: (host: RoomWebSocketEventHost, participantId: string) => Effect.Effect<WebSocket | undefined>;
+  removeSession: (host: RoomWebSocketEventHost, participantId: string) => Effect.Effect<void>;
+  removeRealtimeParticipant: (host: RoomWebSocketEventHost, participantId: string) => Effect.Effect<void>;
+  broadcast: (host: RoomWebSocketEventHost, message: ServerToClientMessage) => Effect.Effect<void>;
+  scheduleEmptyRoomPurge: (host: RoomWebSocketEventHost) => Effect.Effect<void>;
+}
+
+export const roomWebSocketCloseDeps: RoomWebSocketCloseDeps = {
+  getSession: (host, participantId) => Effect.sync(() => host.getSession(participantId)),
+  removeSession: (host, participantId) => Effect.sync(() => {
+    host.removeSession(participantId);
+  }),
+  removeRealtimeParticipant: (host, participantId) => Effect.sync(() => {
+    host.removeRealtimeParticipant(participantId);
+  }),
+  broadcast: (host, message) => Effect.sync(() => {
+    host.broadcast(message);
+  }),
+  scheduleEmptyRoomPurge: (host) => Effect.promise(() => host.scheduleEmptyRoomPurge()),
+};
+
 export async function handleRoomWebSocketMessage(
   host: RoomWebSocketEventHost,
   ws: WebSocket,
@@ -66,16 +88,20 @@ export function handleRoomWebSocketClose(host: RoomWebSocketEventHost, ws: WebSo
   void Effect.runPromise(handleRoomWebSocketCloseEffect(host, ws));
 }
 
-export function handleRoomWebSocketCloseEffect(host: RoomWebSocketEventHost, ws: WebSocket): Effect.Effect<void> {
+export function handleRoomWebSocketCloseEffect(
+  host: RoomWebSocketEventHost,
+  ws: WebSocket,
+  deps: RoomWebSocketCloseDeps = roomWebSocketCloseDeps,
+): Effect.Effect<void> {
   return Effect.gen(function* () {
     const attachment = ws.deserializeAttachment() as { participantId: string } | null;
     const participantId = attachment?.participantId;
     if (!participantId) return;
 
-    if (host.getSession(participantId) !== ws) return;
-    host.removeSession(participantId);
-    host.removeRealtimeParticipant(participantId);
-    host.broadcast({ type: "participant-left", participantId });
-    yield* Effect.promise(() => host.scheduleEmptyRoomPurge());
+    if ((yield* deps.getSession(host, participantId)) !== ws) return;
+    yield* deps.removeSession(host, participantId);
+    yield* deps.removeRealtimeParticipant(host, participantId);
+    yield* deps.broadcast(host, { type: "participant-left", participantId });
+    yield* deps.scheduleEmptyRoomPurge(host);
   });
 }

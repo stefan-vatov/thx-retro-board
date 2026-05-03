@@ -101,6 +101,34 @@ describe("room websocket event handling", () => {
     expect(host.purgeSchedules).toBe(1);
   });
 
+  it("removes connected participants through injected close Effect dependencies", async () => {
+    const socket = new TestSocket("p1");
+    const calls: string[] = [];
+
+    await Effect.runPromise(handleRoomWebSocketCloseEffect({} as never, socket as unknown as WebSocket, {
+      getSession: () => Effect.succeed(socket as unknown as WebSocket),
+      removeSession: (_host, participantId) => Effect.sync(() => {
+        calls.push(`remove-session:${participantId}`);
+      }),
+      removeRealtimeParticipant: (_host, participantId) => Effect.sync(() => {
+        calls.push(`remove-realtime:${participantId}`);
+      }),
+      broadcast: (_host, message) => Effect.sync(() => {
+        calls.push(`broadcast:${message.type}`);
+      }),
+      scheduleEmptyRoomPurge: () => Effect.sync(() => {
+        calls.push("schedule-purge");
+      }),
+    }));
+
+    expect(calls).toEqual([
+      "remove-session:p1",
+      "remove-realtime:p1",
+      "broadcast:participant-left",
+      "schedule-purge",
+    ]);
+  });
+
   it("ignores close events for obsolete sockets through the close Effect", async () => {
     const activeSocket = new TestSocket("p1");
     const staleSocket = new TestSocket("p1");
