@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import type { RetroItem, VoteTarget } from "../../src/domain";
+import type { ActionItem, RetroItem, VoteTarget } from "../../src/domain";
 import {
   isValidActionText,
   isValidItemText,
@@ -13,6 +13,8 @@ import type { StoredState } from "../room-types";
 import { normalizeReviewTargetKey, RoomMutationValidationError } from "./shared";
 
 type ReviewActionValidationState = Pick<StoredState, "participants" | "phase">;
+type ReviewActionEditValidationState = Pick<StoredState, "participants" | "phase" | "actions">;
+type ReviewActionDeleteValidationState = Pick<StoredState, "participants" | "phase" | "actions">;
 type WriteItemCreateValidationState = Pick<StoredState, "participants" | "phase" | "items" | "columns">;
 type WriteItemEditValidationState = Pick<StoredState, "participants" | "phase" | "items">;
 type WriteItemDeleteValidationState = Pick<StoredState, "participants" | "phase" | "items">;
@@ -35,6 +37,47 @@ export function validateReviewActionEffect(
       return yield* Effect.fail(new RoomMutationValidationError("Action text cannot be empty"));
     }
     return { text: sanitizeActionText(rawText) };
+  });
+}
+
+export function validateReviewActionEditEffect(
+  state: ReviewActionEditValidationState,
+  participantId: string,
+  actionId: string,
+  rawText: string,
+): Effect.Effect<{ action: ActionItem }, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    const validation = yield* validateReviewActionEffect(state, participantId, rawText);
+    if (typeof actionId !== "string" || actionId.trim().length === 0) {
+      return yield* Effect.fail(new RoomMutationValidationError("Action not found"));
+    }
+    const existing = (state.actions ?? []).find((action) => action.id === actionId);
+    if (!existing) {
+      return yield* Effect.fail(new RoomMutationValidationError("Action not found"));
+    }
+    return { action: { ...existing, text: validation.text } };
+  });
+}
+
+export function validateReviewActionDeleteEffect(
+  state: ReviewActionDeleteValidationState,
+  participantId: string,
+  actionId: string,
+): Effect.Effect<{ actionId: string }, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    if (state.phase !== "review") {
+      return yield* Effect.fail(new RoomMutationValidationError("Cannot delete actions outside review phase"));
+    }
+    if (!state.participants.some((participant) => participant.id === participantId)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Participant not found"));
+    }
+    if (typeof actionId !== "string" || actionId.trim().length === 0) {
+      return yield* Effect.fail(new RoomMutationValidationError("Action not found"));
+    }
+    if (!(state.actions ?? []).some((action) => action.id === actionId)) {
+      return yield* Effect.fail(new RoomMutationValidationError("Action not found"));
+    }
+    return { actionId };
   });
 }
 

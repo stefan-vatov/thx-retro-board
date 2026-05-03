@@ -12,6 +12,8 @@ import {
   validateWriteItemEditEffect,
   validateReviewTargetChangeEffect,
   validateReviewActionEffect,
+  validateReviewActionDeleteEffect,
+  validateReviewActionEditEffect,
   validateTimerChangeEffect,
 } from "./validation";
 
@@ -183,11 +185,19 @@ describe("RetroRoom validation: participant interactions", () => {
     const state = {
       participants: [{ id: "p1", displayName: "Pat", isFacilitator: false }],
       phase: "review",
-      actions: [],
+      actions: [{ id: "action-1", text: "Old", authorId: "p1", order: 0 }],
     };
   
     await expect(Effect.runPromise(validateReviewActionEffect(state, "p1", "Follow up"))).resolves.toEqual({
       text: "Follow up",
+    });
+
+    await expect(Effect.runPromise(validateReviewActionEditEffect(state, "p1", "action-1", "  New text  "))).resolves.toEqual({
+      action: { id: "action-1", text: "New text", authorId: "p1", order: 0 },
+    });
+
+    await expect(Effect.runPromise(validateReviewActionDeleteEffect(state, "p1", "action-1"))).resolves.toEqual({
+      actionId: "action-1",
     });
   
     const blankText = await Effect.runPromiseExit(validateReviewActionEffect(state, "p1", "   "));
@@ -195,6 +205,9 @@ describe("RetroRoom validation: participant interactions", () => {
   
     const wrongPhase = await Effect.runPromiseExit(validateReviewActionEffect({ ...state, phase: "finalize" }, "p1", "Follow up"));
     expect(Exit.isFailure(wrongPhase)).toBe(true);
+
+    const missingAction = await Effect.runPromiseExit(validateReviewActionEditEffect(state, "p1", "missing", "Follow up"));
+    expect(Exit.isFailure(missingAction)).toBe(true);
   });
   
   it("validates write item creation through Effect before state changes", async () => {

@@ -3,7 +3,11 @@ import type { ActionItem } from "../src/domain";
 import { createActionItem } from "../src/domain";
 import { MAX_ACTIONS_PER_ROOM } from "./room-types";
 import type { RoomCommandHost } from "./room-command-host";
-import { validateReviewActionEffect } from "./validation";
+import {
+  validateReviewActionDeleteEffect,
+  validateReviewActionEditEffect,
+  validateReviewActionEffect,
+} from "./validation";
 
 export async function createActionForRoom(
   host: RoomCommandHost,
@@ -60,7 +64,7 @@ export function editActionForRoomEffect(
 ): Effect.Effect<{ success: boolean; error?: string; action?: ActionItem }> {
   return Effect.gen(function* () {
     const s = yield* Effect.promise(() => host.loadState());
-    const validation = yield* Effect.either(validateReviewActionEffect(s, participantId, rawText));
+    const validation = yield* Effect.either(validateReviewActionEditEffect(s, participantId, actionId, rawText));
     if (validation._tag === "Left") {
       const message = validation.left.message;
       return {
@@ -68,21 +72,10 @@ export function editActionForRoomEffect(
         error: message === "Cannot change actions outside review phase" ? "Cannot edit actions outside review phase" : message,
       };
     }
-    if (typeof actionId !== "string" || actionId.trim().length === 0) {
-      return { success: false, error: "Action not found" };
-    }
 
-    const actionIndex = (s.actions ?? []).findIndex((action) => action.id === actionId);
-    if (actionIndex === -1) {
-      return { success: false, error: "Action not found" };
-    }
-
+    const actionIndex = (s.actions ?? []).findIndex((action) => action.id === validation.right.action.id);
     s.actions = [...(s.actions ?? [])];
-    const existing = s.actions[actionIndex];
-    if (!existing) {
-      return { success: false, error: "Action not found" };
-    }
-    s.actions[actionIndex] = { ...existing, text: validation.right.text };
+    s.actions[actionIndex] = validation.right.action;
     yield* Effect.promise(() => host.saveState());
 
     host.broadcast({ type: "actions-changed", actions: s.actions });
@@ -108,23 +101,13 @@ export function deleteActionForRoomEffect(
   return Effect.gen(function* () {
     const s = yield* Effect.promise(() => host.loadState());
 
-    if (s.phase !== "review") {
-      return { success: false, error: "Cannot delete actions outside review phase" };
-    }
-    if (!s.participants.some((participant) => participant.id === participantId)) {
-      return { success: false, error: "Participant not found" };
-    }
-    if (typeof actionId !== "string" || actionId.trim().length === 0) {
-      return { success: false, error: "Action not found" };
+    const validation = yield* Effect.either(validateReviewActionDeleteEffect(s, participantId, actionId));
+    if (validation._tag === "Left") {
+      return { success: false, error: validation.left.message };
     }
 
-    const existing = s.actions ?? [];
-    if (!existing.some((action) => action.id === actionId)) {
-      return { success: false, error: "Action not found" };
-    }
-
-    s.actions = existing
-      .filter((action) => action.id !== actionId)
+    s.actions = (s.actions ?? [])
+      .filter((action) => action.id !== validation.right.actionId)
       .sort((a, b) => a.order - b.order)
       .map((action, order) => ({ ...action, order }));
     yield* Effect.promise(() => host.saveState());
