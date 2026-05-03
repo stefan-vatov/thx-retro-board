@@ -1,3 +1,5 @@
+import { Effect } from "effect";
+
 import type {
   ActionItem,
   Column,
@@ -38,11 +40,19 @@ export function normalizeColumns(stored: Pick<StoredState, "columns" | "groups">
     .map((column, index) => ({ ...column, order: index }));
 }
 
+export function normalizeColumnsEffect(stored: Pick<StoredState, "columns" | "groups">): Effect.Effect<Column[]> {
+  return Effect.sync(() => normalizeColumns(stored));
+}
+
 export function isV2StoredState(stored: Partial<StoredState>): boolean {
   if (stored.schemaVersion !== 2) return false;
   if (!Array.isArray(stored.columns) || !Array.isArray(stored.groups)) return false;
   if (!Array.isArray(stored.items) || !Array.isArray(stored.votes)) return false;
   return true;
+}
+
+export function isV2StoredStateEffect(stored: Partial<StoredState>): Effect.Effect<boolean> {
+  return Effect.sync(() => isV2StoredState(stored));
 }
 
 export function normalizeGroups(groups: Group[], columns: Column[]): Group[] {
@@ -71,6 +81,10 @@ export function normalizeGroups(groups: Group[], columns: Column[]): Group[] {
   });
 }
 
+export function normalizeGroupsEffect(groups: Group[], columns: Column[]): Effect.Effect<Group[]> {
+  return Effect.sync(() => normalizeGroups(groups, columns));
+}
+
 export function normalizeItems(items: RetroItem[], columns: Column[], groups: Group[]): RetroItem[] {
   const validColumnIds = new Set(columns.map((column) => column.id));
   const groupsById = new Map(groups.map((group) => [group.id, group]));
@@ -96,6 +110,10 @@ export function normalizeItems(items: RetroItem[], columns: Column[], groups: Gr
     nextOrderByList.set(listKey, order + 1);
     return { ...item, order };
   });
+}
+
+export function normalizeItemsEffect(items: RetroItem[], columns: Column[], groups: Group[]): Effect.Effect<RetroItem[]> {
+  return Effect.sync(() => normalizeItems(items, columns, groups));
 }
 
 function normalizeVoteTarget(vote: VoteAllocation, groups: Group[], items: RetroItem[]): VoteTarget | null {
@@ -151,8 +169,21 @@ export function normalizeVotes(votes: VoteAllocation[], participants: Participan
   return [...merged.values()];
 }
 
+export function normalizeVotesEffect(
+  votes: VoteAllocation[],
+  participants: Participant[],
+  groups: Group[],
+  items: RetroItem[],
+): Effect.Effect<VoteAllocation[]> {
+  return Effect.sync(() => normalizeVotes(votes, participants, groups, items));
+}
+
 export function normalizeRankingMethod(method: unknown): RankingMethod {
   return method === "pairwise" ? "pairwise" : "score";
+}
+
+export function normalizeRankingMethodEffect(method: unknown): Effect.Effect<RankingMethod> {
+  return Effect.sync(() => normalizeRankingMethod(method));
 }
 
 export function normalizePairwiseChoices(
@@ -177,6 +208,15 @@ export function normalizePairwiseChoices(
   return [...merged.values()];
 }
 
+export function normalizePairwiseChoicesEffect(
+  choices: PairwiseChoice[] | undefined,
+  participants: Participant[],
+  groups: Group[],
+  items: RetroItem[],
+): Effect.Effect<PairwiseChoice[]> {
+  return Effect.sync(() => normalizePairwiseChoices(choices, participants, groups, items));
+}
+
 export function normalizeReviewTargetKey(targetKey: unknown, groups: Group[], items: RetroItem[]): string | null {
   if (typeof targetKey !== "string") return null;
   const validTargetKeys = new Set<string>([
@@ -184,6 +224,14 @@ export function normalizeReviewTargetKey(targetKey: unknown, groups: Group[], it
     ...items.filter((item) => item.groupId === null).map((item) => voteTargetKey(itemVoteTarget(item.id))),
   ]);
   return validTargetKeys.has(targetKey) ? targetKey : null;
+}
+
+export function normalizeReviewTargetKeyEffect(
+  targetKey: unknown,
+  groups: Group[],
+  items: RetroItem[],
+): Effect.Effect<string | null> {
+  return Effect.sync(() => normalizeReviewTargetKey(targetKey, groups, items));
 }
 
 export function normalizeActions(actions: ActionItem[] | undefined, participants: Participant[]): ActionItem[] {
@@ -204,6 +252,13 @@ export function normalizeActions(actions: ActionItem[] | undefined, participants
     }))
     .sort((a, b) => a.order - b.order)
     .map((action, index) => ({ ...action, order: index }));
+}
+
+export function normalizeActionsEffect(
+  actions: ActionItem[] | undefined,
+  participants: Participant[],
+): Effect.Effect<ActionItem[]> {
+  return Effect.sync(() => normalizeActions(actions, participants));
 }
 
 export function normalizeReactions(
@@ -236,4 +291,13 @@ export function normalizeReactions(
     merged.set(key, { participantId: reaction.participantId, target: reaction.target, emoji: reaction.emoji });
   }
   return [...merged.values()];
+}
+
+export function normalizeReactionsEffect(
+  reactions: Reaction[] | undefined,
+  participants: Participant[],
+  groups: Group[],
+  items: RetroItem[],
+): Effect.Effect<Reaction[]> {
+  return Effect.sync(() => normalizeReactions(reactions, participants, groups, items));
 }
