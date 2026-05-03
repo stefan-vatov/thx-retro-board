@@ -149,6 +149,28 @@ describe("room ranking commands", () => {
     expect(state.votes).toEqual([{ participantId: "p1", target: itemVoteTarget("item-a"), count: 1 }]);
   });
 
+  it("casts votes through injected Effect dependencies", async () => {
+    const state = createInitialStoredState("room-a");
+    state.phase = "vote";
+    state.participants = [{ id: "p1", displayName: "P1", isFacilitator: false }];
+    state.items = [{ id: "item-a", text: "A", authorId: "p1", columnId: "mad", groupId: null, order: 0 }];
+    const calls: string[] = [];
+
+    const result = await Effect.runPromise(castVoteForRoomEffect({} as never, "p1", itemVoteTarget("item-a"), 2, {
+      loadState: () => Effect.sync(() => {
+        calls.push("load");
+        return state;
+      }),
+      saveAndBroadcastState: (_host, savedState) => Effect.sync(() => {
+        calls.push(`save:${savedState.votes.length}:${savedState.votes[0]?.count}`);
+      }),
+    }));
+
+    expect(result).toEqual({ success: true });
+    expect(state.votes).toEqual([{ participantId: "p1", target: itemVoteTarget("item-a"), count: 2 }]);
+    expect(calls).toEqual(["load", "save:1:2"]);
+  });
+
   it("chooses pairwise winners and toggles reactions through Effect APIs", async () => {
     const state = createInitialStoredState("room-a");
     state.phase = "vote";

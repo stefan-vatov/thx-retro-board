@@ -50,6 +50,16 @@ export const toggleReactionForRoomDeps: ToggleReactionForRoomDeps = {
   saveAndBroadcastState: saveAndBroadcastStateEffect,
 };
 
+export interface CastVoteForRoomDeps {
+  loadState: (host: RoomCommandHost) => Effect.Effect<StoredState>;
+  saveAndBroadcastState: (host: RoomCommandHost, state: StoredState) => Effect.Effect<void>;
+}
+
+export const castVoteForRoomDeps: CastVoteForRoomDeps = {
+  loadState: (host) => Effect.promise(() => host.loadState()),
+  saveAndBroadcastState: saveAndBroadcastStateEffect,
+};
+
 export async function setVoteBudgetForRoom(
   host: RoomCommandHost,
   participantId: string,
@@ -150,16 +160,17 @@ export function castVoteForRoomEffect(
   participantId: string,
   targetOrGroupId: VoteTarget | string,
   count: number,
+  deps: CastVoteForRoomDeps = castVoteForRoomDeps,
 ): Effect.Effect<{ success: boolean; error?: string }> {
   return Effect.gen(function* () {
-    const s = yield* Effect.promise(() => host.loadState());
+    const s = yield* deps.loadState(host);
     const validation = yield* Effect.either(validateVoteCastEffect(s, participantId, targetOrGroupId, count));
     if (validation._tag === "Left") {
       return { success: false, error: validation.left.message };
     }
 
     s.votes = validation.right.votes;
-    yield* saveAndBroadcastStateEffect(host, s);
+    yield* deps.saveAndBroadcastState(host, s);
 
     return { success: true };
   });
