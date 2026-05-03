@@ -43,6 +43,16 @@ export const reorderColumnsForRoomDeps: ReorderColumnsForRoomDeps = {
   saveAndBroadcastState: saveAndBroadcastStateEffect,
 };
 
+export interface DeleteColumnForRoomDeps {
+  loadState: (host: RoomCommandHost) => Effect.Effect<StoredState>;
+  saveAndBroadcastState: (host: RoomCommandHost, state: StoredState) => Effect.Effect<void>;
+}
+
+export const deleteColumnForRoomDeps: DeleteColumnForRoomDeps = {
+  loadState: (host) => Effect.promise(() => host.loadState()),
+  saveAndBroadcastState: saveAndBroadcastStateEffect,
+};
+
 export async function createColumnForRoom(
   host: RoomCommandHost,
   participantId: string,
@@ -144,9 +154,10 @@ export function deleteColumnForRoomEffect(
   host: RoomCommandHost,
   participantId: string,
   columnId: string,
+  deps: DeleteColumnForRoomDeps = deleteColumnForRoomDeps,
 ): Effect.Effect<{ success: boolean; error?: string }> {
   return Effect.gen(function* () {
-    const s = yield* Effect.promise(() => host.loadState());
+    const s = yield* deps.loadState(host);
     const validation = yield* Effect.either(validateColumnDeleteEffect(s, participantId, columnId));
     if (validation._tag === "Left") {
       return { success: false, error: validation.left.message };
@@ -159,7 +170,7 @@ export function deleteColumnForRoomEffect(
     s.votes = validated.votes;
     s.pairwiseChoices = normalizePairwiseChoices(s.pairwiseChoices, s.participants, s.groups, s.items);
     s.reactions = normalizeReactions(s.reactions, s.participants, s.groups, s.items);
-    yield* saveAndBroadcastStateEffect(host, s);
+    yield* deps.saveAndBroadcastState(host, s);
     return { success: true };
   });
 }

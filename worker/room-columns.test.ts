@@ -190,4 +190,25 @@ describe("room column commands", () => {
     expect(result).toEqual({ success: true });
     expect(state.columns.map((column) => column.id)).toEqual(["mad", "glad"]);
   });
+
+  it("deletes columns through injected Effect dependencies", async () => {
+    const state = createInitialStoredState("room-a");
+    state.participants = [{ id: "fac", displayName: "Fac", isFacilitator: true }];
+    state.facilitatorId = "fac";
+    const calls: string[] = [];
+
+    const result = await Effect.runPromise(deleteColumnForRoomEffect({} as never, "fac", "sad", {
+      loadState: () => Effect.sync(() => {
+        calls.push("load");
+        return state;
+      }),
+      saveAndBroadcastState: (_host, savedState) => Effect.sync(() => {
+        calls.push(`save:${savedState.columns.map((column) => column.id).join(",")}`);
+      }),
+    }));
+
+    expect(result).toEqual({ success: true });
+    expect(state.columns.map((column) => column.id)).toEqual(["mad", "glad"]);
+    expect(calls).toEqual(["load", "save:mad,glad"]);
+  });
 });
