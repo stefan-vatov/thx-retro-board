@@ -5,6 +5,13 @@ import type { ItemReorderPreconditions, MoveItemPreconditions } from "./room-typ
 
 type RoomResult = Promise<{ success: boolean; error?: string }>;
 
+export class RealtimeVoteTargetError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RealtimeVoteTargetError";
+  }
+}
+
 export interface RoomRealtimeController {
   join(participantId: string, displayName: string): RoomResult;
   addItem(participantId: string, text: string, columnId?: unknown): RoomResult;
@@ -64,6 +71,18 @@ function parseVoteTargetMessage(
       : { success: false, error: "Item not found" };
   }
   return { success: false, error: "Vote target is required" };
+}
+
+export function parseVoteTargetMessageEffect(
+  msg: Extract<ClientToServerMessage, { type: "cast-vote" | "remove-vote" }>,
+): Effect.Effect<VoteTarget, RealtimeVoteTargetError> {
+  return Effect.gen(function* () {
+    const parsed = parseVoteTargetMessage(msg);
+    if (!parsed.success) {
+      return yield* Effect.fail(new RealtimeVoteTargetError(parsed.error));
+    }
+    return parsed.target;
+  });
 }
 
 export async function handleRoomRealtimeMessage(
@@ -158,19 +177,17 @@ export function handleRoomRealtimeMessageEffect(
     case "set-review-target":
       return yield* runRoomResultEffect(room, participantId, () => room.setReviewTarget(participantId, msg.reviewTargetKey));
     case "cast-vote": {
-      const target = parseVoteTargetMessage(msg);
-      return yield* runRoomResultEffect(room, participantId, () =>
-        target.success
-          ? room.castVote(participantId, target.target, msg.count)
-          : Promise.resolve({ success: false, error: target.error })
+      const target = yield* Effect.either(parseVoteTargetMessageEffect(msg));
+      return yield* runRoomResultEffect(room, participantId, () => target._tag === "Right"
+        ? room.castVote(participantId, target.right, msg.count)
+        : Promise.resolve({ success: false, error: target.left.message })
       );
     }
     case "remove-vote": {
-      const target = parseVoteTargetMessage(msg);
-      return yield* runRoomResultEffect(room, participantId, () =>
-        target.success
-          ? room.removeVote(participantId, target.target)
-          : Promise.resolve({ success: false, error: target.error })
+      const target = yield* Effect.either(parseVoteTargetMessageEffect(msg));
+      return yield* runRoomResultEffect(room, participantId, () => target._tag === "Right"
+        ? room.removeVote(participantId, target.right)
+        : Promise.resolve({ success: false, error: target.left.message })
       );
     }
     case "choose-pairwise":

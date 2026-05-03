@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 
 import type { ClientToServerMessage } from "../src/domain";
 import type { RoomRealtimeController } from "./room-realtime";
-import { handleRoomRealtimeMessageEffect } from "./room-realtime";
+import {
+  handleRoomRealtimeMessageEffect,
+  parseVoteTargetMessageEffect,
+} from "./room-realtime";
 
 function createRoom(overrides: Partial<RoomRealtimeController> = {}): RoomRealtimeController {
   const ok = async () => ({ success: true });
@@ -76,5 +79,17 @@ describe("room realtime routing", () => {
     }), "p1", message));
 
     expect(errors).toEqual(["Vote target must specify exactly one target"]);
+  });
+
+  it("parses realtime vote targets through Effect", async () => {
+    await expect(Effect.runPromise(parseVoteTargetMessageEffect({ type: "cast-vote", itemId: "item-1", count: 1 })))
+      .resolves.toEqual({ type: "item", id: "item-1" });
+
+    const exit = await Effect.runPromiseExit(parseVoteTargetMessageEffect({
+      type: "remove-vote",
+      groupId: "group-1",
+      itemId: "item-1",
+    } as ClientToServerMessage));
+    expect(exit._tag).toBe("Failure");
   });
 });
