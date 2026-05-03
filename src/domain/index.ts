@@ -49,6 +49,7 @@ export {
   createActionItemEffect,
   DEFAULT_COLUMNS,
   getDefaultColumns,
+  getDefaultColumnsEffect,
   MAX_COLUMN_NAME_LENGTH,
   MAX_COLUMNS,
   ColumnValidationError,

@@ -20,6 +20,7 @@ import {
   isTimerExpired,
   isTimerExpiredEffect,
   getDefaultColumns,
+  getDefaultColumnsEffect,
   getPairwiseComparisons,
   sanitizeDisplayName,
   sanitizeDisplayNameEffect,
@@ -66,6 +67,14 @@ describe("createRoomState", () => {
   it("creates room state through an Effect boundary", async () => {
     const state = await Effect.runPromise(createRoomStateEffect("room-3", 7));
     expect(state).toMatchObject({ roomId: "room-3", phase: "setup", voteBudget: 7 });
+  });
+
+  it("returns isolated default columns through an Effect boundary", async () => {
+    const columns = await Effect.runPromise(getDefaultColumnsEffect());
+
+    expect(columns).toEqual(getDefaultColumns());
+    expect(columns).not.toBe(getDefaultColumns());
+    expect(columns[0]).not.toBe(getDefaultColumns()[0]);
   });
 });
 

@@ -31,6 +31,7 @@ export {
   createRoomStateEffect,
   DEFAULT_COLUMNS,
   getDefaultColumns,
+  getDefaultColumnsEffect,
   isPhaseAllowed,
   isPhaseAllowedEffect,
   isTimerExpired,

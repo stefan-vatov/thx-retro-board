@@ -30,6 +30,10 @@ export function getDefaultColumns(): Column[] {
   return DEFAULT_COLUMNS.map((column) => ({ ...column }));
 }
 
+export function getDefaultColumnsEffect(): Effect.Effect<Column[]> {
+  return Effect.sync(() => getDefaultColumns());
+}
+
 export function createRoomState(roomId: string, voteBudget: number = 5): RoomState {
   return {
     roomId,
@@ -55,7 +59,10 @@ export function createRoomState(roomId: string, voteBudget: number = 5): RoomSta
 }
 
 export function createRoomStateEffect(roomId: string, voteBudget: number = 5): Effect.Effect<RoomState> {
-  return Effect.sync(() => createRoomState(roomId, voteBudget));
+  return Effect.gen(function* () {
+    const columns = yield* getDefaultColumnsEffect();
+    return { ...createRoomState(roomId, voteBudget), columns };
+  });
 }
 
 export function createParticipant(id: string, displayName: string, isFacilitator: boolean): Participant {
