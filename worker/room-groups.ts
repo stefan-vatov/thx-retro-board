@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import type { Group } from "../src/domain";
+import type { Group, RetroItem } from "../src/domain";
 import { groupVoteTarget, sameVoteTarget } from "../src/domain";
 import { saveAndBroadcastStateEffect } from "./room-command-effect";
 import type { RoomCommandHost } from "./room-command-host";
@@ -53,6 +53,20 @@ export interface ReorderGroupsForRoomDeps {
 
 export const reorderGroupsForRoomDeps: ReorderGroupsForRoomDeps = {
   loadState: (host) => Effect.promise(() => host.loadState()),
+  saveAndBroadcastState: saveAndBroadcastStateEffect,
+};
+
+export interface ReorderItemsForRoomDeps {
+  loadState: (host: RoomCommandHost) => Effect.Effect<StoredState>;
+  broadcastItemsReordered: (host: RoomCommandHost, items: RetroItem[]) => Effect.Effect<void>;
+  saveAndBroadcastState: (host: RoomCommandHost, state: StoredState) => Effect.Effect<void>;
+}
+
+export const reorderItemsForRoomDeps: ReorderItemsForRoomDeps = {
+  loadState: (host) => Effect.promise(() => host.loadState()),
+  broadcastItemsReordered: (host, items) => Effect.sync(() => {
+    host.broadcast({ type: "items-reordered", items });
+  }),
   saveAndBroadcastState: saveAndBroadcastStateEffect,
 };
 
@@ -195,9 +209,10 @@ export function reorderItemsForRoomEffect(
   participantId: string,
   orderedIds: unknown,
   preconditions?: Partial<ItemReorderPreconditions>,
+  deps: ReorderItemsForRoomDeps = reorderItemsForRoomDeps,
 ): Effect.Effect<{ success: boolean; error?: string }> {
   return Effect.gen(function* () {
-    const s = yield* Effect.promise(() => host.loadState());
+    const s = yield* deps.loadState(host);
     const validation = yield* Effect.either(validateItemReorderEffect(s, participantId, orderedIds, preconditions));
     if (validation._tag === "Left") {
       return { success: false, error: validation.left.message };
@@ -205,8 +220,8 @@ export function reorderItemsForRoomEffect(
 
     s.items = validation.right.items;
 
-    host.broadcast({ type: "items-reordered", items: s.items });
-    yield* saveAndBroadcastStateEffect(host, s);
+    yield* deps.broadcastItemsReordered(host, s.items);
+    yield* deps.saveAndBroadcastState(host, s);
 
     return { success: true };
   });

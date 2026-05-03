@@ -216,6 +216,45 @@ describe("room group commands", () => {
     expect(state.items.find((item) => item.id === "item-b")?.order).toBe(0);
   });
 
+  it("reorders items through injected Effect dependencies", async () => {
+    const state = createInitialStoredState("room-a");
+    state.phase = "organise";
+    state.participants = [{ id: "p1", displayName: "P1", isFacilitator: false }];
+    state.items = [
+      { id: "item-a", text: "A", authorId: "p1", columnId: "mad", groupId: null, order: 0 },
+      { id: "item-b", text: "B", authorId: "p1", columnId: "mad", groupId: null, order: 1 },
+    ];
+    const calls: string[] = [];
+
+    const result = await Effect.runPromise(reorderItemsForRoomEffect({} as never, "p1", ["item-b", "item-a"], {
+      expectedVersion: state.version,
+      sourceColumnId: "mad",
+      sourceGroupId: null,
+    }, {
+      loadState: () => Effect.sync(() => {
+        calls.push("load");
+        return state;
+      }),
+      broadcastItemsReordered: (_host, items) => Effect.sync(() => {
+        calls.push(`broadcast:${items.map((item) => `${item.id}:${item.order}`).join(",")}`);
+      }),
+      saveAndBroadcastState: (_host, savedState) => Effect.sync(() => {
+        calls.push(`save:${savedState.items.map((item) => `${item.id}:${item.order}`).join(",")}`);
+      }),
+    }));
+
+    expect(result).toEqual({ success: true });
+    expect(Object.fromEntries(state.items.map((item) => [item.id, item.order]))).toEqual({
+      "item-a": 1,
+      "item-b": 0,
+    });
+    expect(calls).toEqual([
+      "load",
+      "broadcast:item-b:0,item-a:1",
+      "save:item-b:0,item-a:1",
+    ]);
+  });
+
   it("deletes groups through the Effect API", async () => {
     const state = createInitialStoredState("room-a");
     state.phase = "organise";
