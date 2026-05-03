@@ -16,10 +16,19 @@ export interface RoomWebSocketHost {
 
 export interface RoomWebSocketDeps {
   getWebSocketTicket: (request: Request) => Effect.Effect<string | null>;
+  consumeWebSocketTicket: (
+    host: RoomWebSocketHost,
+    ticket: string | null,
+  ) => Effect.Effect<{ success: true; participantId: string } | { success: false; error: string }>;
+  loadState: (host: RoomWebSocketHost) => Effect.Effect<StoredState>;
+  cancelEmptyRoomPurge: (host: RoomWebSocketHost) => Effect.Effect<void>;
 }
 
 export const roomWebSocketDeps: RoomWebSocketDeps = {
   getWebSocketTicket: getWebSocketTicketEffect,
+  consumeWebSocketTicket: (host, ticket) => Effect.promise(() => host.consumeWebSocketTicket(ticket)),
+  loadState: (host) => Effect.promise(() => host.loadState()),
+  cancelEmptyRoomPurge: (host) => Effect.promise(() => host.cancelEmptyRoomPurge()),
 };
 
 export async function handleRoomWebSocketRequest(host: RoomWebSocketHost, request: Request): Promise<Response | null> {
@@ -41,14 +50,14 @@ export function handleRoomWebSocketRequestEffect(
   const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
 
   const ticketValue = yield* deps.getWebSocketTicket(request);
-  const ticket = yield* Effect.promise(() => host.consumeWebSocketTicket(ticketValue));
+  const ticket = yield* deps.consumeWebSocketTicket(host, ticketValue);
   if (!ticket.success) {
     return new Response(JSON.stringify({ error: ticket.error }), { status: 403 });
   }
 
   const participantId = ticket.participantId;
-  const s = yield* Effect.promise(() => host.loadState());
-  yield* Effect.promise(() => host.cancelEmptyRoomPurge());
+  const s = yield* deps.loadState(host);
+  yield* deps.cancelEmptyRoomPurge(host);
   host.closeParticipantSocket(participantId, "Participant opened a new connection");
   host.setSession(participantId, server);
   server.serializeAttachment({ participantId });
