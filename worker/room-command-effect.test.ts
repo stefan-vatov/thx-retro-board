@@ -23,4 +23,20 @@ describe("room command Effect helpers", () => {
     expect(calls).toEqual(["save", "broadcast"]);
     expect(host.broadcastState).toHaveBeenCalledWith(state);
   });
+
+  it("uses injected Effect dependencies in order", async () => {
+    const calls: string[] = [];
+    const state = { roomId: "room-1" } as StoredState;
+
+    await Effect.runPromise(saveAndBroadcastStateEffect({} as RoomCommandHost, state, {
+      saveState: () => Effect.sync(() => {
+        calls.push("save");
+      }),
+      broadcastState: (_host, persistedState) => Effect.sync(() => {
+        calls.push(`broadcast:${persistedState.roomId}`);
+      }),
+    }));
+
+    expect(calls).toEqual(["save", "broadcast:room-1"]);
+  });
 });
