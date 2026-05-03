@@ -98,6 +98,36 @@ describe("room ranking commands", () => {
     expect(calls).toEqual(["load", "save:7"]);
   });
 
+  it("sets ranking method through injected Effect dependencies", async () => {
+    const state = createInitialStoredState("room-a");
+    state.participants = [{ id: "fac", displayName: "Fac", isFacilitator: true }];
+    state.facilitatorId = "fac";
+    state.votes = [{ participantId: "fac", target: itemVoteTarget("item-a"), count: 1 }];
+    const calls: string[] = [];
+
+    const result = await Effect.runPromise(setRankingMethodForRoomEffect({} as never, "fac", "pairwise", {
+      loadState: () => Effect.sync(() => {
+        calls.push("load");
+        return state;
+      }),
+      saveState: () => Effect.sync(() => {
+        calls.push("save");
+      }),
+      broadcastRankingMethodChanged: (_host, rankingMethod) => Effect.sync(() => {
+        calls.push(`ranking:${rankingMethod}`);
+      }),
+      broadcastState: (_host, broadcastState) => Effect.sync(() => {
+        calls.push(`state:${broadcastState.rankingMethod}:${broadcastState.votes.length}:${broadcastState.pairwiseChoices.length}`);
+      }),
+    }));
+
+    expect(result).toEqual({ success: true });
+    expect(state.rankingMethod).toBe("pairwise");
+    expect(state.votes).toEqual([]);
+    expect(state.pairwiseChoices).toEqual([]);
+    expect(calls).toEqual(["load", "save", "ranking:pairwise", "state:pairwise:0:0"]);
+  });
+
   it("casts and removes score votes through Effect APIs", async () => {
     const state = createInitialStoredState("room-a");
     state.phase = "vote";

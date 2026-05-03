@@ -22,6 +22,24 @@ export const setVoteBudgetForRoomDeps: SetVoteBudgetForRoomDeps = {
   saveAndBroadcastState: saveAndBroadcastStateEffect,
 };
 
+export interface SetRankingMethodForRoomDeps {
+  loadState: (host: RoomCommandHost) => Effect.Effect<StoredState>;
+  saveState: (host: RoomCommandHost) => Effect.Effect<void>;
+  broadcastRankingMethodChanged: (host: RoomCommandHost, rankingMethod: RankingMethod) => Effect.Effect<void>;
+  broadcastState: (host: RoomCommandHost, state: StoredState) => Effect.Effect<void>;
+}
+
+export const setRankingMethodForRoomDeps: SetRankingMethodForRoomDeps = {
+  loadState: (host) => Effect.promise(() => host.loadState()),
+  saveState: (host) => Effect.promise(() => host.saveState()),
+  broadcastRankingMethodChanged: (host, rankingMethod) => Effect.sync(() => {
+    host.broadcast({ type: "ranking-method-changed", rankingMethod });
+  }),
+  broadcastState: (host, state) => Effect.sync(() => {
+    host.broadcastState(state);
+  }),
+};
+
 export async function setVoteBudgetForRoom(
   host: RoomCommandHost,
   participantId: string,
@@ -61,9 +79,10 @@ export function setRankingMethodForRoomEffect(
   host: RoomCommandHost,
   participantId: string,
   rankingMethod: RankingMethod,
+  deps: SetRankingMethodForRoomDeps = setRankingMethodForRoomDeps,
 ): Effect.Effect<{ success: boolean; error?: string }> {
   return Effect.gen(function* () {
-    const s = yield* Effect.promise(() => host.loadState());
+    const s = yield* deps.loadState(host);
     const validation = yield* Effect.either(validateRankingMethodChangeEffect(s, participantId, rankingMethod));
     if (validation._tag === "Left") {
       return { success: false, error: validation.left.message };
@@ -72,9 +91,9 @@ export function setRankingMethodForRoomEffect(
     s.rankingMethod = validation.right.rankingMethod;
     s.votes = [];
     s.pairwiseChoices = [];
-    yield* Effect.promise(() => host.saveState());
-    host.broadcast({ type: "ranking-method-changed", rankingMethod: validation.right.rankingMethod });
-    host.broadcastState(s);
+    yield* deps.saveState(host);
+    yield* deps.broadcastRankingMethodChanged(host, validation.right.rankingMethod);
+    yield* deps.broadcastState(host, s);
     return { success: true };
   });
 }
