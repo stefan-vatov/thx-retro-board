@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { generateRoomId as defaultGenerateRoomId } from "../src/domain";
+import { generateRoomIdEffect as defaultGenerateRoomIdEffect } from "../src/domain";
 import {
   hasProductionAntiAbuseConfig,
   isLocalRequest,
@@ -10,14 +10,14 @@ import { verifyTurnstileTokenEffect } from "./turnstile";
 import type { Env } from "./index";
 
 export interface CreateRoomRequestDeps {
-  generateRoomId: () => string;
-  generateFacilitatorClaimToken: () => string;
+  generateRoomId: () => Effect.Effect<string>;
+  generateFacilitatorClaimToken: () => Effect.Effect<string>;
 }
 
 export const createRoomRequestDeps: CreateRoomRequestDeps = {
-  generateRoomId: defaultGenerateRoomId,
+  generateRoomId: defaultGenerateRoomIdEffect,
   generateFacilitatorClaimToken: () =>
-    crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", ""),
+    Effect.sync(() => crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "")),
 };
 
 export function handleCreateRoomRequestEffect(
@@ -46,8 +46,8 @@ export function handleCreateRoomRequestEffect(
       return Response.json({ error: turnstile.error }, { status: 403 });
     }
 
-    const roomId = deps.generateRoomId();
-    const facilitatorClaimToken = deps.generateFacilitatorClaimToken();
+    const roomId = yield* deps.generateRoomId();
+    const facilitatorClaimToken = yield* deps.generateFacilitatorClaimToken();
     const id = env.RETRO_ROOM.idFromName(roomId);
     const stub = env.RETRO_ROOM.get(id);
     yield* Effect.promise(() => stub.initRoom(roomId, facilitatorClaimToken));

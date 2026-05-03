@@ -159,4 +159,4 @@ export {
   applyRemoveVote,
   applyRemoveVoteEffect,
 } from "./state";
-export { generateRoomId, ROOM_ID_LENGTH } from "./room-id";
+export { generateRoomId, generateRoomIdEffect, ROOM_ID_LENGTH } from "./room-id";

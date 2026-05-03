@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { generateRoomId, ROOM_ID_LENGTH } from "./room-id";
+import { Effect } from "effect";
+import { generateRoomId, generateRoomIdEffect, ROOM_ID_LENGTH } from "./room-id";
 
 describe("generateRoomId", () => {
   it("generates a string of the expected length", () => {
@@ -14,6 +15,13 @@ describe("generateRoomId", () => {
 
   it("contains only URL-safe characters", () => {
     const id = generateRoomId();
+    expect(id).toMatch(/^[A-Za-z0-9_-]+$/);
+  });
+
+  it("generates ids through Effect", async () => {
+    const id = await Effect.runPromise(generateRoomIdEffect());
+
+    expect(id).toHaveLength(ROOM_ID_LENGTH);
     expect(id).toMatch(/^[A-Za-z0-9_-]+$/);
   });
 });

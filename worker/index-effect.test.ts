@@ -43,7 +43,7 @@ describe("handleCreateRoomRequestEffect", () => {
         },
       }),
       new URL("https://retro.thethracian.com/api/rooms"),
-      { generateRoomId: () => "ABCDEFGHIJKLMNOPQRSTU", generateFacilitatorClaimToken: () => "claim" },
+      { generateRoomId: () => Effect.succeed("ABCDEFGHIJKLMNOPQRSTU"), generateFacilitatorClaimToken: () => Effect.succeed("claim") },
     ));
 
     expect(response.status).toBe(429);
@@ -67,7 +67,7 @@ describe("handleCreateRoomRequestEffect", () => {
         },
       }),
       new URL("https://retro.thethracian.com/api/rooms"),
-      { generateRoomId: () => "ABCDEFGHIJKLMNOPQRSTU", generateFacilitatorClaimToken: () => "claim" },
+      { generateRoomId: () => Effect.succeed("ABCDEFGHIJKLMNOPQRSTU"), generateFacilitatorClaimToken: () => Effect.succeed("claim") },
     ));
 
     expect(response.status).toBe(503);
@@ -81,7 +81,7 @@ describe("handleCreateRoomRequestEffect", () => {
       new Request("http://localhost/api/rooms", { method: "POST" }),
       createEnv(),
       new URL("http://localhost/api/rooms"),
-      { generateRoomId: () => "ABCDEFGHIJKLMNOPQRSTU", generateFacilitatorClaimToken: () => "claim-token" },
+      { generateRoomId: () => Effect.succeed("ABCDEFGHIJKLMNOPQRSTU"), generateFacilitatorClaimToken: () => Effect.succeed("claim-token") },
     ));
 
     expect(response.status).toBe(200);
