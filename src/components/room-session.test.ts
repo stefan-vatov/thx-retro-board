@@ -10,6 +10,8 @@ import {
   getStoredIdentityEffect,
   mergeRoomState,
   mergeRoomStateEffect,
+  persistJoinedIdentityEffect,
+  resetStoredParticipantEffect,
   runRoomMutationWithRefreshEffect,
 } from "./room-session";
 import { ApiError } from "../api";
@@ -149,6 +151,52 @@ describe("room session helpers", () => {
     expect(localStorage.getItem("retro-name-room-1")).toBeNull();
     expect(localStorage.getItem("retro-token-room-1")).toBeNull();
     expect(sessionStorage.getItem("retro-facilitator-claim-room-1")).toBeNull();
+  });
+
+  it("persists joined room identity and can clear a consumed facilitator claim", async () => {
+    sessionStorage.setItem("retro-facilitator-claim-room-1", "claim");
+
+    await Effect.runPromise(
+      persistJoinedIdentityEffect({
+        roomId: "room-1",
+        displayName: "Alex",
+        connectionToken: "token",
+        clearFacilitatorClaim: true,
+      }),
+    );
+
+    expect(localStorage.getItem("retro-name-room-1")).toBe("Alex");
+    expect(localStorage.getItem("retro-token-room-1")).toBe("token");
+    expect(sessionStorage.getItem("retro-facilitator-claim-room-1")).toBeNull();
+  });
+
+  it("keeps an existing token when a join response does not return a replacement token", async () => {
+    localStorage.setItem("retro-token-room-1", "existing-token");
+    sessionStorage.setItem("retro-facilitator-claim-room-1", "claim");
+
+    await Effect.runPromise(
+      persistJoinedIdentityEffect({
+        roomId: "room-1",
+        displayName: "Alex",
+        clearFacilitatorClaim: false,
+      }),
+    );
+
+    expect(localStorage.getItem("retro-name-room-1")).toBe("Alex");
+    expect(localStorage.getItem("retro-token-room-1")).toBe("existing-token");
+    expect(sessionStorage.getItem("retro-facilitator-claim-room-1")).toBe(
+      "claim",
+    );
+  });
+
+  it("resets stored participant credentials through Effect", async () => {
+    localStorage.setItem("retro-participant-room-1", "old-p1");
+    localStorage.setItem("retro-token-room-1", "token");
+
+    await Effect.runPromise(resetStoredParticipantEffect("room-1", "new-p1"));
+
+    expect(localStorage.getItem("retro-participant-room-1")).toBe("new-p1");
+    expect(localStorage.getItem("retro-token-room-1")).toBeNull();
   });
 
   it("runs successful room mutations and returns refreshed state through Effect", async () => {

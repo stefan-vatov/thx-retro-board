@@ -112,6 +112,40 @@ export function clearStoredIdentity(roomId: string): void {
   Effect.runSync(clearStoredIdentityEffect(roomId));
 }
 
+export type PersistJoinedIdentityInput = {
+  roomId: string;
+  displayName: string;
+  connectionToken?: string;
+  clearFacilitatorClaim: boolean;
+};
+
+export function persistJoinedIdentityEffect({
+  roomId,
+  displayName,
+  connectionToken,
+  clearFacilitatorClaim,
+}: PersistJoinedIdentityInput): Effect.Effect<void> {
+  return Effect.sync(() => {
+    localStorage.setItem(`retro-name-${roomId}`, displayName);
+    if (connectionToken) {
+      localStorage.setItem(`retro-token-${roomId}`, connectionToken);
+    }
+    if (clearFacilitatorClaim) {
+      sessionStorage.removeItem(`retro-facilitator-claim-${roomId}`);
+    }
+  });
+}
+
+export function resetStoredParticipantEffect(
+  roomId: string,
+  participantId: string,
+): Effect.Effect<void> {
+  return Effect.sync(() => {
+    localStorage.setItem(`retro-participant-${roomId}`, participantId);
+    localStorage.removeItem(`retro-token-${roomId}`);
+  });
+}
+
 export function classifyRoomLoadError(error: unknown): RoomLoadError {
   if (error instanceof ApiError && error.status && error.status >= 500) {
     return {

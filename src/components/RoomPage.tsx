@@ -19,6 +19,8 @@ import {
   getFacilitatorClaimToken,
   getStoredIdentity,
   mergeRoomStateEffect,
+  persistJoinedIdentityEffect,
+  resetStoredParticipantEffect,
   type PageState,
   type RoomLoadError,
 } from "./room-session";
@@ -85,8 +87,7 @@ export function RoomPage() {
   const resetStoredIdentity = useCallback(() => {
     if (!roomId) return;
     const nextParticipantId = crypto.randomUUID();
-    localStorage.setItem(`retro-participant-${roomId}`, nextParticipantId);
-    localStorage.removeItem(`retro-token-${roomId}`);
+    Effect.runSync(resetStoredParticipantEffect(roomId, nextParticipantId));
     setParticipantId(nextParticipantId);
     setConnectionToken(undefined);
   }, [roomId]);
@@ -146,10 +147,16 @@ export function RoomPage() {
         setPageState("join");
         return;
       }
-      localStorage.setItem(`retro-name-${roomId}`, identity.displayName);
+      Effect.runSync(
+        persistJoinedIdentityEffect({
+          roomId,
+          displayName: identity.displayName,
+          connectionToken: result.connectionToken,
+          clearFacilitatorClaim: false,
+        }),
+      );
       setLocalRoomState(result.state ?? null);
       if (result.connectionToken) {
-        localStorage.setItem(`retro-token-${roomId}`, result.connectionToken);
         setConnectionToken(result.connectionToken);
       }
       setPageState("room");
@@ -206,13 +213,18 @@ export function RoomPage() {
         setJoinError(result.error ?? "Failed to join room. Please try again.");
         return;
       }
-      localStorage.setItem(`retro-name-${roomId}`, trimmed);
+      Effect.runSync(
+        persistJoinedIdentityEffect({
+          roomId,
+          displayName: trimmed,
+          connectionToken: result.connectionToken,
+          clearFacilitatorClaim: true,
+        }),
+      );
       setLocalRoomState(result.state ?? null);
       if (result.connectionToken) {
-        localStorage.setItem(`retro-token-${roomId}`, result.connectionToken);
         setConnectionToken(result.connectionToken);
       }
-      sessionStorage.removeItem(`retro-facilitator-claim-${roomId}`);
       setPageState("room");
     } catch {
       setJoinError(
