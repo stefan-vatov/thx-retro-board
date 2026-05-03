@@ -3,12 +3,25 @@ import type { Column } from "../src/domain";
 import { saveAndBroadcastStateEffect } from "./room-command-effect";
 import type { RoomCommandHost } from "./room-command-host";
 import { normalizePairwiseChoices, normalizeReactions } from "./room-normalize";
+import type { StoredState } from "./room-types";
 import {
   validateColumnCreateEffect,
   validateColumnDeleteEffect,
   validateColumnEditEffect,
   validateColumnReorderEffect,
 } from "./validation";
+
+export interface CreateColumnForRoomDeps {
+  loadState: (host: RoomCommandHost) => Effect.Effect<StoredState>;
+  generateColumnId: () => Effect.Effect<string>;
+  saveAndBroadcastState: (host: RoomCommandHost, state: StoredState) => Effect.Effect<void>;
+}
+
+export const createColumnForRoomDeps: CreateColumnForRoomDeps = {
+  loadState: (host) => Effect.promise(() => host.loadState()),
+  generateColumnId: () => Effect.sync(() => crypto.randomUUID()),
+  saveAndBroadcastState: saveAndBroadcastStateEffect,
+};
 
 export async function createColumnForRoom(
   host: RoomCommandHost,
@@ -22,21 +35,22 @@ export function createColumnForRoomEffect(
   host: RoomCommandHost,
   participantId: string,
   rawName: string,
+  deps: CreateColumnForRoomDeps = createColumnForRoomDeps,
 ): Effect.Effect<{ success: boolean; error?: string; column?: Column }> {
   return Effect.gen(function* () {
-    const s = yield* Effect.promise(() => host.loadState());
+    const s = yield* deps.loadState(host);
     const validation = yield* Effect.either(validateColumnCreateEffect(s, participantId, rawName));
     if (validation._tag === "Left") {
       return { success: false, error: validation.left.message };
     }
 
     const column: Column = {
-      id: crypto.randomUUID(),
+      id: yield* deps.generateColumnId(),
       name: validation.right.name,
       order: validation.right.order,
     };
     s.columns = [...(s.columns ?? []), column];
-    yield* saveAndBroadcastStateEffect(host, s);
+    yield* deps.saveAndBroadcastState(host, s);
 
     return { success: true, column };
   });

@@ -70,6 +70,30 @@ describe("room column commands", () => {
     expect(state.columns.at(-1)).toEqual(result.column);
   });
 
+  it("creates columns through injected Effect dependencies", async () => {
+    const state = createInitialStoredState("room-a");
+    state.participants = [{ id: "fac", displayName: "Fac", isFacilitator: true }];
+    state.facilitatorId = "fac";
+    const calls: string[] = [];
+
+    const result = await Effect.runPromise(createColumnForRoomEffect({} as never, "fac", "  Risks  ", {
+      loadState: () => Effect.sync(() => {
+        calls.push("load");
+        return state;
+      }),
+      generateColumnId: () => Effect.succeed("col-injected"),
+      saveAndBroadcastState: (_host, savedState) => Effect.sync(() => {
+        calls.push(`save:${savedState.columns.at(-1)?.id}`);
+      }),
+    }));
+
+    expect(result).toEqual({
+      success: true,
+      column: { id: "col-injected", name: "Risks", order: 3 },
+    });
+    expect(calls).toEqual(["load", "save:col-injected"]);
+  });
+
   it("edits columns through the Effect API", async () => {
     const state = createInitialStoredState("room-a");
     state.participants = [{ id: "fac", displayName: "Fac", isFacilitator: true }];
