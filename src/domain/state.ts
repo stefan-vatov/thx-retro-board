@@ -123,10 +123,12 @@ export {
   getVotesByParticipant,
   getVotesByParticipantEffect,
   getVotesForGroup,
+  getVotesForGroupEffect,
   getVotesForItem,
   getVotesForTarget,
   getVotesForTargetEffect,
   getVotesForUngroupedItem,
+  getVotesForUngroupedItemEffect,
 } from "./state-votes";
 export {
   applyMoveItemToGroup,

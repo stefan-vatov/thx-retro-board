@@ -25,8 +25,16 @@ export function getVotesForGroup(votes: VoteAllocation[], groupId: string): numb
   return getVotesForTarget(votes, groupVoteTarget(groupId));
 }
 
+export function getVotesForGroupEffect(votes: VoteAllocation[], groupId: string): Effect.Effect<number> {
+  return Effect.sync(() => getVotesForGroup(votes, groupId));
+}
+
 export function getVotesForUngroupedItem(votes: VoteAllocation[], itemId: string): number {
   return getVotesForTarget(votes, itemVoteTarget(itemId));
+}
+
+export function getVotesForUngroupedItemEffect(votes: VoteAllocation[], itemId: string): Effect.Effect<number> {
+  return Effect.sync(() => getVotesForUngroupedItem(votes, itemId));
 }
 
 /** @deprecated Votes target groups. Use getVotesForGroup. */

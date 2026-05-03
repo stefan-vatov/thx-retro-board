@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
+import { Effect } from "effect";
 import { Columns3 } from "lucide-react";
 import type { RoomState, VoteTarget } from "../domain";
 import {
@@ -6,9 +7,9 @@ import {
   getRemainingBudget,
   getUngroupedItems,
   getVotesByParticipant,
-  getVotesForGroup,
+  getVotesForGroupEffect,
   getVotesForTarget,
-  getVotesForUngroupedItem,
+  getVotesForUngroupedItemEffect,
   groupVoteTarget,
   itemVoteTarget,
   voteTargetKey,
@@ -138,7 +139,7 @@ export function VoteBoard({ roomState, participantId, send, serverError = null, 
 
   function renderGroup(group: { id: string; name: string }) {
     const target = groupVoteTarget(group.id);
-    const totalVotes = getVotesForGroup(roomState.votes, group.id);
+    const totalVotes = Effect.runSync(getVotesForGroupEffect(roomState.votes, group.id));
     const myVotes = getParticipantVotesForTarget(target);
     const groupItems = getGroupedItems(roomState.items, group.id);
     return (
@@ -173,7 +174,7 @@ export function VoteBoard({ roomState, participantId, send, serverError = null, 
 
   function renderUngroupedItem(item: { id: string; text: string }) {
     const target = itemVoteTarget(item.id);
-    const totalVotes = getVotesForUngroupedItem(roomState.votes, item.id);
+    const totalVotes = Effect.runSync(getVotesForUngroupedItemEffect(roomState.votes, item.id));
     const myVotes = getParticipantVotesForTarget(target);
     return (
       <div key={item.id} className="vote-target-card" data-vote-item-id={item.id}>
@@ -210,8 +211,8 @@ export function VoteBoard({ roomState, participantId, send, serverError = null, 
       })),
     ].sort((a, b) => a.order - b.order || a.type.localeCompare(b.type));
     const totalVotes = [
-      ...sortedGroups.filter((group) => group.columnId === column.id).map((group) => getVotesForGroup(roomState.votes, group.id)),
-      ...sortedUngroupedItems.filter((item) => item.columnId === column.id).map((item) => getVotesForUngroupedItem(roomState.votes, item.id)),
+      ...sortedGroups.filter((group) => group.columnId === column.id).map((group) => Effect.runSync(getVotesForGroupEffect(roomState.votes, group.id))),
+      ...sortedUngroupedItems.filter((item) => item.columnId === column.id).map((item) => Effect.runSync(getVotesForUngroupedItemEffect(roomState.votes, item.id))),
     ].reduce((sum, count) => sum + count, 0);
     return { column, targets, totalVotes };
   });

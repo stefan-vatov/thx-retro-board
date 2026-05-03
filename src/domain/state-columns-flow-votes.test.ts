@@ -15,10 +15,12 @@ import {
   isPhaseAllowed,
   getVotesForItem,
   getVotesForUngroupedItem,
+  getVotesForUngroupedItemEffect,
   groupVoteTarget,
   itemVoteTarget,
   getVotesForTarget,
   getVotesForTargetEffect,
+  getVotesForGroupEffect,
   getVotesByParticipant,
   getRemainingBudget,
   getRemainingBudgetEffect,
@@ -237,6 +239,10 @@ describe("vote helpers", () => {
 
   it("aggregates vote totals and remaining budget through Effect boundaries", async () => {
     await expect(Effect.runPromise(getVotesForTargetEffect(votes, groupVoteTarget("i1")))).resolves.toBe(3);
+    await expect(Effect.runPromise(getVotesForGroupEffect(votes, "i1"))).resolves.toBe(3);
+    await expect(Effect.runPromise(getVotesForUngroupedItemEffect([
+      { participantId: "p1", target: itemVoteTarget("item-1"), count: 2 },
+    ], "item-1"))).resolves.toBe(2);
     await expect(Effect.runPromise(getRemainingBudgetEffect(votes, "p1", 5))).resolves.toBe(2);
   });
 });
