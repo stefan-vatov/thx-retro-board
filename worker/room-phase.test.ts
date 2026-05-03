@@ -89,4 +89,29 @@ describe("room phase commands", () => {
     await expect(Effect.runPromise(setReviewTargetForRoomEffect(host, "fac", null))).resolves.toEqual({ success: true });
     expect(state.reviewTargetKey).toBeNull();
   });
+
+  it("advances phase through injected Effect dependencies", async () => {
+    const state = createInitialStoredState("room-effect-injected-phase");
+    state.participants = [{ id: "fac", displayName: "Fac", isFacilitator: true }];
+    state.facilitatorId = "fac";
+    state.timer = { startedAt: 1, durationSeconds: 60, expired: false };
+    const calls: string[] = [];
+
+    const result = await Effect.runPromise(setPhaseForRoomEffect({} as never, "fac", "write", {
+      loadState: () => Effect.sync(() => {
+        calls.push("load");
+        return state;
+      }),
+      broadcast: (_host, message) => Effect.sync(() => {
+        calls.push(`broadcast:${message.type}`);
+      }),
+      saveAndBroadcastState: (_host, savedState) => Effect.sync(() => {
+        calls.push(`save:${savedState.phase}`);
+      }),
+    }));
+
+    expect(result).toEqual({ success: true });
+    expect(state.phase).toBe("write");
+    expect(calls).toEqual(["load", "broadcast:phase-changed", "save:write"]);
+  });
 });

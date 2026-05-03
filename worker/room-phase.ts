@@ -1,13 +1,26 @@
 import { Effect } from "effect";
-import type { Phase } from "../src/domain";
+import type { Phase, ServerToClientMessage } from "../src/domain";
 import { saveAndBroadcastStateEffect } from "./room-command-effect";
 import { getDecisionTargetCountEffect } from "./room-presenter";
 import type { RoomCommandHost } from "./room-command-host";
+import type { StoredState } from "./room-types";
 import {
   validatePhaseChangeEffect,
   validateReviewTargetChangeEffect,
   validateTimerChangeEffect,
 } from "./validation";
+
+export interface SetPhaseForRoomDeps {
+  loadState: (host: RoomCommandHost) => Effect.Effect<StoredState>;
+  broadcast: (host: RoomCommandHost, message: ServerToClientMessage) => Effect.Effect<void>;
+  saveAndBroadcastState: (host: RoomCommandHost, state: StoredState) => Effect.Effect<void>;
+}
+
+export const setPhaseForRoomDeps: SetPhaseForRoomDeps = {
+  loadState: (host) => Effect.promise(() => host.loadState()),
+  broadcast: (host, message) => Effect.sync(() => host.broadcast(message)),
+  saveAndBroadcastState: saveAndBroadcastStateEffect,
+};
 
 export async function setPhaseForRoom(
   host: RoomCommandHost,
@@ -21,9 +34,10 @@ export function setPhaseForRoomEffect(
   host: RoomCommandHost,
   participantId: string,
   phase: Phase,
+  deps: SetPhaseForRoomDeps = setPhaseForRoomDeps,
 ): Effect.Effect<{ success: boolean; error?: string }> {
   return Effect.gen(function* () {
-    const s = yield* Effect.promise(() => host.loadState());
+    const s = yield* deps.loadState(host);
     const decisionTargetCount = yield* getDecisionTargetCountEffect(s);
     const validation = yield* Effect.either(validatePhaseChangeEffect(s, participantId, phase, decisionTargetCount));
     if (validation._tag === "Left") {
@@ -36,8 +50,8 @@ export function setPhaseForRoomEffect(
     }
     s.timer = { startedAt: null, durationSeconds: null, expired: false };
 
-    host.broadcast({ type: "phase-changed", phase: validation.right.phase });
-    yield* saveAndBroadcastStateEffect(host, s);
+    yield* deps.broadcast(host, { type: "phase-changed", phase: validation.right.phase });
+    yield* deps.saveAndBroadcastState(host, s);
 
     return { success: true };
   });
