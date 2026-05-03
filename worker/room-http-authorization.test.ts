@@ -65,4 +65,27 @@ describe("room HTTP authorization effects", () => {
     expect(mutationCalled).toBe(false);
     await expect(response.json()).resolves.toEqual({ success: false, error: "Invalid participant credentials" });
   });
+
+  it("uses an injected Effect authorization dependency", async () => {
+    const response = await Effect.runPromise(runAuthorizedRoomMutationEffect(
+      createRoom({
+        authorizeHttpParticipant: async () => {
+          throw new Error("room authorization should not be called");
+        },
+      }),
+      "p1",
+      "token",
+      async (participantId) => ({ success: true, participantId }),
+      {
+        authorizeParticipant: () => Effect.succeed({
+          success: true,
+          participantId: "effect-p1",
+          state: createInitialStoredState("room-a"),
+        }),
+      },
+    ));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ success: true, participantId: "effect-p1" });
+  });
 });
