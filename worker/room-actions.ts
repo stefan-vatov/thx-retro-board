@@ -1,13 +1,28 @@
 import { Effect } from "effect";
-import type { ActionItem } from "../src/domain";
+import type { ActionItem, ServerToClientMessage } from "../src/domain";
 import { createActionItem } from "../src/domain";
 import { saveAndBroadcastStateEffect } from "./room-command-effect";
 import type { RoomCommandHost } from "./room-command-host";
+import type { StoredState } from "./room-types";
 import {
   validateReviewActionCreateEffect,
   validateReviewActionDeleteEffect,
   validateReviewActionEditEffect,
 } from "./validation";
+
+export interface CreateActionForRoomDeps {
+  loadState: (host: RoomCommandHost) => Effect.Effect<StoredState>;
+  generateActionId: () => Effect.Effect<string>;
+  broadcast: (host: RoomCommandHost, message: ServerToClientMessage) => Effect.Effect<void>;
+  saveAndBroadcastState: (host: RoomCommandHost, state: StoredState) => Effect.Effect<void>;
+}
+
+export const createActionForRoomDeps: CreateActionForRoomDeps = {
+  loadState: (host) => Effect.promise(() => host.loadState()),
+  generateActionId: () => Effect.sync(() => crypto.randomUUID()),
+  broadcast: (host, message) => Effect.sync(() => host.broadcast(message)),
+  saveAndBroadcastState: saveAndBroadcastStateEffect,
+};
 
 export async function createActionForRoom(
   host: RoomCommandHost,
@@ -21,9 +36,10 @@ export function createActionForRoomEffect(
   host: RoomCommandHost,
   participantId: string,
   rawText: string,
+  deps: CreateActionForRoomDeps = createActionForRoomDeps,
 ): Effect.Effect<{ success: boolean; error?: string; action?: ActionItem }> {
   return Effect.gen(function* () {
-    const s = yield* Effect.promise(() => host.loadState());
+    const s = yield* deps.loadState(host);
     const validation = yield* Effect.either(validateReviewActionCreateEffect(s, participantId, rawText));
     if (validation._tag === "Left") {
       const message = validation.left.message;
@@ -32,10 +48,10 @@ export function createActionForRoomEffect(
         error: message === "Cannot change actions outside review phase" ? "Cannot add actions outside review phase" : message,
       };
     }
-    const action = createActionItem(crypto.randomUUID(), validation.right.text, participantId, validation.right.order);
+    const action = createActionItem(yield* deps.generateActionId(), validation.right.text, participantId, validation.right.order);
     s.actions = [...(s.actions ?? []), action];
-    host.broadcast({ type: "actions-changed", actions: s.actions });
-    yield* saveAndBroadcastStateEffect(host, s);
+    yield* deps.broadcast(host, { type: "actions-changed", actions: s.actions });
+    yield* deps.saveAndBroadcastState(host, s);
 
     return { success: true, action };
   });

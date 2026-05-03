@@ -75,6 +75,33 @@ describe("room action commands", () => {
     expect(result.action?.text).toBe("Effect action");
   });
 
+  it("creates actions through injected Effect dependencies", async () => {
+    const state = createInitialStoredState("room-effect-injected");
+    state.phase = "review";
+    state.participants = [{ id: "participant-a", displayName: "A", isFacilitator: false }];
+    const calls: string[] = [];
+
+    const result = await Effect.runPromise(createActionForRoomEffect({} as never, "participant-a", "  Injected action  ", {
+      loadState: () => Effect.sync(() => {
+        calls.push("load");
+        return state;
+      }),
+      generateActionId: () => Effect.succeed("action-injected"),
+      broadcast: (_host, message) => Effect.sync(() => {
+        calls.push(`broadcast:${message.type}`);
+      }),
+      saveAndBroadcastState: (_host, savedState) => Effect.sync(() => {
+        calls.push(`save:${savedState.actions.length}`);
+      }),
+    }));
+
+    expect(result).toEqual({
+      success: true,
+      action: { id: "action-injected", text: "Injected action", authorId: "participant-a", order: 0 },
+    });
+    expect(calls).toEqual(["load", "broadcast:actions-changed", "save:1"]);
+  });
+
   it("exposes Effect-native action edit and delete commands", async () => {
     const state = createInitialStoredState("room-effect-edit-delete");
     state.phase = "review";
