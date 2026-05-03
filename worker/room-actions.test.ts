@@ -160,4 +160,37 @@ describe("room action commands", () => {
     });
     expect(calls).toEqual(["load", "broadcast:actions-changed", "save:New action"]);
   });
+
+  it("deletes actions through injected Effect dependencies", async () => {
+    const state = createInitialStoredState("room-effect-delete-injected");
+    state.phase = "review";
+    state.participants = [{ id: "participant-a", displayName: "A", isFacilitator: false }];
+    state.actions = [
+      { id: "action-a", text: "Delete action", authorId: "participant-a", order: 0 },
+      { id: "action-b", text: "Keep action", authorId: "participant-a", order: 1 },
+    ];
+    const calls: string[] = [];
+
+    const result = await Effect.runPromise(deleteActionForRoomEffect(
+      {} as never,
+      "participant-a",
+      "action-a",
+      {
+        loadState: () => Effect.sync(() => {
+          calls.push("load");
+          return state;
+        }),
+        broadcast: (_host, message) => Effect.sync(() => {
+          calls.push(`broadcast:${message.type}`);
+        }),
+        saveAndBroadcastState: (_host, savedState) => Effect.sync(() => {
+          calls.push(`save:${savedState.actions.map((action) => action.id).join(",")}`);
+        }),
+      },
+    ));
+
+    expect(result).toEqual({ success: true });
+    expect(state.actions).toEqual([{ id: "action-b", text: "Keep action", authorId: "participant-a", order: 0 }]);
+    expect(calls).toEqual(["load", "broadcast:actions-changed", "save:action-b"]);
+  });
 });

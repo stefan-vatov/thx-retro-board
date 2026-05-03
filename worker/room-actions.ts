@@ -36,6 +36,18 @@ export const editActionForRoomDeps: EditActionForRoomDeps = {
   saveAndBroadcastState: saveAndBroadcastStateEffect,
 };
 
+export interface DeleteActionForRoomDeps {
+  loadState: (host: RoomCommandHost) => Effect.Effect<StoredState>;
+  broadcast: (host: RoomCommandHost, message: ServerToClientMessage) => Effect.Effect<void>;
+  saveAndBroadcastState: (host: RoomCommandHost, state: StoredState) => Effect.Effect<void>;
+}
+
+export const deleteActionForRoomDeps: DeleteActionForRoomDeps = {
+  loadState: (host) => Effect.promise(() => host.loadState()),
+  broadcast: (host, message) => Effect.sync(() => host.broadcast(message)),
+  saveAndBroadcastState: saveAndBroadcastStateEffect,
+};
+
 export async function createActionForRoom(
   host: RoomCommandHost,
   participantId: string,
@@ -118,9 +130,10 @@ export function deleteActionForRoomEffect(
   host: RoomCommandHost,
   participantId: string,
   actionId: string,
+  deps: DeleteActionForRoomDeps = deleteActionForRoomDeps,
 ): Effect.Effect<{ success: boolean; error?: string }> {
   return Effect.gen(function* () {
-    const s = yield* Effect.promise(() => host.loadState());
+    const s = yield* deps.loadState(host);
 
     const validation = yield* Effect.either(validateReviewActionDeleteEffect(s, participantId, actionId));
     if (validation._tag === "Left") {
@@ -131,8 +144,8 @@ export function deleteActionForRoomEffect(
       .filter((action) => action.id !== validation.right.actionId)
       .sort((a, b) => a.order - b.order)
       .map((action, order) => ({ ...action, order }));
-    host.broadcast({ type: "actions-changed", actions: s.actions });
-    yield* saveAndBroadcastStateEffect(host, s);
+    yield* deps.broadcast(host, { type: "actions-changed", actions: s.actions });
+    yield* deps.saveAndBroadcastState(host, s);
 
     return { success: true };
   });
