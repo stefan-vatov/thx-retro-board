@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { generateToken } from "./room-tickets";
+import { generateTokenEffect } from "./room-tickets";
 import { WEBSOCKET_TICKET_TTL_MS, type StoredState, type WebSocketTicket } from "./room-types";
 import { authorizeParticipantEffect } from "./validation";
 
@@ -73,7 +73,7 @@ export function createWebSocketTicketForRoomEffect(
 
     yield* deleteOutstandingWebSocketTicketForRoomEffect(host, auth.right.participantId);
 
-    const ticket = generateToken();
+    const ticket = yield* generateTokenEffect();
     const record: WebSocketTicket = {
       participantId: auth.right.participantId,
       expiresAt: now + WEBSOCKET_TICKET_TTL_MS,

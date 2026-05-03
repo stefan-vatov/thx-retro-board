@@ -2,7 +2,7 @@ import { Effect } from "effect";
 import type { ServerToClientMessage } from "../src/domain";
 import { toRoomState } from "./room-presenter";
 import type { StoredState } from "./room-types";
-import { getWebSocketTicket } from "./room-tickets";
+import { getWebSocketTicketEffect } from "./room-tickets";
 
 export interface RoomWebSocketHost {
   consumeWebSocketTicket(ticket: string | null): Promise<{ success: true; participantId: string } | { success: false; error: string }>;
@@ -31,7 +31,8 @@ export function handleRoomWebSocketRequestEffect(
   const pair = new WebSocketPair();
   const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
 
-  const ticket = yield* Effect.promise(() => host.consumeWebSocketTicket(getWebSocketTicket(request)));
+  const ticketValue = yield* getWebSocketTicketEffect(request);
+  const ticket = yield* Effect.promise(() => host.consumeWebSocketTicket(ticketValue));
   if (!ticket.success) {
     return new Response(JSON.stringify({ error: ticket.error }), { status: 403 });
   }
