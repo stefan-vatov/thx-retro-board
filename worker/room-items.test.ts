@@ -73,6 +73,40 @@ describe("room item commands", () => {
     expect(snapshots).toBe(1);
   });
 
+  it("adds items through injected Effect dependencies", async () => {
+    const state = createInitialStoredState("room-a");
+    state.phase = "write";
+    state.participants = [{ id: "p1", displayName: "P1", isFacilitator: false }];
+    const calls: string[] = [];
+
+    const result = await Effect.runPromise(addItemForRoomEffect({} as never, "p1", "  Injected card  ", "sad", {
+      loadState: () => Effect.sync(() => {
+        calls.push("load");
+        return state;
+      }),
+      generateItemId: () => Effect.succeed("item-injected"),
+      broadcast: (_host, message) => Effect.sync(() => {
+        calls.push(`broadcast:${message.type}`);
+      }),
+      saveAndBroadcastState: (_host, savedState) => Effect.sync(() => {
+        calls.push(`save:${savedState.items.length}`);
+      }),
+    }));
+
+    expect(result).toEqual({
+      success: true,
+      item: {
+        id: "item-injected",
+        text: "Injected card",
+        authorId: "p1",
+        columnId: "sad",
+        groupId: null,
+        order: 0,
+      },
+    });
+    expect(calls).toEqual(["load", "broadcast:item-added", "save:1"]);
+  });
+
   it("edits owned items through the Effect API", async () => {
     const state = createInitialStoredState("room-a");
     state.phase = "write";

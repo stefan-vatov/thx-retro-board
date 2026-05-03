@@ -1,14 +1,29 @@
 import { Effect } from "effect";
-import type { RetroItem } from "../src/domain";
+import type { RetroItem, ServerToClientMessage } from "../src/domain";
 import { getVoteTarget, sameVoteTarget } from "../src/domain";
 import { saveAndBroadcastStateEffect } from "./room-command-effect";
 import type { RoomCommandHost } from "./room-command-host";
 import { normalizePairwiseChoices } from "./room-normalize";
+import type { StoredState } from "./room-types";
 import {
   validateWriteItemCreateEffect,
   validateWriteItemDeleteEffect,
   validateWriteItemEditEffect,
 } from "./validation";
+
+export interface AddItemForRoomDeps {
+  loadState: (host: RoomCommandHost) => Effect.Effect<StoredState>;
+  generateItemId: () => Effect.Effect<string>;
+  broadcast: (host: RoomCommandHost, message: ServerToClientMessage) => Effect.Effect<void>;
+  saveAndBroadcastState: (host: RoomCommandHost, state: StoredState) => Effect.Effect<void>;
+}
+
+export const addItemForRoomDeps: AddItemForRoomDeps = {
+  loadState: (host) => Effect.promise(() => host.loadState()),
+  generateItemId: () => Effect.sync(() => crypto.randomUUID()),
+  broadcast: (host, message) => Effect.sync(() => host.broadcast(message)),
+  saveAndBroadcastState: saveAndBroadcastStateEffect,
+};
 
 export async function addItemForRoom(
   host: RoomCommandHost,
@@ -24,9 +39,10 @@ export function addItemForRoomEffect(
   participantId: string,
   rawText: string,
   columnId?: unknown,
+  deps: AddItemForRoomDeps = addItemForRoomDeps,
 ): Effect.Effect<{ success: boolean; error?: string; item?: RetroItem }> {
   return Effect.gen(function* () {
-    const s = yield* Effect.promise(() => host.loadState());
+    const s = yield* deps.loadState(host);
     const validation = yield* Effect.either(validateWriteItemCreateEffect(s, participantId, rawText, columnId));
     if (validation._tag === "Left") {
       return {
@@ -36,7 +52,7 @@ export function addItemForRoomEffect(
     }
 
     const item: RetroItem = {
-      id: crypto.randomUUID(),
+      id: yield* deps.generateItemId(),
       text: validation.right.text,
       authorId: participantId,
       columnId: validation.right.columnId,
@@ -45,8 +61,8 @@ export function addItemForRoomEffect(
     };
     s.items.push(item);
 
-    host.broadcast({ type: "item-added", item });
-    yield* saveAndBroadcastStateEffect(host, s);
+    yield* deps.broadcast(host, { type: "item-added", item });
+    yield* deps.saveAndBroadcastState(host, s);
 
     return { success: true, item };
   });
