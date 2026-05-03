@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { Effect, Exit } from "effect";
 import {
   reorderList,
   hasDuplicateGroupNameInColumn,
@@ -6,7 +7,9 @@ import {
   getUngroupedItems,
   getGroupedItems,
   applyReorderItems,
+  validateGroupReorderPayloadEffect,
   validateItemReorderPayload,
+  validateItemReorderPayloadEffect,
   applyReorderGroups,
   validateGroupReorderPayload,
   applyDeleteGroup,
@@ -207,6 +210,14 @@ describe("validateItemReorderPayload", () => {
     expect(result.valid).toBe(false);
     expect(result.error).toContain("single column");
   });
+
+  it("validates item reorder payloads through an Effect boundary", async () => {
+    await expect(Effect.runPromise(validateItemReorderPayloadEffect(items, ["a2", "a1"])))
+      .resolves.toEqual(["a2", "a1"]);
+
+    const exit = await Effect.runPromiseExit(validateItemReorderPayloadEffect(items, ["a1", "b1"]));
+    expect(Exit.isFailure(exit)).toBe(true);
+  });
 });
 
 describe("applyReorderGroups", () => {
@@ -239,6 +250,14 @@ describe("validateGroupReorderPayload", () => {
     expect(validateGroupReorderPayload(groups, ["g1"])).toMatchObject({ valid: false, error: expect.stringContaining("every group") });
     expect(validateGroupReorderPayload(groups, ["g1", "missing"])).toMatchObject({ valid: false, error: expect.stringContaining("unknown") });
     expect(validateGroupReorderPayload(groups, ["g1", "g3"])).toMatchObject({ valid: false, error: expect.stringContaining("single column") });
+  });
+
+  it("validates group reorder payloads through an Effect boundary", async () => {
+    await expect(Effect.runPromise(validateGroupReorderPayloadEffect(groups, ["g2", "g1"])))
+      .resolves.toEqual(["g2", "g1"]);
+
+    const exit = await Effect.runPromiseExit(validateGroupReorderPayloadEffect(groups, ["g1", "g3"]));
+    expect(Exit.isFailure(exit)).toBe(true);
   });
 });
 

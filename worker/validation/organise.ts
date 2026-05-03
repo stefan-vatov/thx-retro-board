@@ -9,8 +9,8 @@ import {
   hasDuplicateGroupNameInColumn,
   isValidColumnName,
   sanitizeColumnName,
-  validateGroupReorderPayload,
-  validateItemReorderPayload,
+  validateGroupReorderPayloadEffect,
+  validateItemReorderPayloadEffect,
 } from "../../src/domain";
 import { MAX_GROUPS_PER_ROOM } from "../room-types";
 import type { ItemReorderPreconditions, MoveItemPreconditions, StoredState } from "../room-types";
@@ -141,11 +141,10 @@ export function validateGroupReorderEffect(
     if (validatedVersion.expectedVersion !== state.version) {
       return yield* Effect.fail(new RoomMutationValidationError("Stale group reorder rejected: room version changed"));
     }
-    const validation = validateGroupReorderPayload(state.groups, orderedIds);
-    if (!validation.valid) {
-      return yield* Effect.fail(new RoomMutationValidationError(validation.error));
-    }
-    return { groups: applyReorderColumnGroups(state.groups, validation.ids) };
+    const ids = yield* validateGroupReorderPayloadEffect(state.groups, orderedIds).pipe(
+      Effect.mapError((error) => new RoomMutationValidationError(error.message)),
+    );
+    return { groups: applyReorderColumnGroups(state.groups, ids) };
   });
 }
 
@@ -169,11 +168,10 @@ export function validateItemReorderEffect(
     if (validatedPreconditions.preconditions.expectedVersion !== state.version) {
       return yield* Effect.fail(new RoomMutationValidationError("Stale item reorder rejected: room version changed"));
     }
-    const validation = validateItemReorderPayload(state.items, orderedIds);
-    if (!validation.valid) {
-      return yield* Effect.fail(new RoomMutationValidationError(validation.error));
-    }
-    const firstItem = state.items.find((item) => item.id === validation.ids[0]);
+    const ids = yield* validateItemReorderPayloadEffect(state.items, orderedIds).pipe(
+      Effect.mapError((error) => new RoomMutationValidationError(error.message)),
+    );
+    const firstItem = state.items.find((item) => item.id === ids[0]);
     if (
       !firstItem
       || firstItem.columnId !== validatedPreconditions.preconditions.sourceColumnId
@@ -181,7 +179,7 @@ export function validateItemReorderEffect(
     ) {
       return yield* Effect.fail(new RoomMutationValidationError("Stale item reorder rejected: source list changed"));
     }
-    return { items: applyReorderItems(state.items, validation.ids) };
+    return { items: applyReorderItems(state.items, ids) };
   });
 }
 
