@@ -12,6 +12,10 @@ import {
   RoomNotFoundScreen,
 } from "./RoomStateScreens";
 import { RoomPageLoadedView } from "./RoomPageLoadedView";
+import {
+  planInitialRoomLoadEffect,
+  resolveInitialJoinResultEffect,
+} from "./room-page-effect";
 import { useWriteCards } from "./use-write-cards";
 import {
   classifyRoomLoadErrorEffect,
@@ -128,7 +132,15 @@ export function RoomPage() {
     if (!roomId) return;
     setPageState("loading");
     setRoomLoadError(null);
-    if (!identity.displayName || !identity.connectionToken) {
+    const loadPlan = Effect.runSync(
+      planInitialRoomLoadEffect({
+        roomId,
+        displayName: identity.displayName,
+        connectionToken: identity.connectionToken,
+      }),
+    );
+    if (!loadPlan) return;
+    if (loadPlan.action === "show-join") {
       setPageState("join");
       return;
     }
@@ -137,12 +149,13 @@ export function RoomPage() {
         joinRoomEffect(
           roomId,
           participantId,
-          identity.displayName,
-          identity.connectionToken,
+          loadPlan.displayName,
+          loadPlan.connectionToken,
           getFacilitatorClaimToken(roomId),
         ),
       );
-      if (!result.success) {
+      const resolution = Effect.runSync(resolveInitialJoinResultEffect(result));
+      if (resolution.action === "reset-to-join") {
         resetStoredIdentity();
         setPageState("join");
         return;
@@ -150,14 +163,14 @@ export function RoomPage() {
       Effect.runSync(
         persistJoinedIdentityEffect({
           roomId,
-          displayName: identity.displayName,
-          connectionToken: result.connectionToken,
+          displayName: loadPlan.displayName,
+          connectionToken: resolution.connectionToken,
           clearFacilitatorClaim: false,
         }),
       );
-      setLocalRoomState(result.state ?? null);
-      if (result.connectionToken) {
-        setConnectionToken(result.connectionToken);
+      setLocalRoomState(resolution.state);
+      if (resolution.connectionToken) {
+        setConnectionToken(resolution.connectionToken);
       }
       setPageState("room");
     } catch (error) {

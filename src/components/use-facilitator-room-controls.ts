@@ -8,8 +8,13 @@ import {
   setTimerEffect,
   setVoteBudgetEffect,
 } from "../api";
-import type { Phase, RankingMethod, RoomState } from "../domain";
-import { PHASE_ORDER } from "../domain";
+import type { RankingMethod, RoomState } from "../domain";
+import {
+  getNextPhaseEffect,
+  getRankingMethodSuccessMessageEffect,
+  parseTimerMinutesEffect,
+  parseVoteBudgetEffect,
+} from "./facilitator-controls-effect";
 import {
   clearStoredIdentity,
   runRoomMutationWithRefreshEffect,
@@ -51,11 +56,9 @@ export function useFacilitatorRoomControls({
   const [purgePending, setPurgePending] = useState(false);
   const [purgeMsg, setPurgeMsg] = useState<string | null>(null);
   const lastAuthoritativeVoteBudgetRef = useRef<number | null>(null);
-  const currentPhaseIndex = roomState
-    ? PHASE_ORDER.indexOf(roomState.phase)
-    : -1;
-  const nextPhase =
-    currentPhaseIndex >= 0 ? PHASE_ORDER[currentPhaseIndex + 1] : undefined;
+  const nextPhase = roomState
+    ? Effect.runSync(getNextPhaseEffect(roomState.phase))
+    : undefined;
 
   useEffect(() => {
     const timeout = window.setTimeout(() => setTimerPending(false), 0);
@@ -100,17 +103,12 @@ export function useFacilitatorRoomControls({
   async function handleSetBudget() {
     if (!roomId || budgetPending) return;
     setBudgetMsg(null);
-    const rawBudget = voteBudgetInput.trim();
-    const budget = Number(rawBudget);
-    if (
-      !/^\d+$/.test(rawBudget) ||
-      !Number.isInteger(budget) ||
-      budget < 1 ||
-      budget > 100
-    ) {
-      setBudgetMsg("Vote budget must be an integer between 1 and 100.");
+    const parsedBudget = Effect.runSync(parseVoteBudgetEffect(voteBudgetInput));
+    if (!parsedBudget.success) {
+      setBudgetMsg(parsedBudget.error);
       return;
     }
+    const { budget } = parsedBudget;
     setBudgetPending(true);
     try {
       const result = await Effect.runPromise(
@@ -157,9 +155,7 @@ export function useFacilitatorRoomControls({
       );
       if (result.success) {
         setRankingMsg(
-          rankingMethod === "pairwise"
-            ? "Pairwise ranking selected."
-            : "Score voting selected.",
+          Effect.runSync(getRankingMethodSuccessMessageEffect(rankingMethod)),
         );
         if (result.state) setLocalRoomState(result.state);
       } else {
@@ -173,8 +169,7 @@ export function useFacilitatorRoomControls({
   async function handleAdvancePhase() {
     if (!roomId || !roomState || phasePending) return;
     setPhaseMsg(null);
-    const currentIdx = PHASE_ORDER.indexOf(roomState.phase);
-    const nextPhase = PHASE_ORDER[currentIdx + 1] as Phase | undefined;
+    const nextPhase = Effect.runSync(getNextPhaseEffect(roomState.phase));
     if (!nextPhase) return;
     setPhasePending(true);
     try {
@@ -200,25 +195,23 @@ export function useFacilitatorRoomControls({
     if (!roomId || !roomState || timerPending) return;
     setTimerMsg(null);
     setTimerInputError(null);
-    const raw = timerMinutesInput.trim();
-    if (!raw) {
-      setTimerInputError("Timer cannot be blank.");
-      return;
-    }
-    const minutes = parseInt(raw, 10);
-    if (isNaN(minutes) || minutes < 1) {
-      setTimerInputError("Timer must be at least 1 minute.");
-      return;
-    }
-    if (minutes > 60) {
-      setTimerInputError("Timer cannot exceed 60 minutes.");
+    const parsedTimer = Effect.runSync(
+      parseTimerMinutesEffect(timerMinutesInput),
+    );
+    if (!parsedTimer.success) {
+      setTimerInputError(parsedTimer.error);
       return;
     }
     setTimerPending(true);
     try {
       const result = await Effect.runPromise(
         runRoomMutationWithRefreshEffect(
-          setTimerEffect(roomId, participantId, connectionToken, minutes * 60),
+          setTimerEffect(
+            roomId,
+            participantId,
+            connectionToken,
+            parsedTimer.durationSeconds,
+          ),
           getRoomStateEffect(roomId, participantId, connectionToken),
         ),
       );
