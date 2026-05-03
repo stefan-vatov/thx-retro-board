@@ -20,6 +20,21 @@ export type RealtimeReconnectPlanInput = {
   requestedDelay?: number;
 };
 
+export type RealtimeWebSocketUrlInput = {
+  protocol: "ws:" | "wss:";
+  host: string;
+  roomId: string;
+};
+
+export type RealtimeOnlineReconnectInput = {
+  readyState: number | null | undefined;
+  openReadyState: number;
+};
+
+export type RealtimeOnlineReconnectPlan =
+  | { type: "ignore" }
+  | { type: "schedule"; delay: 0 };
+
 export function getRealtimeReconnectDelay(reconnectAttempts: number): number {
   return Math.min(
     MAX_RECONNECT_DELAY_MS,
@@ -61,4 +76,25 @@ export function planRealtimeReconnectEffect({
       requestedDelay ?? getRealtimeReconnectDelay(reconnectAttempts);
     return { type: "schedule" as const, attempts, delay };
   });
+}
+
+export function resolveRealtimeWebSocketUrlEffect({
+  protocol,
+  host,
+  roomId,
+}: RealtimeWebSocketUrlInput): Effect.Effect<string> {
+  return Effect.sync(
+    () => `${protocol}//${host}/api/rooms/${encodeURIComponent(roomId)}/ws`,
+  );
+}
+
+export function planRealtimeOnlineReconnectEffect({
+  readyState,
+  openReadyState,
+}: RealtimeOnlineReconnectInput): Effect.Effect<RealtimeOnlineReconnectPlan> {
+  return Effect.sync(() =>
+    readyState === openReadyState
+      ? { type: "ignore" as const }
+      : { type: "schedule" as const, delay: 0 as const },
+  );
 }

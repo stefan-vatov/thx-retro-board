@@ -10,6 +10,8 @@ import { applyRealtimeMessageEffect } from "./room-realtime-state";
 import type { RealtimeMessageResult } from "./room-realtime-state";
 import {
   planRealtimeReconnectEffect,
+  planRealtimeOnlineReconnectEffect,
+  resolveRealtimeWebSocketUrlEffect,
   shouldResetRealtimeReconnectAttempts,
 } from "./realtime-reconnect";
 
@@ -153,7 +155,7 @@ export function openRealtimeWebSocketEffect(
       };
     }
 
-    const url = `${request.protocol}//${request.host}/api/rooms/${encodeURIComponent(request.roomId)}/ws`;
+    const url = yield* resolveRealtimeWebSocketUrlEffect(request);
     const socket = yield* deps.createSocket(url, [
       "retro-board",
       `ticket-${ticket.ticket}`,
@@ -332,9 +334,13 @@ export function useRoom(
     }
 
     function handleOnline() {
-      if (wsRef.current?.readyState !== WebSocket.OPEN) {
-        scheduleReconnect(0);
-      }
+      const plan = Effect.runSync(
+        planRealtimeOnlineReconnectEffect({
+          readyState: wsRef.current?.readyState,
+          openReadyState: WebSocket.OPEN,
+        }),
+      );
+      if (plan.type === "schedule") scheduleReconnect(plan.delay);
     }
 
     window.addEventListener("online", handleOnline);

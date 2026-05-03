@@ -8,6 +8,8 @@ import {
   canAttemptRealtimeReconnect,
   getRealtimeReconnectDelay,
   planRealtimeReconnectEffect,
+  planRealtimeOnlineReconnectEffect,
+  resolveRealtimeWebSocketUrlEffect,
   shouldResetRealtimeReconnectAttempts,
 } from "./realtime-reconnect";
 
@@ -93,5 +95,39 @@ describe("planRealtimeReconnectEffect", () => {
       attempts: 2,
       delay: getRealtimeReconnectDelay(2),
     });
+  });
+});
+
+describe("realtime connection boundary helpers", () => {
+  it("builds the websocket URL from the current browser location", async () => {
+    await expect(
+      Effect.runPromise(
+        resolveRealtimeWebSocketUrlEffect({
+          protocol: "wss:",
+          host: "retro.example.test",
+          roomId: "room with spaces",
+        }),
+      ),
+    ).resolves.toBe("wss://retro.example.test/api/rooms/room%20with%20spaces/ws");
+  });
+
+  it("plans online reconnects only when there is no open websocket", async () => {
+    await expect(
+      Effect.runPromise(
+        planRealtimeOnlineReconnectEffect({
+          readyState: 1,
+          openReadyState: 1,
+        }),
+      ),
+    ).resolves.toEqual({ type: "ignore" });
+
+    await expect(
+      Effect.runPromise(
+        planRealtimeOnlineReconnectEffect({
+          readyState: 3,
+          openReadyState: 1,
+        }),
+      ),
+    ).resolves.toEqual({ type: "schedule", delay: 0 });
   });
 });

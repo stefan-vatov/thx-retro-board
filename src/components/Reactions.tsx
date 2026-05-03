@@ -8,13 +8,12 @@ import {
 import { createPortal } from "react-dom";
 import { Effect } from "effect";
 import type { ReactionTarget, RoomState } from "../domain";
-import {
-  getReactionCount,
-  getReactionsForTarget,
-  hasParticipantReaction,
-  voteTargetKey,
-} from "../domain";
+import { voteTargetKey } from "../domain";
 import { loadEmojiPicker } from "./emoji-picker-effect";
+import {
+  buildReactionBarModelEffect,
+  planReactionMenuToggleEffect,
+} from "./reaction-bar-effect";
 import {
   shouldCloseReactionMenuForKeyEffect,
   shouldCloseReactionMenuForPointerEffect,
@@ -54,12 +53,12 @@ export function ReactionBar({
   const addButtonRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const pickerRef = useRef<HTMLElement | null>(null);
-  const activeEmojis = Array.from(
-    new Set(
-      getReactionsForTarget(roomState.reactions, target).map(
-        (reaction) => reaction.emoji,
-      ),
-    ),
+  const reactionPills = Effect.runSync(
+    buildReactionBarModelEffect({
+      reactions: roomState.reactions,
+      target,
+      participantId,
+    }),
   );
 
   useEffect(() => {
@@ -224,14 +223,7 @@ export function ReactionBar({
       aria-label={`Reactions for ${label}`}
       data-reaction-target={voteTargetKey(target)}
     >
-      {activeEmojis.map((emoji) => {
-        const count = getReactionCount(roomState.reactions, target, emoji);
-        const selected = hasParticipantReaction(
-          roomState.reactions,
-          participantId,
-          target,
-          emoji,
-        );
+      {reactionPills.map(({ emoji, count, selected }) => {
         return (
           <button
             key={emoji}
@@ -257,8 +249,14 @@ export function ReactionBar({
           type="button"
           className="reaction-add__button"
           onClick={(event) => {
-            if (stopPropagation) event.stopPropagation();
-            setMenuOpen((open) => !open);
+            const plan = Effect.runSync(
+              planReactionMenuToggleEffect({
+                open: menuOpen,
+                stopPropagation,
+              }),
+            );
+            if (plan.shouldStopPropagation) event.stopPropagation();
+            setMenuOpen(plan.nextOpen);
           }}
           aria-expanded={menuOpen}
           aria-label={`Add reaction for ${label}`}
