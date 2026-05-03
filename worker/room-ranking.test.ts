@@ -171,6 +171,29 @@ describe("room ranking commands", () => {
     expect(calls).toEqual(["load", "save:1:2"]);
   });
 
+  it("removes votes through injected Effect dependencies", async () => {
+    const state = createInitialStoredState("room-a");
+    state.phase = "vote";
+    state.participants = [{ id: "p1", displayName: "P1", isFacilitator: false }];
+    state.items = [{ id: "item-a", text: "A", authorId: "p1", columnId: "mad", groupId: null, order: 0 }];
+    state.votes = [{ participantId: "p1", target: itemVoteTarget("item-a"), count: 2 }];
+    const calls: string[] = [];
+
+    const result = await Effect.runPromise(removeVoteForRoomEffect({} as never, "p1", itemVoteTarget("item-a"), {
+      loadState: () => Effect.sync(() => {
+        calls.push("load");
+        return state;
+      }),
+      saveAndBroadcastState: (_host, savedState) => Effect.sync(() => {
+        calls.push(`save:${savedState.votes.length}:${savedState.votes[0]?.count ?? 0}`);
+      }),
+    }));
+
+    expect(result).toEqual({ success: true });
+    expect(state.votes).toEqual([{ participantId: "p1", target: itemVoteTarget("item-a"), count: 1 }]);
+    expect(calls).toEqual(["load", "save:1:1"]);
+  });
+
   it("chooses pairwise winners and toggles reactions through Effect APIs", async () => {
     const state = createInitialStoredState("room-a");
     state.phase = "vote";

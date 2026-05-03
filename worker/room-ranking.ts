@@ -60,6 +60,16 @@ export const castVoteForRoomDeps: CastVoteForRoomDeps = {
   saveAndBroadcastState: saveAndBroadcastStateEffect,
 };
 
+export interface RemoveVoteForRoomDeps {
+  loadState: (host: RoomCommandHost) => Effect.Effect<StoredState>;
+  saveAndBroadcastState: (host: RoomCommandHost, state: StoredState) => Effect.Effect<void>;
+}
+
+export const removeVoteForRoomDeps: RemoveVoteForRoomDeps = {
+  loadState: (host) => Effect.promise(() => host.loadState()),
+  saveAndBroadcastState: saveAndBroadcastStateEffect,
+};
+
 export async function setVoteBudgetForRoom(
   host: RoomCommandHost,
   participantId: string,
@@ -188,16 +198,17 @@ export function removeVoteForRoomEffect(
   host: RoomCommandHost,
   participantId: string,
   targetOrGroupId: VoteTarget | string,
+  deps: RemoveVoteForRoomDeps = removeVoteForRoomDeps,
 ): Effect.Effect<{ success: boolean; error?: string }> {
   return Effect.gen(function* () {
-    const s = yield* Effect.promise(() => host.loadState());
+    const s = yield* deps.loadState(host);
     const validation = yield* Effect.either(validateVoteRemoveEffect(s, participantId, targetOrGroupId));
     if (validation._tag === "Left") {
       return { success: false, error: validation.left.message };
     }
 
     s.votes = validation.right.votes;
-    yield* saveAndBroadcastStateEffect(host, s);
+    yield* deps.saveAndBroadcastState(host, s);
 
     return { success: true };
   });
