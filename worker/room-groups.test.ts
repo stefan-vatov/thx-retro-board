@@ -154,6 +154,34 @@ describe("room group commands", () => {
     });
   });
 
+  it("reorders groups through injected Effect dependencies", async () => {
+    const state = createInitialStoredState("room-a");
+    state.phase = "organise";
+    state.participants = [{ id: "p1", displayName: "P1", isFacilitator: false }];
+    state.groups = [
+      { id: "group-a", name: "A", columnId: "mad", order: 0 },
+      { id: "group-b", name: "B", columnId: "mad", order: 1 },
+    ];
+    const calls: string[] = [];
+
+    const result = await Effect.runPromise(reorderGroupsForRoomEffect({} as never, "p1", ["group-b", "group-a"], state.version, {
+      loadState: () => Effect.sync(() => {
+        calls.push("load");
+        return state;
+      }),
+      saveAndBroadcastState: (_host, savedState) => Effect.sync(() => {
+        calls.push(`save:${savedState.groups.map((group) => `${group.id}:${group.order}`).join(",")}`);
+      }),
+    }));
+
+    expect(result).toEqual({ success: true });
+    expect(Object.fromEntries(state.groups.map((group) => [group.id, group.order]))).toEqual({
+      "group-a": 1,
+      "group-b": 0,
+    });
+    expect(calls).toEqual(["load", "save:group-a:1,group-b:0"]);
+  });
+
   it("moves and reorders items through the Effect APIs", async () => {
     const state = createInitialStoredState("room-a");
     state.phase = "organise";
