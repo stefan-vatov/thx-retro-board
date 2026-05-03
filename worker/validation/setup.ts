@@ -9,7 +9,7 @@ import {
   MAX_COLUMNS,
   PHASE_ORDER,
   sanitizeColumnName,
-  validateFullColumnPermutation,
+  validateFullColumnPermutationEffect,
 } from "../../src/domain";
 import { MAX_PAIRWISE_TARGETS, MAX_PARTICIPANTS_PER_ROOM } from "../room-types";
 import type { StoredState } from "../room-types";
@@ -171,11 +171,10 @@ export function validateColumnReorderEffect(
     if (state.phase !== "setup") {
       return yield* Effect.fail(new RoomMutationValidationError("Columns can only be configured during setup"));
     }
-    const validation = validateFullColumnPermutation(state.columns ?? [], orderedIds);
-    if (!validation.valid) {
-      return yield* Effect.fail(new RoomMutationValidationError(validation.error));
-    }
-    return { columns: applyReorderColumns(state.columns ?? [], validation.ids) };
+    const ids = yield* validateFullColumnPermutationEffect(state.columns ?? [], orderedIds).pipe(
+      Effect.mapError((error) => new RoomMutationValidationError(error.message)),
+    );
+    return { columns: applyReorderColumns(state.columns ?? [], ids) };
   });
 }
 

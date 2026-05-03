@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { Effect, Exit } from "effect";
 import {
   getDefaultColumns,
   validateFullColumnPermutation,
+  validateFullColumnPermutationEffect,
   applyReorderColumns,
   applyEditColumn,
   applyDeleteColumn,
@@ -27,6 +29,16 @@ describe("column helpers", () => {
     expect(validateFullColumnPermutation(columns, ["start", "stop"]).valid).toBe(false);
     expect(validateFullColumnPermutation(columns, ["start", "stop", "unknown"]).valid).toBe(false);
     expect(validateFullColumnPermutation(columns, "start").valid).toBe(false);
+  });
+
+  it("validates complete column reorder payloads through an Effect boundary", async () => {
+    const columns = getDefaultColumns();
+    const ids = columns.map((column) => column.id).toReversed();
+
+    await expect(Effect.runPromise(validateFullColumnPermutationEffect(columns, ids))).resolves.toEqual(ids);
+
+    const exit = await Effect.runPromiseExit(validateFullColumnPermutationEffect(columns, [ids[0], ids[0]]));
+    expect(Exit.isFailure(exit)).toBe(true);
   });
 
   it("reorders columns with stable IDs and contiguous order", () => {
