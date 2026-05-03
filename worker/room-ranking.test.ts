@@ -77,6 +77,27 @@ describe("room ranking commands", () => {
     expect(state.pairwiseChoices).toEqual([]);
   });
 
+  it("sets vote budget through injected Effect dependencies", async () => {
+    const state = createInitialStoredState("room-a");
+    state.participants = [{ id: "fac", displayName: "Fac", isFacilitator: true }];
+    state.facilitatorId = "fac";
+    const calls: string[] = [];
+
+    const result = await Effect.runPromise(setVoteBudgetForRoomEffect({} as never, "fac", 7, {
+      loadState: () => Effect.sync(() => {
+        calls.push("load");
+        return state;
+      }),
+      saveAndBroadcastState: (_host, savedState) => Effect.sync(() => {
+        calls.push(`save:${savedState.voteBudget}`);
+      }),
+    }));
+
+    expect(result).toEqual({ success: true });
+    expect(state.voteBudget).toBe(7);
+    expect(calls).toEqual(["load", "save:7"]);
+  });
+
   it("casts and removes score votes through Effect APIs", async () => {
     const state = createInitialStoredState("room-a");
     state.phase = "vote";

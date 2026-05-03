@@ -2,6 +2,7 @@ import { Effect } from "effect";
 import type { RankingMethod, ReactionTarget, VoteTarget } from "../src/domain";
 import { saveAndBroadcastStateEffect } from "./room-command-effect";
 import type { RoomCommandHost } from "./room-command-host";
+import type { StoredState } from "./room-types";
 import {
   validatePairwiseChoiceEffect,
   validateRankingMethodChangeEffect,
@@ -10,6 +11,16 @@ import {
   validateVoteCastEffect,
   validateVoteRemoveEffect,
 } from "./validation";
+
+export interface SetVoteBudgetForRoomDeps {
+  loadState: (host: RoomCommandHost) => Effect.Effect<StoredState>;
+  saveAndBroadcastState: (host: RoomCommandHost, state: StoredState) => Effect.Effect<void>;
+}
+
+export const setVoteBudgetForRoomDeps: SetVoteBudgetForRoomDeps = {
+  loadState: (host) => Effect.promise(() => host.loadState()),
+  saveAndBroadcastState: saveAndBroadcastStateEffect,
+};
 
 export async function setVoteBudgetForRoom(
   host: RoomCommandHost,
@@ -23,16 +34,17 @@ export function setVoteBudgetForRoomEffect(
   host: RoomCommandHost,
   participantId: string,
   budget: number,
+  deps: SetVoteBudgetForRoomDeps = setVoteBudgetForRoomDeps,
 ): Effect.Effect<{ success: boolean; error?: string }> {
   return Effect.gen(function* () {
-    const s = yield* Effect.promise(() => host.loadState());
+    const s = yield* deps.loadState(host);
     const validation = yield* Effect.either(validateVoteBudgetChangeEffect(s, participantId, budget));
     if (validation._tag === "Left") {
       return { success: false, error: validation.left.message };
     }
 
     s.voteBudget = validation.right.budget;
-    yield* saveAndBroadcastStateEffect(host, s);
+    yield* deps.saveAndBroadcastState(host, s);
     return { success: true };
   });
 }
