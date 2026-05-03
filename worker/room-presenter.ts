@@ -1,3 +1,5 @@
+import { Effect } from "effect";
+
 import type { PairwiseChoice, RoomState, VoteAllocation, VoteTarget } from "../src/domain";
 import { getVoteTarget, pairwiseComparisonKey, voteTargetKey } from "../src/domain";
 import { ANONYMOUS_VOTE_PARTICIPANT_ID, type StoredState, type StoredTimer } from "./room-types";
@@ -13,8 +15,16 @@ export function computeTimerStatus(timer: StoredTimer, now = Date.now()): Stored
   return timer;
 }
 
+export function computeTimerStatusEffect(timer: StoredTimer, now = Date.now()): Effect.Effect<StoredTimer> {
+  return Effect.sync(() => computeTimerStatus(timer, now));
+}
+
 export function getDecisionTargetCount(s: StoredState): number {
   return s.groups.length + s.items.filter((item) => item.groupId === null).length;
+}
+
+export function getDecisionTargetCountEffect(s: StoredState): Effect.Effect<number> {
+  return Effect.sync(() => getDecisionTargetCount(s));
 }
 
 function getPairwiseProgress(s: StoredState) {
@@ -99,4 +109,8 @@ export function toRoomState(s: StoredState, participantId?: string): RoomState {
     voteBudget: s.voteBudget,
     version: s.version,
   };
+}
+
+export function toRoomStateEffect(s: StoredState, participantId?: string): Effect.Effect<RoomState> {
+  return Effect.sync(() => toRoomState(s, participantId));
 }

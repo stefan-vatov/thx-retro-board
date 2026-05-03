@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 import type { Phase } from "../src/domain";
 import { saveAndBroadcastStateEffect } from "./room-command-effect";
-import { getDecisionTargetCount } from "./room-presenter";
+import { getDecisionTargetCountEffect } from "./room-presenter";
 import type { RoomCommandHost } from "./room-command-host";
 import {
   validatePhaseChangeEffect,
@@ -24,7 +24,8 @@ export function setPhaseForRoomEffect(
 ): Effect.Effect<{ success: boolean; error?: string }> {
   return Effect.gen(function* () {
     const s = yield* Effect.promise(() => host.loadState());
-    const validation = yield* Effect.either(validatePhaseChangeEffect(s, participantId, phase, getDecisionTargetCount(s)));
+    const decisionTargetCount = yield* getDecisionTargetCountEffect(s);
+    const validation = yield* Effect.either(validatePhaseChangeEffect(s, participantId, phase, decisionTargetCount));
     if (validation._tag === "Left") {
       return { success: false, error: validation.left.message };
     }

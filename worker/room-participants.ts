@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import type { Participant, RoomState, ServerToClientMessage } from "../src/domain";
-import { toRoomState } from "./room-presenter";
+import { toRoomStateEffect } from "./room-presenter";
 import { generateToken } from "./room-tickets";
 import { validateParticipantJoinEffect } from "./validation";
 import type { RoomCommandHost } from "./room-command-host";
@@ -68,7 +68,8 @@ export function joinRoomParticipantEffect(
         yield* Effect.promise(() => host.scheduleEmptyRoomPurge());
       }
 
-      return { success: true, state: toRoomState(s, participantId), connectionToken: token };
+      const state = yield* toRoomStateEffect(s, participantId);
+      return { success: true, state, connectionToken: token };
     }
 
     yield* Effect.promise(() => host.cancelEmptyRoomPurge());
@@ -97,6 +98,7 @@ export function joinRoomParticipantEffect(
       yield* Effect.promise(() => host.scheduleEmptyRoomPurge());
     }
 
-    return { success: true, state: toRoomState(s, participantId), connectionToken: token };
+    const state = yield* toRoomStateEffect(s, participantId);
+    return { success: true, state, connectionToken: token };
   });
 }
