@@ -73,6 +73,34 @@ describe("room websocket event handling", () => {
     expect(socket.closed).toEqual([]);
   });
 
+  it("routes parsed client messages through injected Effect dependencies", async () => {
+    const socket = new TestSocket("p1");
+    const calls: string[] = [];
+
+    await Effect.runPromise(handleRoomWebSocketMessageEffect(
+      {} as never,
+      socket as unknown as WebSocket,
+      JSON.stringify({ type: "add-item", text: "Card", columnId: "mad" }),
+      {
+        getSession: () => Effect.succeed(socket as unknown as WebSocket),
+        closeSocket: (_ws, code, reason) => Effect.sync(() => {
+          calls.push(`close:${code}:${reason}`);
+        }),
+        allowWebSocketMessage: () => Effect.succeed({ allowed: true as const }),
+        sendSocketError: (_ws, message) => Effect.sync(() => {
+          calls.push(`error:${message}`);
+        }),
+        handleRealtimeMessage: (_host, participantId, message) => Effect.sync(() => {
+          calls.push(`handle:${participantId}:${message.type}`);
+        }),
+      },
+    ));
+
+    expect(calls).toEqual(["handle:p1:add-item"]);
+    expect(socket.sent).toEqual([]);
+    expect(socket.closed).toEqual([]);
+  });
+
   it("reports invalid messages without throwing", async () => {
     const socket = new TestSocket("p1");
 

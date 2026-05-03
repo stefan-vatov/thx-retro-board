@@ -35,6 +35,38 @@ export const roomWebSocketCloseDeps: RoomWebSocketCloseDeps = {
   scheduleEmptyRoomPurge: (host) => Effect.promise(() => host.scheduleEmptyRoomPurge()),
 };
 
+export interface RoomWebSocketMessageDeps {
+  getSession: (host: RoomWebSocketEventHost, participantId: string) => Effect.Effect<WebSocket | undefined>;
+  closeSocket: (ws: WebSocket, code: number, reason: string) => Effect.Effect<void>;
+  allowWebSocketMessage: (
+    host: RoomWebSocketEventHost,
+    participantId: string,
+  ) => Effect.Effect<{ allowed: true } | { allowed: false; reason: string }>;
+  sendSocketError: (ws: WebSocket, message: string) => Effect.Effect<void>;
+  handleRealtimeMessage: (
+    host: RoomWebSocketEventHost,
+    participantId: string,
+    message: ClientToServerMessage,
+  ) => Effect.Effect<void>;
+}
+
+export const roomWebSocketMessageDeps: RoomWebSocketMessageDeps = {
+  getSession: (host, participantId) => Effect.sync(() => host.getSession(participantId)),
+  closeSocket: (ws, code, reason) => Effect.sync(() => {
+    try {
+      ws.close(code, reason);
+    } catch {
+      // Ignore already-closing sockets.
+    }
+  }),
+  allowWebSocketMessage: (host, participantId) => Effect.sync(() => host.allowWebSocketMessage(participantId)),
+  sendSocketError: (ws, message) => Effect.sync(() => {
+    ws.send(JSON.stringify({ type: "error", message }));
+  }),
+  handleRealtimeMessage: (host, participantId, message) =>
+    Effect.promise(() => host.handleRealtimeMessage(participantId, message)),
+};
+
 export async function handleRoomWebSocketMessage(
   host: RoomWebSocketEventHost,
   ws: WebSocket,
@@ -47,39 +79,36 @@ export function handleRoomWebSocketMessageEffect(
   host: RoomWebSocketEventHost,
   ws: WebSocket,
   message: string | ArrayBuffer,
+  deps: RoomWebSocketMessageDeps = roomWebSocketMessageDeps,
 ): Effect.Effect<void> {
   return Effect.gen(function* () {
     const attachment = ws.deserializeAttachment() as { participantId: string } | null;
     const participantId = attachment?.participantId;
     if (!participantId) return;
-    if (host.getSession(participantId) !== ws) {
-      try {
-        ws.close(1008, "Obsolete realtime session");
-      } catch {
-        // Ignore already-closing sockets.
-      }
+    if ((yield* deps.getSession(host, participantId)) !== ws) {
+      yield* deps.closeSocket(ws, 1008, "Obsolete realtime session");
       return;
     }
 
-    const rateLimit = host.allowWebSocketMessage(participantId);
+    const rateLimit = yield* deps.allowWebSocketMessage(host, participantId);
     if (!rateLimit.allowed) {
-      ws.send(JSON.stringify({ type: "error", message: rateLimit.reason }));
-      ws.close(1008, "Realtime rate limit exceeded");
+      yield* deps.sendSocketError(ws, rateLimit.reason);
+      yield* deps.closeSocket(ws, 1008, "Realtime rate limit exceeded");
       return;
     }
     const messageSize = typeof message === "string" ? message.length : message.byteLength;
     if (messageSize > MAX_WEBSOCKET_MESSAGE_BYTES) {
-      ws.send(JSON.stringify({ type: "error", message: "Message is too large" }));
+      yield* deps.sendSocketError(ws, "Message is too large");
       return;
     }
     const msg = yield* Effect.either(parseClientWebSocketMessageEffect(message));
     if (msg._tag === "Left") {
-      ws.send(JSON.stringify({ type: "error", message: "Invalid message" }));
+      yield* deps.sendSocketError(ws, "Invalid message");
       return;
     }
-    const handled = yield* Effect.either(Effect.promise(() => host.handleRealtimeMessage(participantId, msg.right)));
+    const handled = yield* Effect.either(deps.handleRealtimeMessage(host, participantId, msg.right));
     if (handled._tag === "Left") {
-      ws.send(JSON.stringify({ type: "error", message: "Invalid message" }));
+      yield* deps.sendSocketError(ws, "Invalid message");
     }
   });
 }
