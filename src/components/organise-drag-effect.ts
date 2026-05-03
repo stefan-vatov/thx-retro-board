@@ -29,6 +29,28 @@ export type BuildMoveItemCommandResult =
   | { success: true; command: MoveItemToGroupCommand }
   | { success: false; error: string | null };
 
+export type DropZoneDataset = {
+  groupId?: string;
+  dropColumnId?: string;
+  index?: string;
+};
+
+export type DropListRowMetrics = {
+  top: number;
+  height: number;
+};
+
+export type DropListDataset = {
+  dropList?: string;
+  dropColumnId?: string;
+  pointerY: number;
+  rows: DropListRowMetrics[];
+};
+
+function parseGroupId(groupKey: string | undefined): string | null {
+  return groupKey === "__ungrouped__" ? null : (groupKey ?? null);
+}
+
 export function shouldBeginPointerDragEffect({
   start,
   current,
@@ -66,6 +88,38 @@ export function buildMoveItemCommandEffect(
         sourceGroupId: dragStart.sourceGroupId,
         sourceIndex: dragStart.sourceIndex,
       },
+    };
+  });
+}
+
+export function getDropTargetFromZoneEffect(
+  dataset: DropZoneDataset,
+): Effect.Effect<DropTarget | null> {
+  return Effect.sync(() => {
+    const columnId = dataset.dropColumnId ?? null;
+    const index = Number(dataset.index);
+    if (!Number.isInteger(index) || !columnId) return null;
+    return {
+      groupId: parseGroupId(dataset.groupId),
+      columnId,
+      index,
+    };
+  });
+}
+
+export function getDropTargetFromListEffect({
+  dropList,
+  dropColumnId,
+  pointerY,
+  rows,
+}: DropListDataset): Effect.Effect<DropTarget | null> {
+  return Effect.sync(() => {
+    if (!dropColumnId) return null;
+    const index = rows.findIndex((row) => pointerY < row.top + row.height / 2);
+    return {
+      groupId: parseGroupId(dropList),
+      columnId: dropColumnId,
+      index: index === -1 ? rows.length : index,
     };
   });
 }

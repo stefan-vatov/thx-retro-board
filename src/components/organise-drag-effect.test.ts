@@ -2,6 +2,8 @@ import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   buildMoveItemCommandEffect,
+  getDropTargetFromListEffect,
+  getDropTargetFromZoneEffect,
   shouldBeginPointerDragEffect,
 } from "./organise-drag-effect";
 
@@ -83,6 +85,74 @@ describe("buildMoveItemCommandEffect", () => {
     ).resolves.toEqual({
       success: false,
       error: null,
+    });
+  });
+});
+
+describe("drop target parsing", () => {
+  it("parses explicit drop zones from element datasets", async () => {
+    await expect(
+      Effect.runPromise(
+        getDropTargetFromZoneEffect({
+          groupId: "__ungrouped__",
+          dropColumnId: "col-1",
+          index: "2",
+        }),
+      ),
+    ).resolves.toEqual({
+      groupId: null,
+      columnId: "col-1",
+      index: 2,
+    });
+
+    await expect(
+      Effect.runPromise(
+        getDropTargetFromZoneEffect({
+          groupId: "group-1",
+          dropColumnId: "col-1",
+          index: "bad",
+        }),
+      ),
+    ).resolves.toBeNull();
+  });
+
+  it("calculates list drop indexes from row midpoints", async () => {
+    await expect(
+      Effect.runPromise(
+        getDropTargetFromListEffect({
+          dropList: "group-1",
+          dropColumnId: "col-1",
+          pointerY: 26,
+          rows: [
+            { top: 10, height: 20 },
+            { top: 40, height: 20 },
+          ],
+        }),
+      ),
+    ).resolves.toEqual({
+      groupId: "group-1",
+      columnId: "col-1",
+      index: 1,
+    });
+  });
+
+  it("drops at the end of a list when the pointer is below every row", async () => {
+    await expect(
+      Effect.runPromise(
+        getDropTargetFromListEffect({
+          dropList: "__ungrouped__",
+          dropColumnId: "col-1",
+          pointerY: 100,
+          rows: [
+            { top: 10, height: 20 },
+            { top: 40, height: 20 },
+          ],
+        }),
+      ),
+    ).resolves.toEqual({
+      groupId: null,
+      columnId: "col-1",
+      index: 2,
     });
   });
 });

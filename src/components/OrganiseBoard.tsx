@@ -10,6 +10,8 @@ import {
 import { scheduleFocusRestoreEffect } from "./focus-restore";
 import {
   buildMoveItemCommandEffect,
+  getDropTargetFromListEffect,
+  getDropTargetFromZoneEffect,
   shouldBeginPointerDragEffect,
   type OrganiseDragStart,
 } from "./organise-drag-effect";
@@ -248,32 +250,24 @@ export function OrganiseBoard({
         eventTarget ??
         elementAtPoint?.closest<HTMLElement>("[data-drop-zone='true']");
       if (target) {
-        const groupId =
-          target.dataset.groupId === "__ungrouped__"
-            ? null
-            : (target.dataset.groupId ?? null);
-        const columnId = target.dataset.dropColumnId ?? null;
-        const index = Number(target.dataset.index);
-        if (!Number.isInteger(index) || !columnId) return null;
-        return { groupId, columnId, index };
+        return Effect.runSync(getDropTargetFromZoneEffect(target.dataset));
       }
 
       const list = elementAtPoint?.closest<HTMLElement>("[data-drop-list]");
       if (!list) return null;
-      const groupKey = list.dataset.dropList;
-      const groupId = groupKey === "__ungrouped__" ? null : (groupKey ?? null);
-      const columnId = list.dataset.dropColumnId ?? null;
-      if (!columnId) return null;
-
-      const rows = [
-        ...list.querySelectorAll<HTMLElement>("[data-drag-item-id]"),
-      ];
-      const index = rows.findIndex(
-        (row) =>
-          event.clientY <
-          row.getBoundingClientRect().top + row.offsetHeight / 2,
+      return Effect.runSync(
+        getDropTargetFromListEffect({
+          dropList: list.dataset.dropList,
+          dropColumnId: list.dataset.dropColumnId,
+          pointerY: event.clientY,
+          rows: [
+            ...list.querySelectorAll<HTMLElement>("[data-drag-item-id]"),
+          ].map((row) => ({
+            top: row.getBoundingClientRect().top,
+            height: row.offsetHeight,
+          })),
+        }),
       );
-      return { groupId, columnId, index: index === -1 ? rows.length : index };
     },
     [],
   );
