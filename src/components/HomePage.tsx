@@ -1,11 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowRight, CheckCircle2, Columns3, Loader2, ShieldCheck, Sparkles, Timer, UsersRound, Vote } from "lucide-react";
+import {
+  ArrowRight,
+  CheckCircle2,
+  Columns3,
+  Loader2,
+  ShieldCheck,
+  Sparkles,
+  Timer,
+  UsersRound,
+  Vote,
+} from "lucide-react";
+import { Effect } from "effect";
 import { createRoomEffect, getPublicConfigEffect, runApiEffect } from "../api";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
 import { TurnstileWidget } from "./TurnstileWidget";
-import { loadHomePublicConfigEffect } from "./home-page-effect";
+import {
+  createHomeRoomEffect,
+  loadHomePublicConfigEffect,
+} from "./home-page-effect";
 
 export function HomePage() {
   const navigate = useNavigate();
@@ -39,20 +53,35 @@ export function HomePage() {
 
   async function handleCreate() {
     if (creating) return;
-    if (turnstileSiteKey && !turnstileToken) {
-      setError("Please complete the verification before creating a room.");
-      return;
-    }
     setCreating(true);
     setError(null);
     try {
-      const { roomId, facilitatorClaimToken } = await runApiEffect(createRoomEffect(turnstileToken ?? undefined));
-      if (facilitatorClaimToken) {
-        sessionStorage.setItem(`retro-facilitator-claim-${roomId}`, facilitatorClaimToken);
+      const result = await runApiEffect(
+        createHomeRoomEffect(
+          { creating, turnstileSiteKey, turnstileToken },
+          {
+            createRoom: (token) => createRoomEffect(token),
+            storeFacilitatorClaimToken: (roomId, facilitatorClaimToken) =>
+              Effect.sync(() => {
+                sessionStorage.setItem(
+                  `retro-facilitator-claim-${roomId}`,
+                  facilitatorClaimToken,
+                );
+              }),
+            navigate: (path) => Effect.sync(() => navigate(path)),
+          },
+        ),
+      );
+      if (result.status === "blocked") {
+        setError(result.error);
+        setCreating(false);
       }
-      navigate(`/room/${roomId}`);
     } catch (createError) {
-      setError(createError instanceof Error ? createError.message : "Failed to create room. Please check your connection and try again.");
+      setError(
+        createError instanceof Error
+          ? createError.message
+          : "Failed to create room. Please check your connection and try again.",
+      );
       setTurnstileToken(null);
       setTurnstileResetNonce((current) => current + 1);
       setCreating(false);
@@ -64,7 +93,9 @@ export function HomePage() {
     <main className="home-shell" aria-labelledby="home-title">
       <nav className="home-nav" aria-label="Home">
         <a className="home-nav__brand" href="/" aria-label="Retro Board home">
-          <span className="home-nav__mark" aria-hidden="true">RB</span>
+          <span className="home-nav__mark" aria-hidden="true">
+            RB
+          </span>
           <span>Retro Board</span>
         </a>
         <div className="home-nav__meta" aria-label="Product attributes">
@@ -88,20 +119,29 @@ export function HomePage() {
             <Sparkles aria-hidden="true" size={16} />
             Live team retros without the ceremony
           </div>
-          <h1 id="home-title" className="home-hero__title">Run better team retros.</h1>
+          <h1 id="home-title" className="home-hero__title">
+            Run better team retros.
+          </h1>
           <p className="home-hero__copy">
-            Create a private room, collect feedback, group themes, vote by column, and walk away with clear next actions.
+            Create a private room, collect feedback, group themes, vote by
+            column, and walk away with clear next actions.
           </p>
           <div className="home-hero__actions">
             {turnstileSiteKey && (
-              <TurnstileWidget key={turnstileResetNonce} siteKey={turnstileSiteKey} onTokenChange={handleTurnstileTokenChange} />
+              <TurnstileWidget
+                key={turnstileResetNonce}
+                siteKey={turnstileSiteKey}
+                onTokenChange={handleTurnstileTokenChange}
+              />
             )}
             <Button
               ref={createButtonRef}
               size="lg"
               className="home-hero__cta"
               onClick={handleCreate}
-              disabled={creating || Boolean(turnstileSiteKey && !turnstileToken)}
+              disabled={
+                creating || Boolean(turnstileSiteKey && !turnstileToken)
+              }
               aria-busy={creating}
             >
               {creating ? (
@@ -122,13 +162,24 @@ export function HomePage() {
             </span>
           </div>
           <div className="home-hero__proof" aria-label="Product highlights">
-            <span><UsersRound aria-hidden="true" size={16} /> Realtime collaboration</span>
-            <span><Timer aria-hidden="true" size={16} /> Built-in timer</span>
-            <span><Vote aria-hidden="true" size={16} /> Column-aware voting</span>
+            <span>
+              <UsersRound aria-hidden="true" size={16} /> Realtime collaboration
+            </span>
+            <span>
+              <Timer aria-hidden="true" size={16} /> Built-in timer
+            </span>
+            <span>
+              <Vote aria-hidden="true" size={16} /> Column-aware voting
+            </span>
           </div>
           {creating && (
-            <p className="home-create-card__status" role="status" aria-live="polite">
-              Creating a private room and preparing your facilitator join screen…
+            <p
+              className="home-create-card__status"
+              role="status"
+              aria-live="polite"
+            >
+              Creating a private room and preparing your facilitator join
+              screen…
             </p>
           )}
           {error && (
