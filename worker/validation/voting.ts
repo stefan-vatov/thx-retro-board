@@ -18,7 +18,11 @@ import {
   MAX_REACTIONS_PER_TARGET,
 } from "../room-types";
 import type { StoredState } from "../room-types";
-import { resolveReactionTargetForState, resolveVoteTargetForState, RoomMutationValidationError } from "./shared";
+import {
+  resolveReactionTargetForStateEffect,
+  resolveVoteTargetForStateEffect,
+  RoomMutationValidationError,
+} from "./shared";
 
 type ScoreVoteValidationState = Pick<StoredState, "participants" | "votingParticipantIds" | "phase" | "rankingMethod" | "voteBudget" | "groups" | "items" | "votes">;
 type ReactionToggleValidationState = Pick<StoredState, "participants" | "groups" | "items" | "reactions">;
@@ -53,11 +57,8 @@ export function validateVoteCastEffect(
   return Effect.gen(function* () {
     yield* validateScoreVoteContext(state, participantId);
     const target = typeof targetOrGroupId === "string" ? groupVoteTarget(targetOrGroupId) : targetOrGroupId;
-    const targetValidation = resolveVoteTargetForState(state, target);
-    if (!targetValidation.success) {
-      return yield* Effect.fail(new RoomMutationValidationError(targetValidation.error));
-    }
-    const result = applyCastVote(state.votes, participantId, targetValidation.target, count, state.voteBudget);
+    const validatedTarget = yield* resolveVoteTargetForStateEffect(state, target);
+    const result = applyCastVote(state.votes, participantId, validatedTarget, count, state.voteBudget);
     if (result.error) {
       return yield* Effect.fail(new RoomMutationValidationError(result.error));
     }
@@ -73,18 +74,15 @@ export function validateVoteRemoveEffect(
   return Effect.gen(function* () {
     yield* validateScoreVoteContext(state, participantId);
     const target = typeof targetOrGroupId === "string" ? groupVoteTarget(targetOrGroupId) : targetOrGroupId;
-    const targetValidation = resolveVoteTargetForState(state, target);
-    if (!targetValidation.success) {
-      return yield* Effect.fail(new RoomMutationValidationError(targetValidation.error));
-    }
+    const validatedTarget = yield* resolveVoteTargetForStateEffect(state, target);
     const existing = state.votes.find((vote) => {
       const voteTarget = getVoteTarget(vote);
-      return vote.participantId === participantId && voteTarget !== null && sameVoteTarget(voteTarget, targetValidation.target);
+      return vote.participantId === participantId && voteTarget !== null && sameVoteTarget(voteTarget, validatedTarget);
     });
     if (!existing) {
       return yield* Effect.fail(new RoomMutationValidationError("No votes to remove"));
     }
-    return { votes: applyRemoveVote(state.votes, participantId, targetValidation.target) };
+    return { votes: applyRemoveVote(state.votes, participantId, validatedTarget) };
   });
 }
 
@@ -101,11 +99,8 @@ export function validateReactionToggleEffect(
     if (!isAllowedReactionEmoji(emoji)) {
       return yield* Effect.fail(new RoomMutationValidationError("Reaction emoji is not supported"));
     }
-    const targetValidation = resolveReactionTargetForState(state, target);
-    if (!targetValidation.success) {
-      return yield* Effect.fail(new RoomMutationValidationError(targetValidation.error));
-    }
-    const reactionKey = `${participantId}:${voteTargetKey(targetValidation.target)}:${emoji}`;
+    const validatedTarget = yield* resolveReactionTargetForStateEffect(state, target);
+    const reactionKey = `${participantId}:${voteTargetKey(validatedTarget)}:${emoji}`;
     const existing = state.reactions ?? [];
     const hasReaction = existing.some((reaction) =>
       `${reaction.participantId}:${voteTargetKey(reaction.target)}:${reaction.emoji}` === reactionKey,
@@ -114,7 +109,7 @@ export function validateReactionToggleEffect(
       if (existing.length >= MAX_REACTIONS_PER_ROOM) {
         return yield* Effect.fail(new RoomMutationValidationError(`Rooms can have at most ${MAX_REACTIONS_PER_ROOM} reactions`));
       }
-      const targetReactionCount = existing.filter((reaction) => sameVoteTarget(reaction.target, targetValidation.target)).length;
+      const targetReactionCount = existing.filter((reaction) => sameVoteTarget(reaction.target, validatedTarget)).length;
       if (targetReactionCount >= MAX_REACTIONS_PER_TARGET) {
         return yield* Effect.fail(new RoomMutationValidationError(`A card or group can have at most ${MAX_REACTIONS_PER_TARGET} reactions`));
       }
@@ -122,7 +117,7 @@ export function validateReactionToggleEffect(
     return {
       reactions: hasReaction
         ? existing.filter((reaction) => `${reaction.participantId}:${voteTargetKey(reaction.target)}:${reaction.emoji}` !== reactionKey)
-        : [...existing, { participantId, target: targetValidation.target, emoji }],
+        : [...existing, { participantId, target: validatedTarget, emoji }],
     };
   });
 }
@@ -146,15 +141,9 @@ export function validatePairwiseChoiceEffect(
     if (state.votingParticipantIds?.length && !state.votingParticipantIds.includes(participantId)) {
       return yield* Effect.fail(new RoomMutationValidationError("Participant joined after voting started"));
     }
-    const winnerValidation = resolveVoteTargetForState(state, winner);
-    if (!winnerValidation.success) {
-      return yield* Effect.fail(new RoomMutationValidationError(winnerValidation.error));
-    }
-    const loserValidation = resolveVoteTargetForState(state, loser);
-    if (!loserValidation.success) {
-      return yield* Effect.fail(new RoomMutationValidationError(loserValidation.error));
-    }
-    if (sameVoteTarget(winnerValidation.target, loserValidation.target)) {
+    const validatedWinner = yield* resolveVoteTargetForStateEffect(state, winner);
+    const validatedLoser = yield* resolveVoteTargetForStateEffect(state, loser);
+    if (sameVoteTarget(validatedWinner, validatedLoser)) {
       return yield* Effect.fail(new RoomMutationValidationError("Pairwise targets must be different"));
     }
     const targetKeys = new Set<string>([
@@ -166,8 +155,8 @@ export function validatePairwiseChoiceEffect(
     }
     const choice: PairwiseChoice = {
       participantId,
-      winner: winnerValidation.target,
-      loser: loserValidation.target,
+      winner: validatedWinner,
+      loser: validatedLoser,
     };
     const choiceKey = `${participantId}:${pairwiseComparisonKey(choice.winner, choice.loser)}`;
     const existingChoices = state.pairwiseChoices ?? [];

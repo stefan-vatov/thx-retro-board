@@ -193,6 +193,19 @@ export function resolveVoteTargetForState(
   return { success: true, target };
 }
 
+export function resolveVoteTargetForStateEffect(
+  state: Pick<StoredState, "groups" | "items">,
+  target: VoteTarget,
+): Effect.Effect<VoteTarget, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    const result = resolveVoteTargetForState(state, target);
+    if (!result.success) {
+      return yield* Effect.fail(new RoomMutationValidationError(result.error));
+    }
+    return result.target;
+  });
+}
+
 export function resolveReactionTargetForState(
   state: Pick<StoredState, "groups" | "items">,
   target: ReactionTarget,
@@ -208,6 +221,19 @@ export function resolveReactionTargetForState(
   return state.items.some((item) => item.id === target.id)
     ? { success: true, target }
     : { success: false, error: "Item not found" };
+}
+
+export function resolveReactionTargetForStateEffect(
+  state: Pick<StoredState, "groups" | "items">,
+  target: ReactionTarget,
+): Effect.Effect<ReactionTarget, RoomMutationValidationError> {
+  return Effect.gen(function* () {
+    const result = resolveReactionTargetForState(state, target);
+    if (!result.success) {
+      return yield* Effect.fail(new RoomMutationValidationError(result.error));
+    }
+    return result.target;
+  });
 }
 
 export function normalizeReviewTargetKey(targetKey: unknown, groups: Group[], items: RetroItem[]): string | null {
