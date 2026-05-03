@@ -1,7 +1,13 @@
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { getDefaultColumns } from "../src/domain";
-import { createInitialStoredState, hydrateStoredState } from "./room-storage";
+import {
+  createInitialStoredState,
+  createInitialStoredStateEffect,
+  hydrateStoredState,
+  hydrateStoredStateEffect,
+} from "./room-storage";
 import type { StoredState } from "./room-types";
 
 describe("room storage state", () => {
@@ -22,6 +28,11 @@ describe("room storage state", () => {
     expect(state.columns).toEqual(getDefaultColumns());
     expect(state.items).toEqual([]);
     expect(state.connectionTokens).toEqual({});
+  });
+
+  it("creates a fresh stored state through an Effect boundary", async () => {
+    await expect(Effect.runPromise(createInitialStoredStateEffect("room-a", "claim-token", 123)))
+      .resolves.toEqual(createInitialStoredState("room-a", "claim-token", 123));
   });
 
   it("hydrates legacy stored state into a safe v2 setup room", () => {
@@ -51,5 +62,13 @@ describe("room storage state", () => {
     expect(hydrated.items).toEqual([]);
     expect(hydrated.rankingMethod).toBe("score");
     expect(hydrated.facilitatorClaimToken).toBeNull();
+  });
+
+  it("hydrates stored state through an Effect boundary", async () => {
+    const state = createInitialStoredState("room-a", null, 123);
+    state.columns = [{ id: "mad", name: "  Mad  ", order: 4 }];
+
+    await expect(Effect.runPromise(hydrateStoredStateEffect(state, 456)))
+      .resolves.toEqual(hydrateStoredState(state, 456));
   });
 });
