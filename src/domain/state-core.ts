@@ -62,6 +62,14 @@ export function createParticipant(id: string, displayName: string, isFacilitator
   return { id, displayName, isFacilitator };
 }
 
+export function createParticipantEffect(
+  id: string,
+  displayName: string,
+  isFacilitator: boolean,
+): Effect.Effect<Participant> {
+  return Effect.sync(() => createParticipant(id, displayName, isFacilitator));
+}
+
 export function createItem(
   id: string,
   text: string,
@@ -73,6 +81,17 @@ export function createItem(
   return { id, text, authorId, columnId, groupId, order };
 }
 
+export function createItemEffect(
+  id: string,
+  text: string,
+  authorId: string,
+  order: number,
+  columnId: string,
+  groupId: string | null = null,
+): Effect.Effect<RetroItem> {
+  return Effect.sync(() => createItem(id, text, authorId, order, columnId, groupId));
+}
+
 export function createGroup(id: string, name: string, columnId: string | number, order?: number): Group {
   if (typeof columnId === "number") {
     return { id, name, columnId: "", order: columnId };
@@ -80,12 +99,34 @@ export function createGroup(id: string, name: string, columnId: string | number,
   return { id, name, columnId, order: order ?? 0 };
 }
 
+export function createGroupEffect(
+  id: string,
+  name: string,
+  columnId: string | number,
+  order?: number,
+): Effect.Effect<Group> {
+  return Effect.sync(() => createGroup(id, name, columnId, order));
+}
+
 export function createColumn(id: string, name: string, order: number): Column {
   return { id, name, order };
 }
 
+export function createColumnEffect(id: string, name: string, order: number): Effect.Effect<Column> {
+  return Effect.sync(() => createColumn(id, name, order));
+}
+
 export function createActionItem(id: string, text: string, authorId: string, order: number): ActionItem {
   return { id, text: sanitizeActionText(text), authorId, order };
+}
+
+export function createActionItemEffect(
+  id: string,
+  text: string,
+  authorId: string,
+  order: number,
+): Effect.Effect<ActionItem> {
+  return Effect.sync(() => createActionItem(id, text, authorId, order));
 }
 
 export const PHASE_ORDER: readonly Phase[] = ["setup", "write", "organise", "vote", "review", "finalize"] as const;
@@ -96,14 +137,26 @@ export function canTransition(from: Phase, to: Phase): boolean {
   return toIndex === fromIndex + 1;
 }
 
+export function canTransitionEffect(from: Phase, to: Phase): Effect.Effect<boolean> {
+  return Effect.sync(() => canTransition(from, to));
+}
+
 export function isPhaseAllowed(actionPhase: Phase, currentPhase: Phase): boolean {
   return actionPhase === currentPhase;
+}
+
+export function isPhaseAllowedEffect(actionPhase: Phase, currentPhase: Phase): Effect.Effect<boolean> {
+  return Effect.sync(() => isPhaseAllowed(actionPhase, currentPhase));
 }
 
 export function isTimerExpired(timer: TimerState): boolean {
   if (timer.startedAt === null || timer.durationSeconds === null) return false;
   const elapsed = (Date.now() - timer.startedAt) / 1000;
   return elapsed >= timer.durationSeconds;
+}
+
+export function isTimerExpiredEffect(timer: TimerState): Effect.Effect<boolean> {
+  return Effect.sync(() => isTimerExpired(timer));
 }
 
 export function validateExistingColumnId(

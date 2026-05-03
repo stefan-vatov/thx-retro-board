@@ -4,8 +4,21 @@ import {
   createRoomState,
   createRoomStateEffect,
   createParticipant,
+  createParticipantEffect,
   createItem,
+  createItemEffect,
   createGroup,
+  createGroupEffect,
+  createColumn,
+  createColumnEffect,
+  createActionItem,
+  createActionItemEffect,
+  canTransition,
+  canTransitionEffect,
+  isPhaseAllowed,
+  isPhaseAllowedEffect,
+  isTimerExpired,
+  isTimerExpiredEffect,
   getDefaultColumns,
   getPairwiseComparisons,
   sanitizeDisplayName,
@@ -61,12 +74,22 @@ describe("createParticipant", () => {
     const p = createParticipant("p1", "Alice", true);
     expect(p).toEqual({ id: "p1", displayName: "Alice", isFacilitator: true });
   });
+
+  it("creates a participant through an Effect boundary", async () => {
+    await expect(Effect.runPromise(createParticipantEffect("p1", "Alice", true)))
+      .resolves.toEqual({ id: "p1", displayName: "Alice", isFacilitator: true });
+  });
 });
 
 describe("createItem", () => {
   it("creates an item with a required original column ID and null groupId", () => {
     const item = createItem("i1", "Improve standups", "p1", 0, "col-1");
     expect(item).toEqual({ id: "i1", text: "Improve standups", authorId: "p1", columnId: "col-1", groupId: null, order: 0 });
+  });
+
+  it("creates an item through an Effect boundary", async () => {
+    await expect(Effect.runPromise(createItemEffect("i1", "Improve standups", "p1", 0, "col-1")))
+      .resolves.toEqual({ id: "i1", text: "Improve standups", authorId: "p1", columnId: "col-1", groupId: null, order: 0 });
   });
 });
 
@@ -99,6 +122,27 @@ describe("createGroup", () => {
   it("creates a group with correct fields", () => {
     const g = createGroup("g1", "Process", "col-1", 0);
     expect(g).toEqual({ id: "g1", name: "Process", columnId: "col-1", order: 0 });
+  });
+
+  it("creates a group through an Effect boundary", async () => {
+    await expect(Effect.runPromise(createGroupEffect("g1", "Process", "col-1", 0)))
+      .resolves.toEqual({ id: "g1", name: "Process", columnId: "col-1", order: 0 });
+  });
+});
+
+describe("core factory and phase helpers", () => {
+  it("creates columns and action items through Effect boundaries", async () => {
+    await expect(Effect.runPromise(createColumnEffect("col-1", "Mad", 0)))
+      .resolves.toEqual(createColumn("col-1", "Mad", 0));
+    await expect(Effect.runPromise(createActionItemEffect("action-1", "  Follow up  ", "p1", 0)))
+      .resolves.toEqual(createActionItem("action-1", "Follow up", "p1", 0));
+  });
+
+  it("evaluates phase and timer helpers through Effect boundaries", async () => {
+    await expect(Effect.runPromise(canTransitionEffect("setup", "write"))).resolves.toBe(canTransition("setup", "write"));
+    await expect(Effect.runPromise(isPhaseAllowedEffect("write", "write"))).resolves.toBe(isPhaseAllowed("write", "write"));
+    await expect(Effect.runPromise(isTimerExpiredEffect({ startedAt: null, durationSeconds: null, expired: false })))
+      .resolves.toBe(isTimerExpired({ startedAt: null, durationSeconds: null, expired: false }));
   });
 });
 
