@@ -15,10 +15,6 @@ import type {
   MoveItemPreconditions,
   StoredState,
 } from "./room-types";
-import {
-  EMPTY_ROOM_PURGE_DELAY_MS,
-  MAX_ROOM_LIFETIME_MS,
-} from "./room-types";
 
 import { authorizeLoadedParticipantResult, authorizeParticipantFromState } from "./room-auth";
 import { handleRoomHttpRequest } from "./room-http";
@@ -43,6 +39,13 @@ import {
   reorderItemsForRoom,
 } from "./room-groups";
 import { addItemForRoom, deleteItemForRoom, editItemForRoom } from "./room-items";
+import {
+  cancelEmptyRoomPurge,
+  purgeIfExpired,
+  runRoomAlarm,
+  scheduleEmptyRoomPurge,
+  type RoomLifecycleHost,
+} from "./room-lifecycle";
 import { joinRoomParticipant, type RoomParticipantHost } from "./room-participants";
 import { toRoomState } from "./room-presenter";
 import { setPhaseForRoom, setReviewTargetForRoom, setTimerForRoom } from "./room-phase";
@@ -99,30 +102,11 @@ export class RetroRoom extends DurableObject<Env> {
   }
 
   private async cancelEmptyRoomPurge(): Promise<void> {
-    await this.ctx.storage.deleteAlarm();
-    if (this.state && this.state.purgeScheduledAt !== null) {
-      this.state.purgeScheduledAt = null;
-      await this.saveState();
-    }
-    if (this.state) {
-      await this.ctx.storage.setAlarm(this.getAbsoluteRoomExpiresAt(this.state));
-    }
+    return cancelEmptyRoomPurge(this.lifecycleHost());
   }
 
   private async scheduleEmptyRoomPurge(): Promise<void> {
-    const s = await this.loadState();
-    if (this.sessions.size > 0) {
-      await this.ctx.storage.setAlarm(this.getAbsoluteRoomExpiresAt(s));
-      return;
-    }
-    const purgeScheduledAt = Date.now() + EMPTY_ROOM_PURGE_DELAY_MS;
-    s.purgeScheduledAt = purgeScheduledAt;
-    await this.ctx.storage.setAlarm(Math.min(purgeScheduledAt, this.getAbsoluteRoomExpiresAt(s)));
-    await this.saveState();
-  }
-
-  private getAbsoluteRoomExpiresAt(s: Pick<StoredState, "startedAt">): number {
-    return (s.startedAt ?? Date.now()) + MAX_ROOM_LIFETIME_MS;
+    return scheduleEmptyRoomPurge(this.lifecycleHost());
   }
 
   private async purgeRoom(reason: string): Promise<void> {
@@ -138,10 +122,6 @@ export class RetroRoom extends DurableObject<Env> {
     this.state = null;
     await this.ctx.storage.deleteAlarm();
     await this.ctx.storage.deleteAll();
-  }
-
-  private isPastAbsoluteRoomLifetime(s: Pick<StoredState, "startedAt">): boolean {
-    return Date.now() >= this.getAbsoluteRoomExpiresAt(s);
   }
 
   private commandHost(): RoomCommandHost {
@@ -161,6 +141,19 @@ export class RetroRoom extends DurableObject<Env> {
       deleteOutstandingWebSocketTicket: (participantId) => this.deleteOutstandingWebSocketTicket(participantId),
       scheduleEmptyRoomPurge: () => this.scheduleEmptyRoomPurge(),
       getSessionCount: () => this.sessions.size,
+    };
+  }
+
+  private lifecycleHost(): RoomLifecycleHost {
+    return {
+      getLoadedState: () => this.state,
+      getSessionCount: () => this.sessions.size,
+      getStoredState: () => this.ctx.storage.get<StoredState>("room"),
+      loadState: () => this.loadState(),
+      saveState: () => this.saveState(),
+      setAlarm: (timestamp) => this.ctx.storage.setAlarm(timestamp),
+      deleteAlarm: () => this.ctx.storage.deleteAlarm(),
+      purgeRoom: (reason) => this.purgeRoom(reason),
     };
   }
 
@@ -191,27 +184,11 @@ export class RetroRoom extends DurableObject<Env> {
   }
 
   private async purgeIfExpired(stored?: StoredState | null): Promise<boolean> {
-    const state = stored ?? await this.ctx.storage.get<StoredState>("room");
-    if (!state || !this.isPastAbsoluteRoomLifetime(state)) return false;
-    await this.purgeRoom("Room data was deleted after reaching the maximum room lifetime.");
-    return true;
+    return purgeIfExpired(this.lifecycleHost(), stored);
   }
 
   override async alarm(): Promise<void> {
-    const stored = await this.ctx.storage.get<StoredState>("room");
-    if (!stored) return;
-    if (await this.purgeIfExpired(stored)) return;
-    const purgeScheduledAt = typeof stored.purgeScheduledAt === "number" && Number.isFinite(stored.purgeScheduledAt)
-      ? stored.purgeScheduledAt
-      : null;
-    if (purgeScheduledAt === null || Date.now() < purgeScheduledAt) {
-      return;
-    }
-    if (this.sessions.size > 0) {
-      await this.cancelEmptyRoomPurge();
-      return;
-    }
-    await this.purgeRoom("Room data was deleted after one hour without active participants.");
+    return runRoomAlarm(this.lifecycleHost());
   }
 
   private async saveState(): Promise<void> {
