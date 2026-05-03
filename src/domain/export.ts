@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import type { ActionItem, RankingMethod, RoomState, VoteTarget } from "./types";
 import { getVoteTarget, pairwiseComparisonKey, voteTargetKey } from "./state";
 
@@ -35,6 +36,13 @@ export function buildAnonymousRetroExport(state: RoomState, exportedAt = new Dat
   };
 }
 
+export function buildAnonymousRetroExportEffect(
+  state: RoomState,
+  exportedAt = new Date().toISOString(),
+): Effect.Effect<AnonymousRetroExport> {
+  return Effect.sync(() => buildAnonymousRetroExport(state, exportedAt));
+}
+
 export function getAnonymousActions(actions: ActionItem[]): AnonymousRetroExport["actions"] {
   return [...actions]
     .sort((a, b) => a.order - b.order)
@@ -45,8 +53,16 @@ export function formatRetroExportJson(exportData: AnonymousRetroExport): string 
   return `${JSON.stringify(exportData, null, 2)}\n`;
 }
 
+export function formatRetroExportJsonEffect(exportData: AnonymousRetroExport): Effect.Effect<string> {
+  return Effect.sync(() => formatRetroExportJson(exportData));
+}
+
 export function formatActionsJson(actions: AnonymousRetroExport["actions"]): string {
   return `${JSON.stringify(actions, null, 2)}\n`;
+}
+
+export function formatActionsJsonEffect(actions: AnonymousRetroExport["actions"]): Effect.Effect<string> {
+  return Effect.sync(() => formatActionsJson(actions));
 }
 
 export function formatRetroExportMarkdown(exportData: AnonymousRetroExport): string {
@@ -102,14 +118,26 @@ export function formatRetroExportMarkdown(exportData: AnonymousRetroExport): str
   return `${lines.join("\n")}\n`;
 }
 
+export function formatRetroExportMarkdownEffect(exportData: AnonymousRetroExport): Effect.Effect<string> {
+  return Effect.sync(() => formatRetroExportMarkdown(exportData));
+}
+
 export function formatActionsMarkdown(actions: AnonymousRetroExport["actions"]): string {
   if (actions.length === 0) return `_No actions captured._\n`;
   return `${actions.map((action) => `- [ ] ${escapeMarkdownText(action.text)}`).join("\n")}\n`;
 }
 
+export function formatActionsMarkdownEffect(actions: AnonymousRetroExport["actions"]): Effect.Effect<string> {
+  return Effect.sync(() => formatActionsMarkdown(actions));
+}
+
 export function formatActionsCsv(actions: AnonymousRetroExport["actions"]): string {
   const rows = [["order", "text"], ...actions.map((action) => [String(action.order + 1), action.text])];
   return `${rows.map((row) => row.map(escapeCsvCell).join(",")).join("\n")}\n`;
+}
+
+export function formatActionsCsvEffect(actions: AnonymousRetroExport["actions"]): Effect.Effect<string> {
+  return Effect.sync(() => formatActionsCsv(actions));
 }
 
 function aggregateAnonymousVotes(state: RoomState): AnonymousRetroExport["votes"] {

@@ -1,11 +1,15 @@
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import type { RoomState } from "./types";
 import {
   buildAnonymousRetroExport,
+  buildAnonymousRetroExportEffect,
   formatActionsCsv,
+  formatActionsCsvEffect,
   formatActionsJson,
   formatActionsMarkdown,
   formatRetroExportMarkdown,
+  formatRetroExportMarkdownEffect,
   groupVoteTarget,
   itemVoteTarget,
 } from ".";
@@ -65,6 +69,20 @@ describe("anonymous retro exports", () => {
     ]);
   });
 
+  it("exports the full retro through Effect without participant identities", async () => {
+    const exportData = await Effect.runPromise(buildAnonymousRetroExportEffect(
+      makeExportState(),
+      "2026-05-01T12:00:00.000Z",
+    ));
+
+    expect(exportData.items[0]).not.toHaveProperty("authorId");
+    expect(exportData.actions[0]).not.toHaveProperty("authorId");
+    expect(exportData.votes).toEqual([
+      { target: { type: "group", id: "group-1" }, totalVotes: 3 },
+      { target: { type: "item", id: "item-2" }, totalVotes: 1 },
+    ]);
+  });
+
   it("formats full markdown and action-only markdown/json/csv", () => {
     const exportData = buildAnonymousRetroExport(makeExportState(), "2026-05-01T12:00:00.000Z");
 
@@ -73,6 +91,15 @@ describe("anonymous retro exports", () => {
     expect(formatActionsMarkdown(exportData.actions)).toBe("- [ ] Alice to create launch checklist\n");
     expect(formatActionsJson(exportData.actions)).toContain("\"text\": \"Alice to create launch checklist\"");
     expect(formatActionsCsv(exportData.actions)).toBe("order,text\n1,Alice to create launch checklist\n");
+  });
+
+  it("formats exports through Effect helpers", async () => {
+    const exportData = buildAnonymousRetroExport(makeExportState(), "2026-05-01T12:00:00.000Z");
+
+    await expect(Effect.runPromise(formatRetroExportMarkdownEffect(exportData)))
+      .resolves.toContain("#### Release (3 votes)");
+    await expect(Effect.runPromise(formatActionsCsvEffect(exportData.actions)))
+      .resolves.toBe("order,text\n1,Alice to create launch checklist\n");
   });
 
   it("neutralizes spreadsheet formulas in action CSV exports", () => {
