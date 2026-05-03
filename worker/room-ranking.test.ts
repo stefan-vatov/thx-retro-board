@@ -226,6 +226,40 @@ describe("room ranking commands", () => {
     expect(state.reactions).toEqual([{ participantId: "p1", target: itemVoteTarget("item-a"), emoji: "🔥" }]);
   });
 
+  it("chooses pairwise winners through injected Effect dependencies", async () => {
+    const state = createInitialStoredState("room-a");
+    state.phase = "vote";
+    state.rankingMethod = "pairwise";
+    state.participants = [{ id: "p1", displayName: "P1", isFacilitator: false }];
+    state.items = [{ id: "item-a", text: "A", authorId: "p1", columnId: "mad", groupId: null, order: 0 }];
+    state.groups = [{ id: "group-a", name: "A", columnId: "mad", order: 0 }];
+    const calls: string[] = [];
+
+    const result = await Effect.runPromise(choosePairwiseForRoomEffect(
+      {} as never,
+      "p1",
+      groupVoteTarget("group-a"),
+      itemVoteTarget("item-a"),
+      {
+        loadState: () => Effect.sync(() => {
+          calls.push("load");
+          return state;
+        }),
+        saveAndBroadcastState: (_host, savedState) => Effect.sync(() => {
+          calls.push(`save:${savedState.pairwiseChoices.length}`);
+        }),
+      },
+    ));
+
+    expect(result).toEqual({ success: true });
+    expect(state.pairwiseChoices).toEqual([{
+      participantId: "p1",
+      winner: groupVoteTarget("group-a"),
+      loser: itemVoteTarget("item-a"),
+    }]);
+    expect(calls).toEqual(["load", "save:1"]);
+  });
+
   it("toggles reactions through injected Effect dependencies", async () => {
     const state = createInitialStoredState("room-a");
     state.phase = "vote";

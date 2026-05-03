@@ -70,6 +70,16 @@ export const removeVoteForRoomDeps: RemoveVoteForRoomDeps = {
   saveAndBroadcastState: saveAndBroadcastStateEffect,
 };
 
+export interface ChoosePairwiseForRoomDeps {
+  loadState: (host: RoomCommandHost) => Effect.Effect<StoredState>;
+  saveAndBroadcastState: (host: RoomCommandHost, state: StoredState) => Effect.Effect<void>;
+}
+
+export const choosePairwiseForRoomDeps: ChoosePairwiseForRoomDeps = {
+  loadState: (host) => Effect.promise(() => host.loadState()),
+  saveAndBroadcastState: saveAndBroadcastStateEffect,
+};
+
 export async function setVoteBudgetForRoom(
   host: RoomCommandHost,
   participantId: string,
@@ -228,16 +238,17 @@ export function choosePairwiseForRoomEffect(
   participantId: string,
   winner: VoteTarget,
   loser: VoteTarget,
+  deps: ChoosePairwiseForRoomDeps = choosePairwiseForRoomDeps,
 ): Effect.Effect<{ success: boolean; error?: string }> {
   return Effect.gen(function* () {
-    const s = yield* Effect.promise(() => host.loadState());
+    const s = yield* deps.loadState(host);
     const validation = yield* Effect.either(validatePairwiseChoiceEffect(s, participantId, winner, loser));
     if (validation._tag === "Left") {
       return { success: false, error: validation.left.message };
     }
 
     s.pairwiseChoices = validation.right.pairwiseChoices;
-    yield* saveAndBroadcastStateEffect(host, s);
+    yield* deps.saveAndBroadcastState(host, s);
 
     return { success: true };
   });
