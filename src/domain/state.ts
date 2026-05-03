@@ -51,9 +51,13 @@ export {
 } from "./state-review";
 export {
   getReactionsForTarget,
+  getReactionsForTargetEffect,
   getReactionCount,
+  getReactionCountEffect,
   hasParticipantReaction,
+  hasParticipantReactionEffect,
   isAllowedReactionEmoji,
+  isAllowedReactionEmojiEffect,
 } from "./state-reactions";
 export {
   hasDuplicateGroupNameInColumn,
