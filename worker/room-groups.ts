@@ -1,9 +1,10 @@
 import { Effect } from "effect";
 import type { Group } from "../src/domain";
 import { groupVoteTarget, sameVoteTarget } from "../src/domain";
-import type { ItemReorderPreconditions, MoveItemPreconditions } from "./room-types";
+import { saveAndBroadcastStateEffect } from "./room-command-effect";
 import type { RoomCommandHost } from "./room-command-host";
 import { normalizePairwiseChoices } from "./room-normalize";
+import type { ItemReorderPreconditions, MoveItemPreconditions } from "./room-types";
 import {
   validateGroupCreateEffect,
   validateGroupDeleteEffect,
@@ -42,8 +43,7 @@ export function createGroupForRoomEffect(
       order: validation.right.order,
     };
     s.groups.push(group);
-    yield* Effect.promise(() => host.saveState());
-    host.broadcastState(s);
+    yield* saveAndBroadcastStateEffect(host, s);
 
     return { success: true, group };
   });
@@ -72,8 +72,7 @@ export function editGroupForRoomEffect(
     }
 
     s.groups = validation.right.groups;
-    yield* Effect.promise(() => host.saveState());
-    host.broadcastState(s);
+    yield* saveAndBroadcastStateEffect(host, s);
     return { success: true, group: validation.right.group };
   });
 }
@@ -103,8 +102,7 @@ export function deleteGroupForRoomEffect(
     s.votes = validation.right.votes;
     s.pairwiseChoices = normalizePairwiseChoices(s.pairwiseChoices, s.participants, s.groups, s.items);
     s.reactions = (s.reactions ?? []).filter((reaction) => !sameVoteTarget(reaction.target, groupVoteTarget(groupId)));
-    yield* Effect.promise(() => host.saveState());
-    host.broadcastState(s);
+    yield* saveAndBroadcastStateEffect(host, s);
     return { success: true };
   });
 }
@@ -132,8 +130,7 @@ export function reorderGroupsForRoomEffect(
     }
 
     s.groups = validation.right.groups;
-    yield* Effect.promise(() => host.saveState());
-    host.broadcastState(s);
+    yield* saveAndBroadcastStateEffect(host, s);
     return { success: true };
   });
 }
@@ -161,10 +158,9 @@ export function reorderItemsForRoomEffect(
     }
 
     s.items = validation.right.items;
-    yield* Effect.promise(() => host.saveState());
 
     host.broadcast({ type: "items-reordered", items: s.items });
-    host.broadcastState(s);
+    yield* saveAndBroadcastStateEffect(host, s);
 
     return { success: true };
   });
@@ -211,8 +207,7 @@ export function moveItemToGroupForRoomEffect(
     }
 
     s.items = validation.right.items;
-    yield* Effect.promise(() => host.saveState());
-    host.broadcastState(s);
+    yield* saveAndBroadcastStateEffect(host, s);
 
     return { success: true };
   });
