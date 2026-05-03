@@ -1,7 +1,10 @@
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import type { RoomState } from "../domain";
-import { refreshRoomStateAfterMutationEffect } from "./write-cards-effect";
+import {
+  refreshRoomStateAfterMutationEffect,
+  runWriteCardMutationEffect,
+} from "./write-cards-effect";
 
 function roomState(version: number): RoomState {
   return {
@@ -62,5 +65,52 @@ describe("refreshRoomStateAfterMutationEffect", () => {
         ),
       ),
     ).resolves.toBeNull();
+  });
+});
+
+describe("runWriteCardMutationEffect", () => {
+  it("runs a successful mutation and returns refreshed state", async () => {
+    await expect(
+      Effect.runPromise(
+        runWriteCardMutationEffect({
+          mutation: Effect.succeed({ success: true }),
+          currentState: roomState(1),
+          loadFreshState: Effect.succeed(roomState(2)),
+          fallback: (current) => ({ ...current, version: 99 }),
+        }),
+      ),
+    ).resolves.toEqual({ success: true, state: roomState(2) });
+  });
+
+  it("uses the local fallback when mutation succeeds but refresh fails", async () => {
+    await expect(
+      Effect.runPromise(
+        runWriteCardMutationEffect({
+          mutation: Effect.succeed({ success: true }),
+          currentState: roomState(1),
+          loadFreshState: Effect.fail(new Error("offline")),
+          fallback: (current) => ({ ...current, version: current.version + 1 }),
+        }),
+      ),
+    ).resolves.toMatchObject({ success: true, state: { version: 2 } });
+  });
+
+  it("does not refresh failed mutations", async () => {
+    await expect(
+      Effect.runPromise(
+        runWriteCardMutationEffect({
+          mutation: Effect.succeed({ success: false, error: "No permission" }),
+          currentState: roomState(1),
+          loadFreshState: Effect.sync(() => {
+            throw new Error("refresh should not run");
+          }),
+          fallback: (current) => ({ ...current, version: 99 }),
+        }),
+      ),
+    ).resolves.toEqual({
+      success: false,
+      error: "No permission",
+      state: null,
+    });
   });
 });
