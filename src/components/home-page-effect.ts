@@ -26,6 +26,10 @@ export interface HomeCreateDeps {
   navigate(path: string): Effect.Effect<void>;
 }
 
+export interface SessionClaimStorage {
+  setItem(key: string, value: string): void;
+}
+
 export function loadHomePublicConfigEffect(
   source: Effect.Effect<PublicConfig, ApiError | Error>,
 ): Effect.Effect<PublicConfig> {
@@ -58,5 +62,15 @@ export function createHomeRoomEffect(
 
     yield* deps.navigate(`/room/${roomId}`);
     return { status: "created" as const, roomId };
+  });
+}
+
+export function storeHomeFacilitatorClaimTokenEffect(
+  roomId: string,
+  facilitatorClaimToken: string,
+  storage: SessionClaimStorage,
+): Effect.Effect<void> {
+  return Effect.sync(() => {
+    storage.setItem(`retro-facilitator-claim-${roomId}`, facilitatorClaimToken);
   });
 }

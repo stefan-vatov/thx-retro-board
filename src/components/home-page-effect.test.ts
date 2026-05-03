@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   createHomeRoomEffect,
   loadHomePublicConfigEffect,
+  storeHomeFacilitatorClaimTokenEffect,
 } from "./home-page-effect";
 import type { PublicConfig } from "../api";
 
@@ -82,5 +83,21 @@ describe("loadHomePublicConfigEffect", () => {
       "store:room-1:claim-token",
       "navigate:/room/room-1",
     ]);
+  });
+
+  it("stores facilitator claim tokens under a room-scoped session key", async () => {
+    const stored = new Map<string, string>();
+
+    await Effect.runPromise(
+      storeHomeFacilitatorClaimTokenEffect("room-1", "claim-token", {
+        setItem: (key, value) => {
+          stored.set(key, value);
+        },
+      }),
+    );
+
+    expect(stored).toEqual(
+      new Map([["retro-facilitator-claim-room-1", "claim-token"]]),
+    );
   });
 });

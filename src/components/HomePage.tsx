@@ -19,6 +19,7 @@ import { TurnstileWidget } from "./TurnstileWidget";
 import {
   createHomeRoomEffect,
   loadHomePublicConfigEffect,
+  storeHomeFacilitatorClaimTokenEffect,
 } from "./home-page-effect";
 
 export function HomePage() {
@@ -62,12 +63,11 @@ export function HomePage() {
           {
             createRoom: (token) => createRoomEffect(token),
             storeFacilitatorClaimToken: (roomId, facilitatorClaimToken) =>
-              Effect.sync(() => {
-                sessionStorage.setItem(
-                  `retro-facilitator-claim-${roomId}`,
-                  facilitatorClaimToken,
-                );
-              }),
+              storeHomeFacilitatorClaimTokenEffect(
+                roomId,
+                facilitatorClaimToken,
+                sessionStorage,
+              ),
             navigate: (path) => Effect.sync(() => navigate(path)),
           },
         ),
