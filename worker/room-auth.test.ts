@@ -37,4 +37,27 @@ describe("room auth result helpers", () => {
       "token",
     ))).resolves.toEqual({ success: true, participantId: "p1", state });
   });
+
+  it("loads state through an injected Effect dependency", async () => {
+    const state = createInitialStoredState("room-a");
+    state.participants = [{ id: "p1", displayName: "P1", isFacilitator: true }];
+    state.connectionTokens.p1 = "token";
+    const calls: string[] = [];
+
+    await expect(Effect.runPromise(authorizeParticipantFromStateEffect(
+      () => {
+        throw new Error("promise loader should not run");
+      },
+      "p1",
+      "token",
+      {
+        loadState: (loadState) => Effect.sync(() => {
+          calls.push("load");
+          expect(loadState).toBeTypeOf("function");
+          return state;
+        }),
+      },
+    ))).resolves.toEqual({ success: true, participantId: "p1", state });
+    expect(calls).toEqual(["load"]);
+  });
 });

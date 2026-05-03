@@ -6,6 +6,14 @@ export type AuthorizedParticipantResult =
   | { success: true; participantId: string; state: StoredState }
   | { success: false; error: string };
 
+export interface AuthorizeParticipantFromStateDeps {
+  loadState: (loadState: () => Promise<StoredState>) => Effect.Effect<StoredState>;
+}
+
+export const authorizeParticipantFromStateDeps: AuthorizeParticipantFromStateDeps = {
+  loadState: (loadState) => Effect.promise(loadState),
+};
+
 export function authorizeLoadedParticipantResultEffect(
   state: StoredState,
   participantId: unknown,
@@ -31,9 +39,10 @@ export function authorizeParticipantFromStateEffect(
   loadState: () => Promise<StoredState>,
   participantId: unknown,
   connectionToken: unknown,
+  deps: AuthorizeParticipantFromStateDeps = authorizeParticipantFromStateDeps,
 ): Effect.Effect<AuthorizedParticipantResult> {
   return Effect.gen(function* () {
-    const state = yield* Effect.promise(loadState);
+    const state = yield* deps.loadState(loadState);
     return yield* authorizeLoadedParticipantResultEffect(state, participantId, connectionToken);
   });
 }
