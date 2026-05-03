@@ -60,6 +60,16 @@ export const consumeWebSocketTicketDeps: ConsumeWebSocketTicketDeps = {
   hasParticipant: (host, participantId) => Effect.promise(() => host.hasParticipant(participantId)),
 };
 
+export interface DeleteOutstandingWebSocketTicketDeps {
+  getParticipantTicket: (storage: WebSocketTicketStorage, key: string) => Effect.Effect<string | undefined>;
+  delete: (storage: WebSocketTicketStorage, key: string) => Effect.Effect<unknown>;
+}
+
+export const deleteOutstandingWebSocketTicketDeps: DeleteOutstandingWebSocketTicketDeps = {
+  getParticipantTicket: (storage, key) => Effect.promise(() => storage.get<string>(key)),
+  delete: (storage, key) => Effect.promise(() => storage.delete(key)),
+};
+
 export function validateWebSocketTicketStringEffect(
   ticket: string | null,
 ): Effect.Effect<string, WebSocketTicketValidationError> {
@@ -81,13 +91,15 @@ export async function deleteOutstandingWebSocketTicketForRoom(
 export function deleteOutstandingWebSocketTicketForRoomEffect(
   storage: WebSocketTicketStorage,
   participantId: string,
+  deps: DeleteOutstandingWebSocketTicketDeps = deleteOutstandingWebSocketTicketDeps,
 ): Effect.Effect<void> {
   return Effect.gen(function* () {
-    const existingTicket = yield* Effect.promise(() => storage.get<string>(`ws-ticket-by-participant:${participantId}`));
+    const participantTicketKey = `ws-ticket-by-participant:${participantId}`;
+    const existingTicket = yield* deps.getParticipantTicket(storage, participantTicketKey);
     if (existingTicket) {
-      yield* Effect.promise(() => storage.delete(`ws-ticket:${existingTicket}`));
+      yield* deps.delete(storage, `ws-ticket:${existingTicket}`);
     }
-    yield* Effect.promise(() => storage.delete(`ws-ticket-by-participant:${participantId}`));
+    yield* deps.delete(storage, participantTicketKey);
   });
 }
 

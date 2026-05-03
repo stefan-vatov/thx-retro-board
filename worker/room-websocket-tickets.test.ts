@@ -176,4 +176,28 @@ describe("room websocket ticket commands", () => {
       "has-participant:p1",
     ]);
   });
+
+  it("deletes outstanding websocket tickets through injected Effect dependencies", async () => {
+    const calls: string[] = [];
+
+    await Effect.runPromise(deleteOutstandingWebSocketTicketForRoomEffect(
+      {} as never,
+      "p1",
+      {
+        getParticipantTicket: (_storage, key) => Effect.sync(() => {
+          calls.push(`get:${key}`);
+          return "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        }),
+        delete: (_storage, key) => Effect.sync(() => {
+          calls.push(`delete:${key}`);
+        }),
+      },
+    ));
+
+    expect(calls).toEqual([
+      "get:ws-ticket-by-participant:p1",
+      "delete:ws-ticket:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "delete:ws-ticket-by-participant:p1",
+    ]);
+  });
 });
