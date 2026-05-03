@@ -9,11 +9,17 @@ import {
   getDefaultColumns,
   getPairwiseComparisons,
   sanitizeDisplayName,
+  sanitizeDisplayNameEffect,
   isValidDisplayName,
+  isValidDisplayNameEffect,
   sanitizeItemText,
+  sanitizeItemTextEffect,
   isValidItemText,
+  isValidItemTextEffect,
   sanitizeGroupName,
+  sanitizeGroupNameEffect,
   isValidGroupName,
+  isValidGroupNameEffect,
   validateExistingColumnId,
   validateExistingColumnIdEffect,
 } from "./state";
@@ -157,6 +163,10 @@ describe("sanitizeDisplayName", () => {
     const long = "A".repeat(60);
     expect(sanitizeDisplayName(long).length).toBe(50);
   });
+
+  it("sanitizes display names through an Effect boundary", async () => {
+    await expect(Effect.runPromise(sanitizeDisplayNameEffect("  Alice  "))).resolves.toBe("Alice");
+  });
 });
 
 describe("isValidDisplayName", () => {
@@ -171,6 +181,11 @@ describe("isValidDisplayName", () => {
   it("accepts valid names", () => {
     expect(isValidDisplayName("Alice")).toBe(true);
   });
+
+  it("validates display names through an Effect boundary", async () => {
+    await expect(Effect.runPromise(isValidDisplayNameEffect("Alice"))).resolves.toBe(true);
+    await expect(Effect.runPromise(isValidDisplayNameEffect("   "))).resolves.toBe(false);
+  });
 });
 
 describe("sanitizeItemText", () => {
@@ -181,6 +196,10 @@ describe("sanitizeItemText", () => {
   it("truncates to 500 characters", () => {
     const long = "A".repeat(600);
     expect(sanitizeItemText(long).length).toBe(500);
+  });
+
+  it("sanitizes item text through an Effect boundary", async () => {
+    await expect(Effect.runPromise(sanitizeItemTextEffect("  Improve standups  "))).resolves.toBe("Improve standups");
   });
 });
 
@@ -196,6 +215,11 @@ describe("isValidItemText", () => {
   it("accepts valid text", () => {
     expect(isValidItemText("Improve standups")).toBe(true);
   });
+
+  it("validates item text through an Effect boundary", async () => {
+    await expect(Effect.runPromise(isValidItemTextEffect("Improve standups"))).resolves.toBe(true);
+    await expect(Effect.runPromise(isValidItemTextEffect("   "))).resolves.toBe(false);
+  });
 });
 
 describe("sanitizeGroupName", () => {
@@ -207,6 +231,10 @@ describe("sanitizeGroupName", () => {
     const long = "A".repeat(120);
     expect(sanitizeGroupName(long).length).toBe(100);
   });
+
+  it("sanitizes group names through an Effect boundary", async () => {
+    await expect(Effect.runPromise(sanitizeGroupNameEffect("  Process  "))).resolves.toBe("Process");
+  });
 });
 
 describe("isValidGroupName", () => {
@@ -216,6 +244,11 @@ describe("isValidGroupName", () => {
 
   it("rejects whitespace-only strings", () => {
     expect(isValidGroupName("   ")).toBe(false);
+  });
+
+  it("validates group names through an Effect boundary", async () => {
+    await expect(Effect.runPromise(isValidGroupNameEffect("Process"))).resolves.toBe(true);
+    await expect(Effect.runPromise(isValidGroupNameEffect("   "))).resolves.toBe(false);
   });
 
   it("accepts valid group names", () => {

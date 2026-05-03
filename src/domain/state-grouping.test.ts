@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { Effect, Exit } from "effect";
 import {
   reorderList,
+  reorderListEffect,
   hasDuplicateGroupNameInColumn,
+  hasDuplicateGroupNameInColumnEffect,
   applyEditGroup,
   getUngroupedItems,
   getGroupedItems,
@@ -38,6 +40,11 @@ describe("reorderList", () => {
     const result = reorderList(items, ["c", "z", "a"], (item) => item.id);
     expect(result.map((i) => i.id)).toEqual(["c", "a"]);
   });
+
+  it("reorders items by ID list through an Effect boundary", async () => {
+    const result = await Effect.runPromise(reorderListEffect(items, ["c", "a"], (item) => item.id));
+    expect(result.map((i) => i.id)).toEqual(["c", "a"]);
+  });
 });
 
 describe("group name uniqueness", () => {
@@ -62,6 +69,11 @@ describe("group name uniqueness", () => {
         { id: "group-c", name: "Other theme", columnId: "col-a", order: 1 },
       ],
     });
+  });
+
+  it("detects duplicates through an Effect boundary", async () => {
+    await expect(Effect.runPromise(hasDuplicateGroupNameInColumnEffect(groups, "col-a", "  Shared theme  "))).resolves.toBe(true);
+    await expect(Effect.runPromise(hasDuplicateGroupNameInColumnEffect(groups, "col-c", "Shared theme"))).resolves.toBe(false);
   });
 
   it("rejects renaming a group to another sanitized name in the same column without mutating groups", () => {
