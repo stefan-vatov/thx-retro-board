@@ -8,6 +8,11 @@ import {
   hasDuplicateGroupNameInColumn,
 } from "../domain";
 import { scheduleFocusRestoreEffect } from "./focus-restore";
+import {
+  buildMoveItemCommandEffect,
+  shouldBeginPointerDragEffect,
+  type OrganiseDragStart,
+} from "./organise-drag-effect";
 import { OrganiseBoardColumn } from "./OrganiseBoardColumn";
 import { OrganiseBoardStatus } from "./OrganiseBoardStatus";
 import type { DropTarget } from "./OrganiseBoardLists";
@@ -19,15 +24,6 @@ interface OrganiseBoardProps {
   send: (message: unknown) => boolean;
   serverError?: string | null;
   clearServerError?: () => void;
-}
-
-interface DragStart {
-  itemId: string;
-  itemText: string;
-  columnId: string;
-  expectedVersion: number;
-  sourceGroupId: string | null;
-  sourceIndex: number;
 }
 
 interface DragPosition {
@@ -293,7 +289,7 @@ export function OrganiseBoard({
   );
 
   const startDrag = useCallback(
-    (itemId: string): DragStart | null => {
+    (itemId: string): OrganiseDragStart | null => {
       setOrganiseActionError(null);
       clearServerError?.();
       const item = roomState.items.find((candidate) => candidate.id === itemId);
@@ -316,32 +312,23 @@ export function OrganiseBoard({
   );
 
   const finishPointerDrag = useCallback(
-    (event: PointerEvent, currentDragStart: DragStart) => {
+    (event: PointerEvent, currentDragStart: OrganiseDragStart) => {
       const target = updateActiveDrop(event);
-      if (target) {
-        setOrganiseActionError(null);
-        clearServerError?.();
-        if (target.columnId !== currentDragStart.columnId) {
-          setOrganiseActionError(
-            "Items can only be moved within their original column.",
-          );
-          cancelDrag();
-          return;
-        }
-        const sent = send({
-          type: "move-item-to-group",
-          itemId: currentDragStart.itemId,
-          groupId: target.groupId,
-          index: target.index,
-          expectedVersion: currentDragStart.expectedVersion,
-          sourceGroupId: currentDragStart.sourceGroupId,
-          sourceIndex: currentDragStart.sourceIndex,
-        });
-        if (!sent) {
-          setOrganiseActionError(
-            "Item move not sent. Please try again once the room is connected.",
-          );
-        }
+      const result = Effect.runSync(
+        buildMoveItemCommandEffect(currentDragStart, target),
+      );
+      if (!result.success) {
+        if (result.error) setOrganiseActionError(result.error);
+        cancelDrag();
+        return;
+      }
+      setOrganiseActionError(null);
+      clearServerError?.();
+      const sent = send(result.command);
+      if (!sent) {
+        setOrganiseActionError(
+          "Item move not sent. Please try again once the room is connected.",
+        );
       }
       cancelDrag();
     },
@@ -354,15 +341,18 @@ export function OrganiseBoard({
       event.preventDefault();
       event.currentTarget.setPointerCapture?.(event.pointerId);
       const startPoint = { x: event.clientX, y: event.clientY };
-      let currentDragStart: DragStart | null = null;
+      let currentDragStart: OrganiseDragStart | null = null;
 
       const beginDragIfNeeded = (pointerEvent: PointerEvent) => {
         if (currentDragStart) return true;
-        const distance = Math.hypot(
-          pointerEvent.clientX - startPoint.x,
-          pointerEvent.clientY - startPoint.y,
+        const shouldBegin = Effect.runSync(
+          shouldBeginPointerDragEffect({
+            start: startPoint,
+            current: { x: pointerEvent.clientX, y: pointerEvent.clientY },
+            threshold: 6,
+          }),
         );
-        if (distance < 6) return false;
+        if (!shouldBegin) return false;
         currentDragStart = startDrag(itemId);
         if (!currentDragStart) return false;
         setDragPosition({ x: pointerEvent.clientX, y: pointerEvent.clientY });
