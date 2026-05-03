@@ -15,6 +15,10 @@ import {
   voteTargetKey,
 } from "../domain";
 import { loadEmojiPicker } from "./emoji-picker-effect";
+import {
+  shouldCloseReactionMenuForKeyEffect,
+  shouldCloseReactionMenuForPointerEffect,
+} from "./reaction-menu-close";
 import { getReactionMenuPositionEffect } from "./reaction-menu-position";
 
 interface ReactionBarProps {
@@ -160,17 +164,18 @@ export function ReactionBar({
 
     function handlePointerDown(event: PointerEvent) {
       const targetNode = event.target instanceof Node ? event.target : null;
-      if (!targetNode) return;
-      if (
-        menuRef.current?.contains(targetNode) ||
-        addButtonRef.current?.contains(targetNode)
-      )
-        return;
-      setMenuOpen(false);
+      const shouldClose = Effect.runSync(
+        shouldCloseReactionMenuForPointerEffect({
+          targetNode,
+          menu: menuRef.current,
+          addButton: addButtonRef.current,
+        }),
+      );
+      if (shouldClose) setMenuOpen(false);
     }
 
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
+      if (Effect.runSync(shouldCloseReactionMenuForKeyEffect(event.key))) {
         setMenuOpen(false);
         addButtonRef.current?.focus();
       }
