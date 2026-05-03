@@ -7,7 +7,9 @@ import {
   hasDuplicateGroupNameInColumnEffect,
   applyEditGroup,
   getUngroupedItems,
+  getUngroupedItemsEffect,
   getGroupedItems,
+  getGroupedItemsEffect,
   applyReorderItems,
   validateGroupReorderPayloadEffect,
   validateItemReorderPayload,
@@ -104,6 +106,11 @@ describe("getUngroupedItems", () => {
     ];
     expect(getUngroupedItems(grouped)).toEqual([]);
   });
+
+  it("returns ungrouped items through an Effect boundary", async () => {
+    const result = await Effect.runPromise(getUngroupedItemsEffect(items));
+    expect(result.map((item) => item.id)).toEqual(["c", "a"]);
+  });
 });
 
 describe("getGroupedItems", () => {
@@ -121,6 +128,11 @@ describe("getGroupedItems", () => {
 
   it("returns empty array for non-existent group", () => {
     expect(getGroupedItems(items, "g99")).toEqual([]);
+  });
+
+  it("returns grouped items through an Effect boundary", async () => {
+    const result = await Effect.runPromise(getGroupedItemsEffect(items, "g1"));
+    expect(result.map((item) => item.id)).toEqual(["c", "a"]);
   });
 });
 

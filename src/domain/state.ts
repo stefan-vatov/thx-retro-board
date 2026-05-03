@@ -32,7 +32,9 @@ export {
 } from "./state-core";
 export {
   getGroupedItems,
+  getGroupedItemsEffect,
   getUngroupedItems,
+  getUngroupedItemsEffect,
 } from "./state-items";
 export {
   getDecisionTargets,
@@ -89,11 +91,17 @@ export {
 } from "./state-sanitize";
 export {
   getVoteTarget,
+  getVoteTargetEffect,
   groupVoteTarget,
+  groupVoteTargetEffect,
   itemVoteTarget,
+  itemVoteTargetEffect,
   pairwiseComparisonKey,
+  pairwiseComparisonKeyEffect,
   sameVoteTarget,
+  sameVoteTargetEffect,
   voteTargetKey,
+  voteTargetKeyEffect,
 } from "./state-targets";
 export {
   applyCastVote,
