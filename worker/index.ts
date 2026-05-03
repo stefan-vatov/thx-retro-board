@@ -4,7 +4,7 @@ import {
 } from "./anti-abuse";
 import { handleCreateRoomRequestEffect } from "./index-effect";
 import { handleRoomApiRequestEffect } from "./index-room-route";
-import { withSecurityHeaders } from "./security-headers";
+import { withSecurityHeadersEffect } from "./security-headers";
 import { Effect } from "effect";
 
 export interface Env {
@@ -47,6 +47,6 @@ export default {
     }
 
     const assetResponse = await env.ASSETS?.fetch(request);
-    return assetResponse ? withSecurityHeaders(assetResponse) : new Response("Not found", { status: 404 });
+    return assetResponse ? Effect.runPromise(withSecurityHeadersEffect(assetResponse)) : new Response("Not found", { status: 404 });
   },
 } satisfies ExportedHandler<Env>;

@@ -1,5 +1,6 @@
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import { withSecurityHeaders } from "./security-headers";
+import { withSecurityHeaders, withSecurityHeadersEffect } from "./security-headers";
 
 describe("static asset security headers", () => {
   it("adds browser hardening headers without changing the response body or status", async () => {
@@ -17,5 +18,12 @@ describe("static asset security headers", () => {
     expect(response.headers.get("Strict-Transport-Security")).toBe("max-age=31536000; includeSubDomains; preload");
     expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
     await expect(response.text()).resolves.toBe("<html>ok</html>");
+  });
+
+  it("adds browser hardening headers through an Effect boundary", async () => {
+    const response = await Effect.runPromise(withSecurityHeadersEffect(new Response("ok")));
+
+    expect(response.headers.get("Content-Security-Policy")).toContain("default-src 'self'");
+    await expect(response.text()).resolves.toBe("ok");
   });
 });

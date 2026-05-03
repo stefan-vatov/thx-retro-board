@@ -1,3 +1,5 @@
+import { Effect } from "effect";
+
 export function withSecurityHeaders(response: Response): Response {
   const secured = new Response(response.body, response);
   secured.headers.set("Content-Security-Policy", [
@@ -19,4 +21,8 @@ export function withSecurityHeaders(response: Response): Response {
   secured.headers.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload");
   secured.headers.set("X-Content-Type-Options", "nosniff");
   return secured;
+}
+
+export function withSecurityHeadersEffect(response: Response): Effect.Effect<Response> {
+  return Effect.sync(() => withSecurityHeaders(response));
 }
