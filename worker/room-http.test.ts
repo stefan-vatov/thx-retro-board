@@ -64,4 +64,35 @@ describe("room HTTP routing", () => {
 
     expect(response).toBeNull();
   });
+
+  it("uses injected Effect dependencies for state and websocket ticket routes", async () => {
+    const room = createRoom({
+      getRoomStateForParticipant: async () => {
+        throw new Error("state route should use injected dependency");
+      },
+      createWebSocketTicket: async () => {
+        throw new Error("ticket route should use injected dependency");
+      },
+    });
+    const deps = {
+      getRoomStateForParticipant: () => Effect.succeed({ success: true, state: createInitialStoredState("effect-room") }),
+      createWebSocketTicket: () => Effect.succeed({ success: true, ticket: "effect-ticket" }),
+    };
+
+    const stateResponse = await Effect.runPromise(handleRoomHttpRequestEffect(
+      room,
+      jsonRequest("/state", { participantId: "p1", connectionToken: "token" }),
+      deps,
+    ));
+    const ticketResponse = await Effect.runPromise(handleRoomHttpRequestEffect(
+      room,
+      jsonRequest("/ws-ticket", { participantId: "p1", connectionToken: "token" }),
+      deps,
+    ));
+
+    expect(stateResponse?.status).toBe(200);
+    expect(ticketResponse?.status).toBe(200);
+    await expect(stateResponse?.json()).resolves.toMatchObject({ success: true, state: { roomId: "effect-room" } });
+    await expect(ticketResponse?.json()).resolves.toEqual({ success: true, ticket: "effect-ticket" });
+  });
 });

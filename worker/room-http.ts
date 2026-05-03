@@ -45,6 +45,26 @@ export interface RoomHttpController {
   createWebSocketTicket(participantId: string, connectionToken: unknown): RoomResult<{ ticket?: string }>;
 }
 
+export interface RoomHttpDeps {
+  getRoomStateForParticipant: (
+    room: RoomHttpController,
+    participantId: string,
+    connectionToken: unknown,
+  ) => Effect.Effect<Awaited<ReturnType<RoomHttpController["getRoomStateForParticipant"]>>>;
+  createWebSocketTicket: (
+    room: RoomHttpController,
+    participantId: string,
+    connectionToken: unknown,
+  ) => Effect.Effect<Awaited<ReturnType<RoomHttpController["createWebSocketTicket"]>>>;
+}
+
+export const roomHttpDeps: RoomHttpDeps = {
+  getRoomStateForParticipant: (room, participantId, connectionToken) =>
+    Effect.promise(() => room.getRoomStateForParticipant(participantId, connectionToken)),
+  createWebSocketTicket: (room, participantId, connectionToken) =>
+    Effect.promise(() => room.createWebSocketTicket(participantId, connectionToken)),
+};
+
 export async function handleRoomHttpRequest(room: RoomHttpController, request: Request): Promise<Response | null> {
   return Effect.runPromise(handleRoomHttpRequestEffect(room, request));
 }
@@ -59,6 +79,7 @@ function readBodyEffect<T>(
 export function handleRoomHttpRequestEffect(
   room: RoomHttpController,
   request: Request,
+  deps: RoomHttpDeps = roomHttpDeps,
 ): Effect.Effect<Response | null> {
   return Effect.gen(function* () {
   const url = new URL(request.url);
@@ -74,7 +95,7 @@ export function handleRoomHttpRequestEffect(
   if (url.pathname === "/state" && request.method === "POST") {
     const body = yield* readBodyEffect(request, OptionalConnectionTokenSchema);
     if (body instanceof Response) return body;
-    const result = yield* Effect.promise(() => room.getRoomStateForParticipant(body.participantId, body.connectionToken));
+    const result = yield* deps.getRoomStateForParticipant(room, body.participantId, body.connectionToken);
     return Response.json(result, { status: result.success ? 200 : 403 });
   }
 
@@ -181,7 +202,7 @@ export function handleRoomHttpRequestEffect(
   if (url.pathname === "/ws-ticket" && request.method === "POST") {
     const body = yield* readBodyEffect(request, OptionalConnectionTokenSchema);
     if (body instanceof Response) return body;
-    const result = yield* Effect.promise(() => room.createWebSocketTicket(body.participantId, body.connectionToken));
+    const result = yield* deps.createWebSocketTicket(room, body.participantId, body.connectionToken);
     return Response.json(result, { status: result.success ? 200 : 403 });
   }
 
