@@ -15,6 +15,7 @@ import {
   validateReviewActionDeleteEffect,
   validateReviewActionEditEffect,
   validateTimerChangeEffect,
+  validateRoomPurgeEffect,
 } from "./validation";
 
 describe("RetroRoom validation: participant interactions", () => {
@@ -290,6 +291,23 @@ describe("RetroRoom validation: participant interactions", () => {
       ...state,
       participants: [...state.participants, { id: "p2", displayName: "Pat", isFacilitator: false }],
     }, "p2", 300));
+    expect(Exit.isFailure(nonFacilitator)).toBe(true);
+  });
+
+  it("validates facilitator room purge through Effect", async () => {
+    const state = {
+      facilitatorId: "fac",
+      participants: [
+        { id: "fac", displayName: "Fac", isFacilitator: true },
+        { id: "p1", displayName: "Pat", isFacilitator: false },
+      ],
+    };
+
+    await expect(Effect.runPromise(validateRoomPurgeEffect(state, "fac"))).resolves.toEqual({
+      reason: "The facilitator deleted this room's data.",
+    });
+
+    const nonFacilitator = await Effect.runPromiseExit(validateRoomPurgeEffect(state, "p1"));
     expect(Exit.isFailure(nonFacilitator)).toBe(true);
   });
   

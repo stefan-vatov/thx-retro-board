@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import type { StoredState } from "./room-types";
+import { validateRoomPurgeEffect } from "./validation";
 
 export async function purgeRoomByFacilitator(
   state: StoredState,
@@ -15,13 +16,11 @@ export function purgeRoomByFacilitatorEffect(
   purgeRoom: (reason: string) => Promise<void>,
 ): Effect.Effect<{ success: boolean; error?: string }> {
   return Effect.gen(function* () {
-    if (!state.participants.some((participant) => participant.id === participantId)) {
-      return { success: false, error: "Participant not found" };
+    const validation = yield* Effect.either(validateRoomPurgeEffect(state, participantId));
+    if (validation._tag === "Left") {
+      return { success: false, error: validation.left.message };
     }
-    if (state.facilitatorId !== participantId) {
-      return { success: false, error: "Only the facilitator can delete room data" };
-    }
-    yield* Effect.promise(() => purgeRoom("The facilitator deleted this room's data."));
+    yield* Effect.promise(() => purgeRoom(validation.right.reason));
     return { success: true };
   });
 }
