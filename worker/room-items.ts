@@ -1,6 +1,7 @@
 import { Effect } from "effect";
 import type { RetroItem } from "../src/domain";
 import { getVoteTarget, sameVoteTarget } from "../src/domain";
+import { saveAndBroadcastStateEffect } from "./room-command-effect";
 import type { RoomCommandHost } from "./room-command-host";
 import { normalizePairwiseChoices } from "./room-normalize";
 import {
@@ -43,10 +44,9 @@ export function addItemForRoomEffect(
       order: validation.right.order,
     };
     s.items.push(item);
-    yield* Effect.promise(() => host.saveState());
 
     host.broadcast({ type: "item-added", item });
-    host.broadcastState(s);
+    yield* saveAndBroadcastStateEffect(host, s);
 
     return { success: true, item };
   });
@@ -79,8 +79,7 @@ export function editItemForRoomEffect(
 
     const item = validation.right.item;
     s.items = s.items.map((candidate) => candidate.id === itemId ? item : candidate);
-    yield* Effect.promise(() => host.saveState());
-    host.broadcastState(s);
+    yield* saveAndBroadcastStateEffect(host, s);
     return { success: true, item };
   });
 }
@@ -132,8 +131,7 @@ export function deleteItemForRoomEffect(
     );
     s.reactions = (s.reactions ?? []).filter((reaction) => !sameVoteTarget(reaction.target, target));
 
-    yield* Effect.promise(() => host.saveState());
-    host.broadcastState(s);
+    yield* saveAndBroadcastStateEffect(host, s);
     return { success: true };
   });
 }

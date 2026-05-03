@@ -1,6 +1,7 @@
 import { Effect } from "effect";
 import type { ActionItem } from "../src/domain";
 import { createActionItem } from "../src/domain";
+import { saveAndBroadcastStateEffect } from "./room-command-effect";
 import type { RoomCommandHost } from "./room-command-host";
 import {
   validateReviewActionCreateEffect,
@@ -33,10 +34,8 @@ export function createActionForRoomEffect(
     }
     const action = createActionItem(crypto.randomUUID(), validation.right.text, participantId, validation.right.order);
     s.actions = [...(s.actions ?? []), action];
-    yield* Effect.promise(() => host.saveState());
-
     host.broadcast({ type: "actions-changed", actions: s.actions });
-    host.broadcastState(s);
+    yield* saveAndBroadcastStateEffect(host, s);
 
     return { success: true, action };
   });
@@ -71,10 +70,8 @@ export function editActionForRoomEffect(
     const actionIndex = (s.actions ?? []).findIndex((action) => action.id === validation.right.action.id);
     s.actions = [...(s.actions ?? [])];
     s.actions[actionIndex] = validation.right.action;
-    yield* Effect.promise(() => host.saveState());
-
     host.broadcast({ type: "actions-changed", actions: s.actions });
-    host.broadcastState(s);
+    yield* saveAndBroadcastStateEffect(host, s);
 
     return { success: true, action: s.actions[actionIndex] };
   });
@@ -105,10 +102,8 @@ export function deleteActionForRoomEffect(
       .filter((action) => action.id !== validation.right.actionId)
       .sort((a, b) => a.order - b.order)
       .map((action, order) => ({ ...action, order }));
-    yield* Effect.promise(() => host.saveState());
-
     host.broadcast({ type: "actions-changed", actions: s.actions });
-    host.broadcastState(s);
+    yield* saveAndBroadcastStateEffect(host, s);
 
     return { success: true };
   });

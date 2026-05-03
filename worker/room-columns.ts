@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import type { Column } from "../src/domain";
+import { saveAndBroadcastStateEffect } from "./room-command-effect";
 import type { RoomCommandHost } from "./room-command-host";
 import { normalizePairwiseChoices, normalizeReactions } from "./room-normalize";
 import {
@@ -35,8 +36,7 @@ export function createColumnForRoomEffect(
       order: validation.right.order,
     };
     s.columns = [...(s.columns ?? []), column];
-    yield* Effect.promise(() => host.saveState());
-    host.broadcastState(s);
+    yield* saveAndBroadcastStateEffect(host, s);
 
     return { success: true, column };
   });
@@ -65,8 +65,7 @@ export function editColumnForRoomEffect(
     }
 
     s.columns = validation.right.columns;
-    yield* Effect.promise(() => host.saveState());
-    host.broadcastState(s);
+    yield* saveAndBroadcastStateEffect(host, s);
     return { success: true, column: validation.right.column };
   });
 }
@@ -92,8 +91,7 @@ export function reorderColumnsForRoomEffect(
     }
 
     s.columns = validation.right.columns;
-    yield* Effect.promise(() => host.saveState());
-    host.broadcastState(s);
+    yield* saveAndBroadcastStateEffect(host, s);
     return { success: true };
   });
 }
@@ -125,8 +123,7 @@ export function deleteColumnForRoomEffect(
     s.votes = validated.votes;
     s.pairwiseChoices = normalizePairwiseChoices(s.pairwiseChoices, s.participants, s.groups, s.items);
     s.reactions = normalizeReactions(s.reactions, s.participants, s.groups, s.items);
-    yield* Effect.promise(() => host.saveState());
-    host.broadcastState(s);
+    yield* saveAndBroadcastStateEffect(host, s);
     return { success: true };
   });
 }
