@@ -8,30 +8,19 @@ import {
 import type { RoomState, ServerToClientMessage } from "../domain";
 import { applyRealtimeMessageEffect } from "./room-realtime-state";
 import type { RealtimeMessageResult } from "./room-realtime-state";
+import {
+  planRealtimeReconnectEffect,
+  shouldResetRealtimeReconnectAttempts,
+} from "./realtime-reconnect";
 
-export const INITIAL_RECONNECT_DELAY_MS = 750;
-export const MAX_RECONNECT_DELAY_MS = 30_000;
-export const MAX_RECONNECT_ATTEMPTS = 8;
-export const STABLE_CONNECTION_RESET_MS = 5_000;
-
-export function getRealtimeReconnectDelay(reconnectAttempts: number): number {
-  return Math.min(
-    MAX_RECONNECT_DELAY_MS,
-    INITIAL_RECONNECT_DELAY_MS * 2 ** reconnectAttempts,
-  );
-}
-
-export function canAttemptRealtimeReconnect(
-  reconnectAttempts: number,
-): boolean {
-  return reconnectAttempts < MAX_RECONNECT_ATTEMPTS;
-}
-
-export function shouldResetRealtimeReconnectAttempts(
-  openDurationMs: number,
-): boolean {
-  return openDurationMs >= STABLE_CONNECTION_RESET_MS;
-}
+export {
+  INITIAL_RECONNECT_DELAY_MS,
+  MAX_RECONNECT_ATTEMPTS,
+  MAX_RECONNECT_DELAY_MS,
+  canAttemptRealtimeReconnect,
+  getRealtimeReconnectDelay,
+  shouldResetRealtimeReconnectAttempts,
+} from "./realtime-reconnect";
 
 export class RealtimeMessageError extends Error {
   constructor(message = "Invalid realtime message") {
@@ -172,22 +161,23 @@ export function useRoom(
       }
     }
 
-    function getReconnectDelay() {
-      return getRealtimeReconnectDelay(reconnectAttempts);
-    }
-
     function scheduleReconnect(delay?: number, consumeAttempt = true) {
-      if (disposed || reconnectTimerRef.current !== null) return;
-      if (consumeAttempt) {
-        if (!canAttemptRealtimeReconnect(reconnectAttempts)) {
-          setConnected(false);
-          setLastError(
-            "Realtime reconnect paused after repeated failures. Refresh the room to try again.",
-          );
-          return;
-        }
-        reconnectAttempts += 1;
+      const plan = Effect.runSync(
+        planRealtimeReconnectEffect({
+          disposed,
+          timerScheduled: reconnectTimerRef.current !== null,
+          reconnectAttempts,
+          consumeAttempt,
+          requestedDelay: delay,
+        }),
+      );
+      if (plan.type === "ignored") return;
+      if (plan.type === "paused") {
+        setConnected(false);
+        setLastError(plan.error);
+        return;
       }
+      reconnectAttempts = plan.attempts;
       reconnectTimerRef.current = window.setTimeout(() => {
         reconnectTimerRef.current = null;
         if (disposed) return;
@@ -196,7 +186,7 @@ export function useRoom(
         } else {
           scheduleReconnect(1_000, false);
         }
-      }, delay ?? getReconnectDelay());
+      }, plan.delay);
     }
 
     async function connect() {
