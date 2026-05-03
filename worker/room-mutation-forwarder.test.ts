@@ -22,10 +22,10 @@ describe("room mutation forwarding effects", () => {
     const response = await Effect.runPromise(forwardValidatedRoomMutationEffect(
       request({ participantId: "p1", value: 7 }),
       MutationSchema,
-      (body) => {
+      (body) => Effect.sync(() => {
         forwarded.push(body);
-        return Promise.resolve(Response.json({ ok: true }));
-      },
+        return Response.json({ ok: true });
+      }),
     ));
 
     expect(response.status).toBe(200);
@@ -37,10 +37,10 @@ describe("room mutation forwarding effects", () => {
     const response = await Effect.runPromise(forwardValidatedRoomMutationEffect(
       request({ participantId: "p1" }),
       MutationSchema,
-      (body) => {
+      (body) => Effect.sync(() => {
         forwarded.push(body);
-        return Promise.resolve(Response.json({ ok: true }));
-      },
+        return Response.json({ ok: true });
+      }),
     ));
 
     expect(response.status).toBe(400);
@@ -49,5 +49,21 @@ describe("room mutation forwarding effects", () => {
       success: false,
       error: "Valid JSON body is required",
     });
+  });
+
+  it("forwards decoded mutation bodies through an Effect callback", async () => {
+    const forwarded: unknown[] = [];
+    const response = await Effect.runPromise(forwardValidatedRoomMutationEffect(
+      request({ participantId: "p1", value: 9 }),
+      MutationSchema,
+      (body) => Effect.sync(() => {
+        forwarded.push(body);
+        return Response.json({ ok: true, value: body.value });
+      }),
+    ));
+
+    expect(response.status).toBe(200);
+    expect(forwarded).toEqual([{ participantId: "p1", value: 9 }]);
+    await expect(response.json()).resolves.toEqual({ ok: true, value: 9 });
   });
 });

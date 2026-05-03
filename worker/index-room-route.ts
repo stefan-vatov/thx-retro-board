@@ -138,7 +138,7 @@ function validateAndForwardEffect(
   return forwardValidatedRoomMutationEffect(
     request,
     schema,
-    (body) => forwardToDO(stub, durableObjectPath, request, body),
+    (body) => Effect.promise(() => forwardToDO(stub, durableObjectPath, request, body)),
   );
 }
 
