@@ -150,6 +150,31 @@ describe("room column commands", () => {
     ]);
   });
 
+  it("reorders columns through injected Effect dependencies", async () => {
+    const state = createInitialStoredState("room-a");
+    state.participants = [{ id: "fac", displayName: "Fac", isFacilitator: true }];
+    state.facilitatorId = "fac";
+    const calls: string[] = [];
+
+    const result = await Effect.runPromise(reorderColumnsForRoomEffect({} as never, "fac", ["sad", "glad", "mad"], {
+      loadState: () => Effect.sync(() => {
+        calls.push("load");
+        return state;
+      }),
+      saveAndBroadcastState: (_host, savedState) => Effect.sync(() => {
+        calls.push(`save:${savedState.columns.map((column) => column.id).join(",")}`);
+      }),
+    }));
+
+    expect(result).toEqual({ success: true });
+    expect(state.columns.map((column) => [column.id, column.order])).toEqual([
+      ["sad", 0],
+      ["glad", 1],
+      ["mad", 2],
+    ]);
+    expect(calls).toEqual(["load", "save:sad,glad,mad"]);
+  });
+
   it("deletes columns through the Effect API", async () => {
     const state = createInitialStoredState("room-a");
     state.participants = [{ id: "fac", displayName: "Fac", isFacilitator: true }];

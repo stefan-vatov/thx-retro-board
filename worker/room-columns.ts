@@ -33,6 +33,16 @@ export const editColumnForRoomDeps: EditColumnForRoomDeps = {
   saveAndBroadcastState: saveAndBroadcastStateEffect,
 };
 
+export interface ReorderColumnsForRoomDeps {
+  loadState: (host: RoomCommandHost) => Effect.Effect<StoredState>;
+  saveAndBroadcastState: (host: RoomCommandHost, state: StoredState) => Effect.Effect<void>;
+}
+
+export const reorderColumnsForRoomDeps: ReorderColumnsForRoomDeps = {
+  loadState: (host) => Effect.promise(() => host.loadState()),
+  saveAndBroadcastState: saveAndBroadcastStateEffect,
+};
+
 export async function createColumnForRoom(
   host: RoomCommandHost,
   participantId: string,
@@ -107,16 +117,17 @@ export function reorderColumnsForRoomEffect(
   host: RoomCommandHost,
   participantId: string,
   orderedIds: unknown,
+  deps: ReorderColumnsForRoomDeps = reorderColumnsForRoomDeps,
 ): Effect.Effect<{ success: boolean; error?: string }> {
   return Effect.gen(function* () {
-    const s = yield* Effect.promise(() => host.loadState());
+    const s = yield* deps.loadState(host);
     const validation = yield* Effect.either(validateColumnReorderEffect(s, participantId, orderedIds));
     if (validation._tag === "Left") {
       return { success: false, error: validation.left.message };
     }
 
     s.columns = validation.right.columns;
-    yield* saveAndBroadcastStateEffect(host, s);
+    yield* deps.saveAndBroadcastState(host, s);
     return { success: true };
   });
 }
