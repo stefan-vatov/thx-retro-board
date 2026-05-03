@@ -6,13 +6,15 @@
   "scripts": {
     "dev": "vite dev",
     "build": "tsc -b && vite build",
+    "types:worker": "wrangler types src/worker-configuration.d.ts --include-runtime=false",
+    "types:worker:check": "wrangler types src/worker-configuration.d.ts --include-runtime=false --check",
     "typecheck": "tsc -b",
     "lint": "eslint src worker",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "preview": "npm run build && vite preview",
-    "verify": "npm run typecheck && npm run lint && npm run test && npm run build && npm run test:e2e",
+    "verify": "npm run types:worker:check && npm run typecheck && npm run lint && npm run test && npm run build && npm run test:e2e",
     "deploy": "npm run verify && wrangler deploy"
   },
   "devDependencies": {
