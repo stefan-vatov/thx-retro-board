@@ -14,6 +14,7 @@ import {
 } from "./room-request-schemas";
 import type { StoredState } from "./room-types";
 import { MAX_WEBSOCKET_MESSAGE_BYTES } from "./room-types";
+import { runAuthorizedRoomMutationEffect } from "./room-http-authorization";
 
 type RoomResult<T extends object = object> = Promise<{ success: boolean; error?: string } & T>;
 
@@ -44,15 +45,6 @@ export interface RoomHttpController {
   createWebSocketTicket(participantId: string, connectionToken: unknown): RoomResult<{ ticket?: string }>;
 }
 
-async function authorizeBody(
-  room: RoomHttpController,
-  participantId: string,
-  connectionToken: unknown,
-): Promise<{ success: true; participantId: string } | Response> {
-  const auth = await room.authorizeHttpParticipant(participantId, connectionToken);
-  return auth.success ? { success: true, participantId: auth.participantId } : Response.json(auth, { status: 403 });
-}
-
 export async function handleRoomHttpRequest(room: RoomHttpController, request: Request): Promise<Response | null> {
   return Effect.runPromise(handleRoomHttpRequestEffect(room, request));
 }
@@ -62,14 +54,6 @@ function readBodyEffect<T>(
   schema: Parameters<typeof readValidatedJsonBodyEffect<T>>[1],
 ): Effect.Effect<T | Response> {
   return readValidatedJsonBodyEffect(request, schema, { maxBytes: MAX_WEBSOCKET_MESSAGE_BYTES });
-}
-
-function authorizeBodyEffect(
-  room: RoomHttpController,
-  participantId: string,
-  connectionToken: unknown,
-): Effect.Effect<{ success: true; participantId: string } | Response> {
-  return Effect.promise(() => authorizeBody(room, participantId, connectionToken));
 }
 
 export function handleRoomHttpRequestEffect(
@@ -97,83 +81,101 @@ export function handleRoomHttpRequestEffect(
   if (url.pathname === "/vote-budget" && request.method === "POST") {
     const body = yield* readBodyEffect(request, VoteBudgetRequestSchema);
     if (body instanceof Response) return body;
-    const auth = yield* authorizeBodyEffect(room, body.participantId, body.connectionToken);
-    return auth instanceof Response
-      ? auth
-      : Response.json(yield* Effect.promise(() => room.setVoteBudget(auth.participantId, body.budget)));
+    return yield* runAuthorizedRoomMutationEffect(
+      room,
+      body.participantId,
+      body.connectionToken,
+      (participantId) => room.setVoteBudget(participantId, body.budget),
+    );
   }
 
   if (url.pathname === "/ranking-method" && request.method === "POST") {
     const body = yield* readBodyEffect(request, RankingMethodRequestSchema);
     if (body instanceof Response) return body;
-    const auth = yield* authorizeBodyEffect(room, body.participantId, body.connectionToken);
-    return auth instanceof Response
-      ? auth
-      : Response.json(yield* Effect.promise(() => room.setRankingMethod(auth.participantId, body.rankingMethod)));
+    return yield* runAuthorizedRoomMutationEffect(
+      room,
+      body.participantId,
+      body.connectionToken,
+      (participantId) => room.setRankingMethod(participantId, body.rankingMethod),
+    );
   }
 
   if (url.pathname === "/phase" && request.method === "POST") {
     const body = yield* readBodyEffect(request, PhaseRequestSchema);
     if (body instanceof Response) return body;
-    const auth = yield* authorizeBodyEffect(room, body.participantId, body.connectionToken);
-    return auth instanceof Response
-      ? auth
-      : Response.json(yield* Effect.promise(() => room.setPhase(auth.participantId, body.phase)));
+    return yield* runAuthorizedRoomMutationEffect(
+      room,
+      body.participantId,
+      body.connectionToken,
+      (participantId) => room.setPhase(participantId, body.phase),
+    );
   }
 
   if (url.pathname === "/items" && request.method === "POST") {
     const body = yield* readBodyEffect(request, AddItemRequestSchema);
     if (body instanceof Response) return body;
-    const auth = yield* authorizeBodyEffect(room, body.participantId, body.connectionToken);
-    return auth instanceof Response
-      ? auth
-      : Response.json(yield* Effect.promise(() => room.addItem(auth.participantId, body.text, body.columnId)));
+    return yield* runAuthorizedRoomMutationEffect(
+      room,
+      body.participantId,
+      body.connectionToken,
+      (participantId) => room.addItem(participantId, body.text, body.columnId),
+    );
   }
 
   const itemMatch = url.pathname.match(/^\/items\/([^/]+)$/);
   if (itemMatch && request.method === "PATCH") {
     const body = yield* readBodyEffect(request, EditItemRequestSchema);
     if (body instanceof Response) return body;
-    const auth = yield* authorizeBodyEffect(room, body.participantId, body.connectionToken);
-    return auth instanceof Response
-      ? auth
-      : Response.json(yield* Effect.promise(() => room.editItem(auth.participantId, decodeURIComponent(itemMatch[1]!), body.text)));
+    return yield* runAuthorizedRoomMutationEffect(
+      room,
+      body.participantId,
+      body.connectionToken,
+      (participantId) => room.editItem(participantId, decodeURIComponent(itemMatch[1]!), body.text),
+    );
   }
 
   if (itemMatch && request.method === "DELETE") {
     const body = yield* readBodyEffect(request, OptionalConnectionTokenSchema);
     if (body instanceof Response) return body;
-    const auth = yield* authorizeBodyEffect(room, body.participantId, body.connectionToken);
-    return auth instanceof Response
-      ? auth
-      : Response.json(yield* Effect.promise(() => room.deleteItem(auth.participantId, decodeURIComponent(itemMatch[1]!))));
+    return yield* runAuthorizedRoomMutationEffect(
+      room,
+      body.participantId,
+      body.connectionToken,
+      (participantId) => room.deleteItem(participantId, decodeURIComponent(itemMatch[1]!)),
+    );
   }
 
   if (url.pathname === "/timer" && request.method === "POST") {
     const body = yield* readBodyEffect(request, TimerRequestSchema);
     if (body instanceof Response) return body;
-    const auth = yield* authorizeBodyEffect(room, body.participantId, body.connectionToken);
-    return auth instanceof Response
-      ? auth
-      : Response.json(yield* Effect.promise(() => room.setTimer(auth.participantId, body.durationSeconds)));
+    return yield* runAuthorizedRoomMutationEffect(
+      room,
+      body.participantId,
+      body.connectionToken,
+      (participantId) => room.setTimer(participantId, body.durationSeconds),
+    );
   }
 
   if (url.pathname === "/review-target" && request.method === "POST") {
     const body = yield* readBodyEffect(request, ReviewTargetRequestSchema);
     if (body instanceof Response) return body;
-    const auth = yield* authorizeBodyEffect(room, body.participantId, body.connectionToken);
-    return auth instanceof Response
-      ? auth
-      : Response.json(yield* Effect.promise(() => room.setReviewTarget(auth.participantId, body.reviewTargetKey)));
+    return yield* runAuthorizedRoomMutationEffect(
+      room,
+      body.participantId,
+      body.connectionToken,
+      (participantId) => room.setReviewTarget(participantId, body.reviewTargetKey),
+    );
   }
 
   if (url.pathname === "/purge" && request.method === "POST") {
     const body = yield* readBodyEffect(request, OptionalConnectionTokenSchema);
     if (body instanceof Response) return body;
-    const auth = yield* authorizeBodyEffect(room, body.participantId, body.connectionToken);
-    return auth instanceof Response
-      ? auth
-      : Response.json(yield* Effect.promise(() => room.purgeByFacilitator(auth.participantId)));
+    return yield* runAuthorizedRoomMutationEffect(
+      room,
+      body.participantId,
+      body.connectionToken,
+      (participantId) => room.purgeByFacilitator(participantId),
+    );
   }
 
   if (url.pathname === "/ws-ticket" && request.method === "POST") {
